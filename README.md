@@ -1,3 +1,36 @@
+## Supabase 인증 메일 브랜딩
+
+Supabase 대시보드에서 인증 메일 제목과 본문을 아래처럼 설정하면
+사용자가 메일을 더 쉽게 인식할 수 있습니다.
+
+설정 위치:
+- 인증
+- 이메일 템플릿
+- 회원가입 확인 메일
+
+권장 제목:
+
+```text
+AI 인스타그램 마케터 회원가입 인증 메일
+```
+
+권장 본문:
+
+```html
+<h2>AI 인스타그램 마케터 회원가입 인증</h2>
+<p>안녕하세요. AI 인스타그램 마케터입니다.</p>
+<p>회원가입을 완료하려면 아래 버튼을 눌러 이메일 인증을 진행해주세요.</p>
+<p>이 링크는 회원가입 확인을 위한 용도입니다.</p>
+<p><a href="{{ .ConfirmationURL }}">이메일 인증 완료하기</a></p>
+<p>본인이 요청하지 않았다면 이 메일은 무시하셔도 됩니다.</p>
+```
+
+주의:
+- `{{ .ConfirmationURL }}` 값은 그대로 유지해야 합니다.
+- 링크 변수만 유지하면 인증 흐름은 그대로 동작합니다.
+
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

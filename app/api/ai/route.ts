@@ -32,6 +32,10 @@ type AiRequestBody = {
   type?: "planning" | "post_image";
   industry?: string;
   productService?: string;
+  instagramHandle?: string;
+  accountDirection?: string;
+  accountBio?: string;
+  accountConcept?: string;
   requestId?: string;
   previousResult?: AccountPlanResult | null;
   previousPost?: {
@@ -59,7 +63,10 @@ export async function POST(request: Request) {
 
   if (!apiKey) {
     console.error("[/api/ai] Missing OPENROUTER_API_KEY");
-    return Response.json({ error: "AI generation failed" }, { status: 500 });
+    return Response.json(
+      { error: "AI 설정을 확인해주세요. 잠시 후 다시 시도해주세요." },
+      { status: 500 }
+    );
   }
 
   let body: AiRequestBody;
@@ -67,7 +74,10 @@ export async function POST(request: Request) {
   try {
     body = (await request.json()) as AiRequestBody;
   } catch {
-    return Response.json({ error: "AI generation failed" }, { status: 400 });
+    return Response.json(
+      { error: "요청 정보를 다시 확인해주세요." },
+      { status: 400 }
+    );
   }
 
   if (body.type === "post_image") {
@@ -83,7 +93,10 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
   const requestId = String(body.requestId ?? "").trim();
 
   if (!industry || !productService) {
-    return Response.json({ error: "AI generation failed" }, { status: 400 });
+    return Response.json(
+      { error: "업종과 상품 또는 서비스 정보를 입력해주세요." },
+      { status: 400 }
+    );
   }
 
   const previousNames = Array.isArray(body.previousResult?.accountNames)
@@ -137,7 +150,13 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
   });
 
   if (!response.ok) {
-    return Response.json({ error: "AI generation failed", source: "fallback" }, { status: 502 });
+    return Response.json(
+      {
+        error: "AI 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        source: "fallback",
+      },
+      { status: 502 }
+    );
   }
 
   const content = extractMessageContent(response.data?.choices?.[0]?.message?.content);
@@ -145,7 +164,13 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
 
   if (!parsed) {
     console.error("[/api/ai] Failed to parse planning response");
-    return Response.json({ error: "AI generation failed", source: "fallback" }, { status: 502 });
+    return Response.json(
+      {
+        error: "AI 기획 결과를 불러오지 못했습니다. 다시 시도해주세요.",
+        source: "fallback",
+      },
+      { status: 502 }
+    );
   }
 
   const accountNames = parsed.accountNames ?? [];
@@ -159,16 +184,31 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
 
   if (accountNames.length !== 3 || !allEnglishLower || !allDifferent || !hasKoreanMeaning || !hasPlan) {
     console.error("[/api/ai] Invalid planning response:", parsed);
-    return Response.json({ error: "AI generation failed", source: "fallback" }, { status: 502 });
+    return Response.json(
+      {
+        error: "AI 기획 결과를 다시 생성해주세요.",
+        source: "fallback",
+      },
+      { status: 502 }
+    );
   }
 
-  console.log("[/api/ai] Planning response from: OPENROUTER API");
   return Response.json({ ...parsed, source: "api" });
 }
 
 async function handlePostImageGeneration(body: AiRequestBody, apiKey: string) {
   const industry = String(body.industry ?? "").trim();
   const productService = String(body.productService ?? "").trim();
+  const instagramHandle = String(body.instagramHandle ?? "").trim();
+  const accountDirection = String(body.accountDirection ?? "").trim();
+  const accountBio = String(body.accountBio ?? "").trim();
+  const accountConcept = String(body.accountConcept ?? "").trim();
+  const normalizedIndustry = industry || "업종 정보 없음";
+  const normalizedProductService = productService || "상품 또는 서비스 정보 없음";
+  const normalizedInstagramHandle = instagramHandle || "계정명 정보 없음";
+  const normalizedAccountDirection = accountDirection || "계정 방향 정보 없음";
+  const normalizedAccountBio = accountBio || "소개글 정보 없음";
+  const normalizedAccountConcept = accountConcept || "운영 컨셉 정보 없음";
   const requestId = String(body.requestId ?? "").trim();
   const images = Array.isArray(body.images)
     ? body.images.map((item) => String(item ?? "")).filter(Boolean).slice(0, 2)
@@ -177,35 +217,70 @@ async function handlePostImageGeneration(body: AiRequestBody, apiKey: string) {
       : [];
   const userPrompt = String(body.userPrompt ?? "").trim();
 
-  if (!industry || !productService || (images.length === 0 && !userPrompt)) {
-    return Response.json({ error: "Image generation failed" }, { status: 400 });
+  console.log(
+    "[/api/ai] Post image request summary:",
+    JSON.stringify({
+      hasInstagramHandle: Boolean(instagramHandle),
+      hasAccountDirection: Boolean(accountDirection),
+      hasAccountBio: Boolean(accountBio),
+      hasAccountConcept: Boolean(accountConcept),
+      hasIndustry: Boolean(industry),
+      hasProductService: Boolean(productService),
+      imageCount: images.length,
+      hasUserPrompt: Boolean(userPrompt),
+      requestId: requestId || "none",
+    })
+  );
+
+  if (images.length === 0 && !userPrompt) {
+    return Response.json(
+      { error: "참고 이미지나 원하는 게시물 방향을 입력해주세요." },
+      { status: 400 }
+    );
   }
 
   if (
     images.some((image) => !/^data:image\/[\w.+-]+;base64,/.test(image))
   ) {
-    return Response.json({ error: "Image generation failed" }, { status: 400 });
+    return Response.json(
+      { error: "참고 이미지 형식을 확인해주세요." },
+      { status: 400 }
+    );
   }
 
   const postPlan = await generatePostPlan({
     apiKey,
-    industry,
-    productService,
+    instagramHandle: normalizedInstagramHandle,
+    industry: normalizedIndustry,
+    productService: normalizedProductService,
+    accountDirection: normalizedAccountDirection,
+    accountBio: normalizedAccountBio,
+    accountConcept: normalizedAccountConcept,
     requestId,
     previousPost: body.previousPost ?? null,
     userPrompt,
   });
 
   if (!postPlan.ok) {
-    return Response.json({ error: "AI generation failed", source: "fallback" }, { status: 502 });
+    return Response.json(
+      {
+        error: "게시물 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        source: "fallback",
+      },
+      { status: 502 }
+    );
   }
 
   const imagePrompt = `
 Create an Instagram marketing post visual.
 
 Business context:
-- Industry: ${industry}
-- Product or service: ${productService}
+- Instagram handle: ${normalizedInstagramHandle}
+- Industry: ${normalizedIndustry}
+- Product or service: ${normalizedProductService}
+- Account direction: ${normalizedAccountDirection}
+- Account bio: ${normalizedAccountBio}
+- Account concept: ${normalizedAccountConcept}
 
 Post plan:
 - Title: ${postPlan.data.title}
@@ -255,13 +330,11 @@ Requirements:
   });
 
   if (!imageResponse.ok) {
-    return Response.json({ error: "Image generation failed" }, { status: 502 });
+    return Response.json(
+      { error: "이미지 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
+      { status: 502 }
+    );
   }
-
-  console.log(
-    "[/api/ai] OpenRouter full image response:",
-    JSON.stringify(imageResponse.data)
-  );
 
   const imageOutputs = extractImageOutputs(imageResponse.data);
   const imageModelText = extractMessageContent(
@@ -270,7 +343,14 @@ Requirements:
 
   if (imageOutputs.length === 0) {
     console.error("[/api/ai] No image outputs found for post_image request");
-    return Response.json({ error: "Image generation failed" }, { status: 502 });
+    console.error(
+      "[/api/ai] Available image response keys:",
+      getImageResponseDebugSummary(imageResponse.data)
+    );
+    return Response.json(
+      { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
+      { status: 502 }
+    );
   }
 
   const result: PostImageResult = {
@@ -286,21 +366,28 @@ Requirements:
     result.imageModelText = imageModelText;
   }
 
-  console.log("[/api/ai] Post image response from: OPENROUTER API");
   return Response.json({ ...result, source: "api" });
 }
 
 async function generatePostPlan({
   apiKey,
+  instagramHandle,
   industry,
   productService,
+  accountDirection,
+  accountBio,
+  accountConcept,
   requestId,
   previousPost,
   userPrompt,
 }: {
   apiKey: string;
+  instagramHandle: string;
   industry: string;
   productService: string;
+  accountDirection: string;
+  accountBio: string;
+  accountConcept: string;
   requestId: string;
   previousPost: AiRequestBody["previousPost"];
   userPrompt: string;
@@ -309,17 +396,29 @@ async function generatePostPlan({
 당신은 한국의 인스타그램 마케팅 전문가입니다.
 인스타그램 게시물 기획을 작성해 주세요.
 
+인스타그램 계정명: ${instagramHandle}
 업종: ${industry}
 상품/서비스: ${productService}
+계정 방향: ${accountDirection}
+계정 소개글: ${accountBio}
+운영 컨셉: ${accountConcept}
 사용자 요청 방향: ${userPrompt || "없음"}
 
 중요 규칙:
+- 업종이나 상품/서비스 정보가 비어 있거나 일반적으로 들어오면, 사용자 요청 방향과 참고 이미지를 바탕으로 자연스럽게 맥락을 추론하세요
+- 반드시 계정명, 업종, 상품/서비스, 계정 방향, 소개글, 운영 컨셉을 우선 참고해 이 계정에 실제로 올라갈 법한 게시물만 작성하세요
+- 결과는 하나의 일회성 광고처럼 쓰지 말고, 이 계정이 꾸준히 운영되는 흐름 안에 들어가는 게시물처럼 써주세요
+- 계정 소개글과 운영 컨셉에 드러난 말투, 분위기, 브랜드 톤을 자연스럽게 반영하세요
+- 상품/서비스의 실제 쓰임, 장점, 타깃 고객, 사용 장면이 드러나야 하며 일반적인 마케팅 문구로 얼버무리지 마세요
+- 사용자 요청 방향이 있으면 가장 우선으로 반영하되, 나머지 계정 정보와 충돌 없이 자연스럽게 결합하세요
+- 제공된 데이터와 관련 없는 추상적인 문구, 흔한 광고 문장, 업종 불문 범용 표현을 피하세요
 - title, content, hashtags는 모두 이 비즈니스에 맞는 구체적인 결과여야 합니다
 - title은 인스타그램 피드에서 바로 사용할 수 있는 짧고 강한 한국어 제목 한 줄이어야 합니다
 - content는 3~5문장, 자연스러운 한국어, 이모지 포함
 - hashtags는 공백으로 구분된 해시태그 5개 이상
 - visualPrompt는 이미지 생성 모델이 바로 사용할 수 있는 상세한 영어 프롬프트로 작성하세요
 - visualPrompt에는 정사각형 1:1 인스타그램 피드 구도, 조명, 색감, 제품/브랜드 포인트, 인스타그램 광고 느낌을 구체적으로 포함하세요
+- visualPrompt에는 반드시 업종, 상품/서비스, 브랜드 톤, 계정 컨셉, 타깃 분위기를 반영하세요
 - visualPrompt에는 텍스트 오버레이를 최소화하라고 명확히 지시하세요
 - visualPrompt에는 한국어 문장은 이미지 안에 넣지 말고, 꼭 필요한 경우에도 매우 짧은 한국어 한 줄 또는 두 줄만 허용하라고 적으세요
 - visualPrompt에는 긴 슬로건, 문단, 여러 개의 텍스트 박스, 복잡한 타이포그래피를 피하라고 적으세요
@@ -487,6 +586,12 @@ function extractImageOutputs(data: unknown) {
 
   if (message && typeof message === "object" && "images" in message && Array.isArray(message.images)) {
     for (const image of message.images) {
+      const normalizedUrl = normalizeImageValue(image);
+
+      if (normalizedUrl) {
+        urls.push(normalizedUrl);
+      }
+
       if (
         typeof image === "object" &&
         image !== null &&
@@ -515,6 +620,12 @@ function extractImageOutputs(data: unknown) {
 
   if (message && typeof message === "object" && "content" in message && Array.isArray(message.content)) {
     for (const item of message.content) {
+      const normalizedUrl = normalizeImageValue(item);
+
+      if (normalizedUrl) {
+        urls.push(normalizedUrl);
+      }
+
       if (
         typeof item === "object" &&
         item !== null &&
@@ -532,6 +643,98 @@ function extractImageOutputs(data: unknown) {
   }
 
   return [...new Set(urls)];
+}
+
+function normalizeImageValue(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  if (typeof record.url === "string" && record.url.trim()) {
+    return record.url;
+  }
+
+  if (typeof record.image_url === "string" && record.image_url.trim()) {
+    return record.image_url;
+  }
+
+  if (typeof record.imageUrl === "string" && record.imageUrl.trim()) {
+    return record.imageUrl;
+  }
+
+  const nestedImageUrl =
+    record.image_url && typeof record.image_url === "object"
+      ? (record.image_url as Record<string, unknown>)
+      : null;
+
+  if (nestedImageUrl && typeof nestedImageUrl.url === "string" && nestedImageUrl.url.trim()) {
+    return nestedImageUrl.url;
+  }
+
+  const nestedImageUrlCamel =
+    record.imageUrl && typeof record.imageUrl === "object"
+      ? (record.imageUrl as Record<string, unknown>)
+      : null;
+
+  if (
+    nestedImageUrlCamel &&
+    typeof nestedImageUrlCamel.url === "string" &&
+    nestedImageUrlCamel.url.trim()
+  ) {
+    return nestedImageUrlCamel.url;
+  }
+
+  const base64Value =
+    typeof record.b64_json === "string"
+      ? record.b64_json
+      : typeof record.base64 === "string"
+        ? record.base64
+        : typeof record.data === "string"
+          ? record.data
+          : null;
+
+  if (!base64Value) {
+    return null;
+  }
+
+  if (base64Value.startsWith("data:image/")) {
+    return base64Value;
+  }
+
+  const mimeType =
+    typeof record.mime_type === "string"
+      ? record.mime_type
+      : typeof record.mimeType === "string"
+        ? record.mimeType
+        : "image/png";
+
+  return `data:${mimeType};base64,${base64Value}`;
+}
+
+function getImageResponseDebugSummary(data: unknown) {
+  if (!data || typeof data !== "object") {
+    return "unknown";
+  }
+
+  const root = data as Record<string, unknown>;
+  const choice =
+    Array.isArray(root.choices) && root.choices[0] && typeof root.choices[0] === "object"
+      ? (root.choices[0] as Record<string, unknown>)
+      : null;
+  const message =
+    choice?.message && typeof choice.message === "object"
+      ? (choice.message as Record<string, unknown>)
+      : null;
+
+  return JSON.stringify({
+    rootKeys: Object.keys(root),
+    choiceKeys: choice ? Object.keys(choice) : [],
+    messageKeys: message ? Object.keys(message) : [],
+    imageCount: message && Array.isArray(message.images) ? message.images.length : 0,
+    contentCount: message && Array.isArray(message.content) ? message.content.length : 0,
+  });
 }
 
 function extractJson<T>(text: string) {
