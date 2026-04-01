@@ -99,101 +99,25 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
     );
   }
 
-  const previousNames = Array.isArray(body.previousResult?.accountNames)
-    ? body.previousResult.accountNames.map((item) => item.name).filter(Boolean).join(", ")
-    : "";
-  const previousPlan = body.previousResult?.accountPlan;
-
-  const userInput = `
-당신은 한국의 인스타그램 마케팅 전문가입니다.
-아래 비즈니스 정보를 바탕으로 인스타그램 계정 기획을 해주세요.
-
-업종: ${industry}
-판매하는 상품/서비스: ${productService}
-
-중요 규칙:
-- accountNames의 name은 반드시 영문 소문자만 사용, 공백 없이, 짧고 브랜드감 있게
-- 업종을 직접적으로 포함하지 마세요. 창의적이고 기억하기 쉬운 이름으로
-- meaning은 왜 이 이름을 추천하는지 한국어로 짧게 설명 (1문장)
-- accountPlan의 모든 내용은 한국어, 이 비즈니스에 맞는 구체적 내용이어야 합니다
-- bio는 인스타그램 소개란에 들어갈 2줄 매력적인 문구 (이모지 포함)
-- 매번 완전히 새로운 결과를 생성하세요. 이전 결과를 반복하지 마세요.
-- accountNames는 반드시 서로 달라야 하며, 정확히 3개만 제안하세요.
-- generation_id(${requestId || "none"})를 참고해 이전 응답과 다른 표현을 사용하세요.
-
-이전 생성 결과(절대 반복 금지):
-- 이전 계정명: ${previousNames || "없음"}
-- 이전 방향: ${String(previousPlan?.direction ?? "없음")}
-- 이전 소개글: ${String(previousPlan?.bio ?? "없음")}
-- 이전 컨셉: ${String(previousPlan?.concept ?? "없음")}
-
-다음 JSON 형식으로만 답변하세요. 설명 없이 JSON만 출력하세요:
-{
-  "accountNames": [
-    { "name": "englishname1", "meaning": "추천 이유 한국어 설명" },
-    { "name": "englishname2", "meaning": "추천 이유 한국어 설명" },
-    { "name": "englishname3", "meaning": "추천 이유 한국어 설명" }
-  ],
-  "accountPlan": {
-    "direction": "추천 계정 방향",
-    "bio": "소개글 2줄",
-    "concept": "운영 컨셉"
-  }
-}
-`;
-
-  const response = await callOpenRouter({
+  const planningResult = await generatePlanningResult({
     apiKey,
-    model: TEXT_MODEL,
-    requestType: "planning",
-    messages: [{ role: "user", content: userInput }],
+    industry,
+    productService,
+    requestId,
+    previousResult: body.previousResult ?? null,
   });
 
-  if (!response.ok) {
+  if (!planningResult.ok) {
     return Response.json(
       {
-        error: "AI 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        error: planningResult.error,
         source: "fallback",
       },
       { status: 502 }
     );
   }
 
-  const content = extractMessageContent(response.data?.choices?.[0]?.message?.content);
-  const parsed = extractJson<AccountPlanResult>(content);
-
-  if (!parsed) {
-    console.error("[/api/ai] Failed to parse planning response");
-    return Response.json(
-      {
-        error: "AI 기획 결과를 불러오지 못했습니다. 다시 시도해주세요.",
-        source: "fallback",
-      },
-      { status: 502 }
-    );
-  }
-
-  const accountNames = parsed.accountNames ?? [];
-  const allEnglishLower = accountNames.every((item) => /^[a-z]+$/.test(String(item.name ?? "")));
-  const allDifferent = new Set(accountNames.map((item) => item.name)).size === 3;
-  const hasKoreanMeaning = accountNames.every((item) => /[가-힣]/.test(String(item.meaning ?? "")));
-  const hasPlan =
-    !!parsed.accountPlan?.direction?.trim() &&
-    !!parsed.accountPlan?.bio?.trim() &&
-    !!parsed.accountPlan?.concept?.trim();
-
-  if (accountNames.length !== 3 || !allEnglishLower || !allDifferent || !hasKoreanMeaning || !hasPlan) {
-    console.error("[/api/ai] Invalid planning response:", parsed);
-    return Response.json(
-      {
-        error: "AI 기획 결과를 다시 생성해주세요.",
-        source: "fallback",
-      },
-      { status: 502 }
-    );
-  }
-
-  return Response.json({ ...parsed, source: "api" });
+  return Response.json({ ...planningResult.data, source: "api" });
 }
 
 async function handlePostImageGeneration(body: AiRequestBody, apiKey: string) {
@@ -749,4 +673,220 @@ function extractJson<T>(text: string) {
   } catch {
     return null;
   }
+}
+
+async function generatePlanningResult({
+  apiKey,
+  industry,
+  productService,
+  requestId,
+  previousResult,
+}: {
+  apiKey: string;
+  industry: string;
+  productService: string;
+  requestId: string;
+  previousResult?: AccountPlanResult | null;
+}) {
+  let lastError =
+    "AI 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
+  let retryReason = "";
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await callOpenRouter({
+      apiKey,
+      model: TEXT_MODEL,
+      requestType: attempt === 0 ? "planning" : "planning_retry",
+      messages: [
+        {
+          role: "user",
+          content: buildPlanningPrompt({
+            industry,
+            productService,
+            requestId,
+            previousResult,
+            retryReason,
+          }),
+        },
+      ],
+    });
+
+    if (!response.ok) {
+      lastError = "AI 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
+      retryReason = "JSON 형식과 필수 항목을 정확히 맞춰 다시 생성하세요.";
+      continue;
+    }
+
+    const content = extractMessageContent(
+      response.data?.choices?.[0]?.message?.content
+    );
+    const parsed = extractJson<AccountPlanResult>(content);
+
+    if (!parsed) {
+      console.error("[/api/ai] Failed to parse planning response");
+      lastError = "AI 기획 결과를 불러오지 못했습니다. 다시 시도해주세요.";
+      retryReason = "설명 없이 JSON 객체만 출력해야 합니다.";
+      continue;
+    }
+
+    const normalized = normalizePlanningResult(parsed);
+    const issues = getPlanningValidationIssues(normalized);
+
+    if (issues.length === 0) {
+      return { ok: true as const, data: normalized };
+    }
+
+    console.error("[/api/ai] Invalid planning response:", parsed);
+    console.error("[/api/ai] Planning validation issues:", issues.join(", "));
+    lastError = "AI 기획 결과를 다시 생성해주세요.";
+    retryReason = issues.join(", ");
+  }
+
+  return { ok: false as const, error: lastError };
+}
+
+function buildPlanningPrompt({
+  industry,
+  productService,
+  requestId,
+  previousResult,
+  retryReason,
+}: {
+  industry: string;
+  productService: string;
+  requestId: string;
+  previousResult?: AccountPlanResult | null;
+  retryReason?: string;
+}) {
+  const previousNames = Array.isArray(previousResult?.accountNames)
+    ? previousResult.accountNames
+        .map((item) => item.name)
+        .filter(Boolean)
+        .join(", ")
+    : "";
+  const previousPlan = previousResult?.accountPlan;
+
+  return `
+당신은 한국의 인스타그램 마케팅 전문가입니다.
+아래 비즈니스 정보를 바탕으로 인스타그램 계정 기획을 해주세요.
+
+업종: ${industry}
+판매하는 상품/서비스: ${productService}
+
+중요 규칙:
+- accountNames의 name은 반드시 영문 소문자만 사용, 공백 없이, 짧고 브랜드감 있게
+- accountNames의 name에는 숫자, 언더스코어, 하이픈, 특수문자를 넣지 마세요
+- 업종을 직접적으로 포함하지 마세요. 창의적이고 기억하기 쉬운 이름으로
+- meaning은 왜 이 이름을 추천하는지 한국어로 짧게 설명 (1문장)
+- accountPlan의 모든 내용은 한국어, 이 비즈니스에 맞는 구체적 내용이어야 합니다
+- bio는 인스타그램 소개란에 들어갈 2줄 매력적인 문구 (이모지 포함)
+- 매번 완전히 새로운 결과를 생성하세요. 이전 결과를 반복하지 마세요.
+- accountNames는 반드시 서로 달라야 하며, 정확히 3개만 제안하세요.
+- generation_id(${requestId || "none"})를 참고해 이전 응답과 다른 표현을 사용하세요.
+- 설명 문장, 머리말, 코드블록 없이 JSON 객체만 출력하세요
+
+이전 생성 결과(절대 반복 금지):
+- 이전 계정명: ${previousNames || "없음"}
+- 이전 방향: ${String(previousPlan?.direction ?? "없음")}
+- 이전 소개글: ${String(previousPlan?.bio ?? "없음")}
+- 이전 컨셉: ${String(previousPlan?.concept ?? "없음")}
+
+${
+  retryReason
+    ? `직전 응답 보정 지시:
+- 직전 응답 문제: ${retryReason}
+- 이번에는 위 문제를 모두 수정한 유효한 결과만 출력하세요.
+`
+    : ""
+}
+다음 JSON 형식으로만 답변하세요. 설명 없이 JSON만 출력하세요:
+{
+  "accountNames": [
+    { "name": "englishnameone", "meaning": "추천 이유 한국어 설명" },
+    { "name": "englishnametwo", "meaning": "추천 이유 한국어 설명" },
+    { "name": "englishnamethree", "meaning": "추천 이유 한국어 설명" }
+  ],
+  "accountPlan": {
+    "direction": "추천 계정 방향",
+    "bio": "소개글 2줄",
+    "concept": "운영 컨셉"
+  }
+}
+`;
+}
+
+function normalizePlanningResult(parsed: AccountPlanResult): AccountPlanResult {
+  const seenNames = new Set<string>();
+  const normalizedNames = Array.isArray(parsed.accountNames)
+    ? parsed.accountNames
+        .map((item) => {
+          const normalizedName = String(item?.name ?? "")
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z]/g, "");
+          const rawMeaning = String(item?.meaning ?? "")
+            .replace(/\s+/g, " ")
+            .trim();
+
+          return {
+            name: normalizedName,
+            meaning: /[가-힣]/.test(rawMeaning)
+              ? rawMeaning
+              : "브랜드 방향과 어울리는 이름입니다.",
+          };
+        })
+        .filter((item) => {
+          if (!item.name || seenNames.has(item.name)) {
+            return false;
+          }
+
+          seenNames.add(item.name);
+          return true;
+        })
+        .slice(0, 3)
+    : [];
+
+  return {
+    accountNames: normalizedNames,
+    accountPlan: {
+      direction: String(parsed.accountPlan?.direction ?? "").trim(),
+      bio: String(parsed.accountPlan?.bio ?? "").trim(),
+      concept: String(parsed.accountPlan?.concept ?? "").trim(),
+    },
+  };
+}
+
+function getPlanningValidationIssues(result: AccountPlanResult) {
+  const issues: string[] = [];
+  const accountNames = result.accountNames ?? [];
+
+  if (accountNames.length !== 3) {
+    issues.push("accountNames는 정확히 3개여야 합니다");
+  }
+
+  if (!accountNames.every((item) => /^[a-z]+$/.test(String(item.name ?? "")))) {
+    issues.push("accountNames의 name은 영문 소문자만 허용됩니다");
+  }
+
+  if (new Set(accountNames.map((item) => item.name)).size !== accountNames.length) {
+    issues.push("accountNames는 서로 달라야 합니다");
+  }
+
+  if (!accountNames.every((item) => String(item.meaning ?? "").trim())) {
+    issues.push("각 계정명에는 meaning이 필요합니다");
+  }
+
+  if (!result.accountPlan.direction.trim()) {
+    issues.push("accountPlan.direction이 필요합니다");
+  }
+
+  if (!result.accountPlan.bio.trim()) {
+    issues.push("accountPlan.bio가 필요합니다");
+  }
+
+  if (!result.accountPlan.concept.trim()) {
+    issues.push("accountPlan.concept가 필요합니다");
+  }
+
+  return issues;
 }

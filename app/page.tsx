@@ -4,8 +4,26 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  collectValidationIssues,
+  getFieldError,
+  getApplicationValidationIssues,
+  getFirstValidationIssue,
+  getIssueFields,
+  isValidDurationSelection,
+  isBlank,
+  isValidPlanSelection,
+  type ApplicationValidationField,
+  type ValidationIssue,
+} from "@/lib/form-validation";
+import {
   getSupabaseBrowserClientOrNull,
 } from "@/lib/supabase/client";
+import {
+  getHelperTextClass,
+  getPrimaryActionButtonClass,
+  getTextFieldClass,
+  ValidationToast,
+} from "@/lib/ui/form-feedback";
 import {
   fetchSavedGeneratedPosts,
   persistApplicationSubmission,
@@ -51,6 +69,13 @@ type GeneratedPost = {
   createdAt?: string;
   isPersisted?: boolean;
 };
+
+type HomeValidationField =
+  | ApplicationValidationField
+  | "finalInstagramId"
+  | "postInput"
+  | "planningResult"
+  | "accountNames";
 
 type OutcomeMetricKey = "followers" | "likes" | "comments";
 
@@ -232,16 +257,24 @@ function InputField({
   label,
   value,
   onChange,
+  onBlur,
   placeholder,
   type = "text",
   required = false,
+  error,
+  fieldKey,
+  theme = "rose",
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onBlur?: () => void;
   placeholder?: string;
   type?: string;
   required?: boolean;
+  error?: string;
+  fieldKey?: string;
+  theme?: "rose" | "violet";
 }) {
   return (
     <div className="space-y-1.5">
@@ -253,9 +286,16 @@ function InputField({
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         placeholder={placeholder}
-        className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-300 transition-colors bg-white"
+        data-validation-field={fieldKey}
+        aria-invalid={Boolean(error)}
+        className={getTextFieldClass({
+          theme,
+          hasError: Boolean(error),
+        })}
       />
+      {error && <p className={getHelperTextClass(theme)}>{error}</p>}
     </div>
   );
 }
@@ -264,16 +304,24 @@ function TextareaField({
   label,
   value,
   onChange,
+  onBlur,
   placeholder,
   required = false,
   rows = 4,
+  error,
+  fieldKey,
+  theme = "rose",
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onBlur?: () => void;
   placeholder?: string;
   required?: boolean;
   rows?: number;
+  error?: string;
+  fieldKey?: string;
+  theme?: "rose" | "violet";
 }) {
   return (
     <div className="space-y-1.5">
@@ -284,10 +332,17 @@ function TextareaField({
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         placeholder={placeholder}
         rows={rows}
-        className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-300 transition-colors bg-white resize-none"
+        data-validation-field={fieldKey}
+        aria-invalid={Boolean(error)}
+        className={`${getTextFieldClass({
+          theme,
+          hasError: Boolean(error),
+        })} resize-none`}
       />
+      {error && <p className={getHelperTextClass(theme)}>{error}</p>}
     </div>
   );
 }
@@ -379,6 +434,10 @@ export default function Home() {
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [submittingApplication, setSubmittingApplication] = useState(false);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [validationToast, setValidationToast] = useState<string | null>(null);
+  const [touchedFields, setTouchedFields] = useState<
+    Partial<Record<HomeValidationField, boolean>>
+  >({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const suggestedPostPrompts = [
@@ -397,6 +456,52 @@ export default function Home() {
     generatedPosts,
     savedGeneratedPosts
   );
+
+  function showValidationToast(message: string) {
+    setValidationToast(message);
+  }
+
+  function markFieldsTouched(fields: HomeValidationField[]) {
+    if (!fields.length) return;
+
+    setTouchedFields((current) => {
+      const next = { ...current };
+
+      for (const field of fields) {
+        next[field] = true;
+      }
+
+      return next;
+    });
+  }
+
+  function markFieldTouched(field: HomeValidationField) {
+    markFieldsTouched([field]);
+  }
+
+  function focusValidationField(field: HomeValidationField) {
+    if (typeof document === "undefined") return;
+
+    const target = document.querySelector<HTMLElement>(
+      `[data-validation-field="${field}"]`
+    );
+
+    target?.focus();
+  }
+
+  function surfaceValidationIssues(issues: ValidationIssue<HomeValidationField>[]) {
+    const firstIssue = getFirstValidationIssue(issues);
+
+    if (!firstIssue) {
+      return true;
+    }
+
+    markFieldsTouched(getIssueFields(issues));
+    showValidationToast(firstIssue.message);
+    focusValidationField(firstIssue.field);
+    return false;
+  }
+
   const selectedExpectedOutcome = getExpectedOutcome(
     selectedPlan,
     selectedDuration
@@ -455,6 +560,174 @@ export default function Home() {
       !!depositorName.trim()
     );
   }
+
+  function getPlanningValidationIssues() {
+    return collectValidationIssues<HomeValidationField>([
+      {
+        field: "instagramId",
+        message: "인스타그램 아이디를 입력해주세요",
+        isMissing: Boolean(hasAccount) && isBlank(instagramId),
+      },
+      {
+        field: "industry",
+        message: "업종을 입력해주세요",
+        isMissing: isBlank(industry),
+      },
+      {
+        field: "productService",
+        message: "판매하는 상품 또는 서비스를 입력해주세요",
+        isMissing: isBlank(productService),
+      },
+    ]);
+  }
+
+  function getResultStepValidationIssues() {
+    if (getPlanningValidationIssues().length > 0) {
+      return getPlanningValidationIssues();
+    }
+
+    if (!hasPlanningOutput()) {
+      return [
+        {
+          field: "planningResult" as const,
+          message: "AI 기획 결과를 다시 생성해주세요",
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  function getNamesStepValidationIssues() {
+    if (hasRecommendedNames()) {
+      return [];
+    }
+
+    return [
+      {
+        field: "accountNames" as const,
+        message: "추천 계정명을 다시 생성해주세요",
+      },
+    ];
+  }
+
+  function getConfirmValidationIssues(nextInstagramId?: string) {
+    const handle = typeof nextInstagramId === "string" ? nextInstagramId : finalInstagramId;
+
+    return collectValidationIssues<HomeValidationField>([
+      {
+        field: "finalInstagramId",
+        message: "인스타그램 아이디를 입력해주세요",
+        isMissing: isBlank(handle),
+      },
+    ]);
+  }
+
+  function getPaymentValidationIssues() {
+    return getApplicationValidationIssues({
+      selectedPlan,
+      selectedDuration,
+      instagramId: effectiveInstagramId,
+      industry,
+      productService,
+      managerName,
+      phone,
+      email,
+      depositorName,
+      isExpress,
+      completionDate,
+    });
+  }
+
+  function getPostGenerationValidationIssues() {
+    return collectValidationIssues<HomeValidationField>([
+      {
+        field: "postInput",
+        message: "이용 조건을 확인해주세요",
+        isMissing: !canUsePaidPostGeneration && !canUseFreeTrial,
+      },
+      {
+        field: "postInput",
+        message: "참고 이미지 또는 게시물 방향을 입력해주세요",
+        isMissing: uploadedImages.length === 0 && isBlank(postPrompt),
+      },
+    ]);
+  }
+
+  const planningValidationIssues = getPlanningValidationIssues();
+  const resultValidationIssues = getResultStepValidationIssues();
+  const namesValidationIssues = getNamesStepValidationIssues();
+  const confirmValidationIssues = getConfirmValidationIssues();
+  const paymentValidationIssues = getPaymentValidationIssues();
+  const postGenerationValidationIssues = getPostGenerationValidationIssues();
+
+  const instagramIdError = getFieldError(
+    planningValidationIssues,
+    "instagramId",
+    touchedFields
+  );
+  const industryError = getFieldError(
+    planningValidationIssues,
+    "industry",
+    touchedFields
+  );
+  const productServiceError = getFieldError(
+    planningValidationIssues,
+    "productService",
+    touchedFields
+  );
+  const finalInstagramIdError = getFieldError(
+    confirmValidationIssues,
+    "finalInstagramId",
+    touchedFields
+  );
+  const selectedPlanError = getFieldError(
+    paymentValidationIssues,
+    "selectedPlan",
+    touchedFields
+  );
+  const selectedDurationError = getFieldError(
+    paymentValidationIssues,
+    "selectedDuration",
+    touchedFields
+  );
+  const managerNameError = getFieldError(
+    paymentValidationIssues,
+    "managerName",
+    touchedFields
+  );
+  const phoneError = getFieldError(
+    paymentValidationIssues,
+    "phone",
+    touchedFields
+  );
+  const emailError = getFieldError(
+    paymentValidationIssues,
+    "email",
+    touchedFields
+  );
+  const depositorNameError = getFieldError(
+    paymentValidationIssues,
+    "depositorName",
+    touchedFields
+  );
+  const completionDateError = getFieldError(
+    paymentValidationIssues,
+    "completionDate",
+    touchedFields
+  );
+  const postInputError = getFieldError(
+    postGenerationValidationIssues,
+    "postInput",
+    touchedFields
+  );
+
+  const isPlanningReady = planningValidationIssues.length === 0;
+  const isResultNextReady = resultValidationIssues.length === 0;
+  const isNamesNextReady = namesValidationIssues.length === 0;
+  const isConfirmReady = confirmValidationIssues.length === 0;
+  const isPaymentSubmitReady = paymentValidationIssues.length === 0;
+  const isPostGenerationReady = postGenerationValidationIssues.length === 0;
 
   function getSafeStep(nextStep: Step): Step {
     switch (nextStep) {
@@ -544,6 +817,15 @@ export default function Home() {
   }
 
   function moveToPayment(nextInstagramId?: string) {
+    const issues = [
+      ...getResultStepValidationIssues(),
+      ...(hasAccount ? [] : getConfirmValidationIssues(nextInstagramId)),
+    ];
+
+    if (!surfaceValidationIssues(issues)) {
+      return;
+    }
+
     if (typeof nextInstagramId === "string") {
       setFinalInstagramId(nextInstagramId);
     }
@@ -553,6 +835,27 @@ export default function Home() {
     }
 
     goToStep("payment");
+  }
+
+  function handleResultNext() {
+    if (!surfaceValidationIssues(resultValidationIssues)) {
+      return;
+    }
+
+    if (hasAccount) {
+      moveToPayment(instagramId);
+      return;
+    }
+
+    goToStep("names");
+  }
+
+  function handleNamesNext() {
+    if (!surfaceValidationIssues(namesValidationIssues)) {
+      return;
+    }
+
+    goToStep("confirm");
   }
 
   const activeStep = hasHydrated ? getSafeStep(step) : step;
@@ -605,8 +908,12 @@ export default function Home() {
         setProductService(parsed.productService ?? "");
         setAiResult(parsed.aiResult ?? null);
         setFinalInstagramId(parsed.finalInstagramId ?? "");
-        if (typeof parsed.selectedPlan === "number") setSelectedPlan(parsed.selectedPlan);
-        if (typeof parsed.selectedDuration === "number") setSelectedDuration(parsed.selectedDuration);
+        if (isValidPlanSelection(parsed.selectedPlan)) {
+          setSelectedPlan(parsed.selectedPlan);
+        }
+        if (isValidDurationSelection(parsed.selectedDuration)) {
+          setSelectedDuration(parsed.selectedDuration);
+        }
         setCompletionDate(parsed.completionDate ?? "");
         setIsExpress(Boolean(parsed.isExpress));
         setManagerName(parsed.managerName ?? "");
@@ -905,6 +1212,14 @@ export default function Home() {
   ]);
 
   async function handleGenerate(targetStep: Step = step) {
+    if (loading) {
+      return;
+    }
+
+    if (!surfaceValidationIssues(planningValidationIssues)) {
+      return;
+    }
+
     setLoading(true);
     setAiError(null);
     try {
@@ -984,12 +1299,14 @@ export default function Home() {
   }
 
   async function handleGeneratePost() {
-    if (
-      (uploadedImages.length === 0 && !postPrompt.trim()) ||
-      (!canUsePaidPostGeneration && !canUseFreeTrial)
-    ) {
+    if (generatingPost) {
       return;
     }
+
+    if (!surfaceValidationIssues(postGenerationValidationIssues)) {
+      return;
+    }
+
     setGeneratingPost(true);
     setPostError(null);
     const latestPostContext = mergedGeneratedPosts[0];
@@ -1052,6 +1369,11 @@ export default function Home() {
         isFreeTrial: !canUsePaidPostGeneration,
       });
 
+      if (persistenceResult.error && !persistenceResult.saved && !persistenceResult.queued) {
+        setGeneratedPosts((prev) => prev.filter((post) => post.id !== nextPost.id));
+        throw new Error(persistenceResult.error);
+      }
+
       if (persistenceResult.error) {
         console.warn("[Generated Post] Persistence warning:", persistenceResult.error);
       }
@@ -1068,6 +1390,7 @@ export default function Home() {
           ? err.message
           : "AI 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
       setPostError(message);
+      showValidationToast(message);
     } finally {
       setGeneratingPost(false);
     }
@@ -1140,8 +1463,12 @@ export default function Home() {
   }
 
   async function handleApplicationSubmit() {
-    if (!email.trim() || !managerName.trim() || !phone.trim() || !depositorName.trim()) {
-      setSubmissionError("신청자 정보를 모두 입력해주세요.");
+    if (submittingApplication) {
+      return;
+    }
+
+    if (!surfaceValidationIssues(paymentValidationIssues)) {
+      setSubmissionError(null);
       return;
     }
 
@@ -1197,6 +1524,7 @@ export default function Home() {
           ? error.message
           : "신청 정보를 저장하지 못했습니다. 다시 시도해주세요.";
       setSubmissionError(message);
+      showValidationToast(message);
     } finally {
       setSubmittingApplication(false);
     }
@@ -1245,6 +1573,12 @@ export default function Home() {
             {hasHydrated ? (
               isAuthenticated ? (
                 <>
+                  <button
+                    onClick={() => router.push("/mypage")}
+                    className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
+                  >
+                    마이페이지
+                  </button>
                   <span className="text-xs font-medium text-gray-500 bg-white border border-gray-200 px-3 py-1.5 rounded-full">
                     {authName
                       ? `${authName}님 로그인됨`
@@ -1425,67 +1759,87 @@ export default function Home() {
 
   if (activeStep === "input") {
     return (
-      <main className={wrapper}>
-        <div className="max-w-xl w-full space-y-6">
-          <button
-            onClick={() => navigateBack("input")}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 뒤로
-          </button>
+      <>
+        <main className={wrapper}>
+          <div className="max-w-xl w-full space-y-6">
+            <button
+              onClick={() => navigateBack("input")}
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
+            >
+              ← 뒤로
+            </button>
 
-          <div className="text-center space-y-1">
-            <h2 className="text-2xl font-bold text-gray-900">
-              정보를 알려주세요
-            </h2>
-            <p className="text-sm text-gray-500">
-              AI가 맞춤 마케팅 전략을 기획합니다
-            </p>
-          </div>
+            <div className="text-center space-y-1">
+              <h2 className="text-2xl font-bold text-gray-900">
+                정보를 알려주세요
+              </h2>
+              <p className="text-sm text-gray-500">
+                AI가 맞춤 마케팅 전략을 기획합니다
+              </p>
+            </div>
 
-          <Card className="space-y-5">
-            {hasAccount && (
+            <Card className="space-y-5">
+              {hasAccount && (
+                <InputField
+                  label="인스타그램 아이디"
+                  value={instagramId}
+                  onChange={setInstagramId}
+                  onBlur={() => markFieldTouched("instagramId")}
+                  placeholder="예: our_brand"
+                  required
+                  error={instagramIdError}
+                  fieldKey="instagramId"
+                />
+              )}
               <InputField
-                label="인스타그램 아이디"
-                value={instagramId}
-                onChange={setInstagramId}
-                placeholder="예: our_brand"
+                label="업종"
+                value={industry}
+                onChange={setIndustry}
+                onBlur={() => markFieldTouched("industry")}
+                placeholder="예: 정보통신업"
                 required
+                error={industryError}
+                fieldKey="industry"
               />
-            )}
-            <InputField
-              label="업종"
-              value={industry}
-              onChange={setIndustry}
-              placeholder="예: 정보통신업"
-              required
-            />
-            <TextareaField
-              label="판매하는 상품 / 서비스"
-              value={productService}
-              onChange={setProductService}
-              placeholder="기획부터 완결까지 한 번에 끝내는 웹소설 올인원 창작 웹. 세계관 구축, 집필, AI 검증, 카드 뽑기를 통한 영감까지 모두 지원합니다."
-              required
-              rows={4}
-            />
-          </Card>
+              <TextareaField
+                label="판매하는 상품 / 서비스"
+                value={productService}
+                onChange={setProductService}
+                onBlur={() => markFieldTouched("productService")}
+                placeholder="기획부터 완결까지 한 번에 끝내는 웹소설 올인원 창작 웹. 세계관 구축, 집필, AI 검증, 카드 뽑기를 통한 영감까지 모두 지원합니다."
+                required
+                rows={4}
+                error={productServiceError}
+                fieldKey="productService"
+              />
+            </Card>
 
-          <button
-            onClick={() => handleGenerate("result")}
-            disabled={loading || !industry || !productService}
-            className="w-full py-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                AI가 기획 중입니다...
-              </span>
-            ) : (
-              "AI로 기획하기"
-            )}
-          </button>
-        </div>
-      </main>
+            <button
+              onClick={() => handleGenerate("result")}
+              disabled={loading}
+              aria-disabled={loading || !isPlanningReady}
+              className={`${getPrimaryActionButtonClass({
+                theme: "rose",
+                isInactive: loading || !isPlanningReady,
+              })} py-4`}
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  AI가 기획 중입니다...
+                </span>
+              ) : (
+                "AI로 기획하기"
+              )}
+            </button>
+          </div>
+        </main>
+        <ValidationToast
+          message={validationToast}
+          onClose={() => setValidationToast(null)}
+          theme="rose"
+        />
+      </>
     );
   }
 
@@ -1506,6 +1860,7 @@ export default function Home() {
     }
 
     return (
+      <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
           <button
@@ -1579,22 +1934,24 @@ export default function Home() {
               다시 기획하기
             </button>
             <button
-              onClick={() => {
-                if (hasAccount) {
-                  // Has account → go straight to payment
-                  moveToPayment(instagramId);
-                } else {
-                  // No account → show username recommendations
-                  goToStep("names");
-                }
-              }}
-              className="py-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+              onClick={handleResultNext}
+              aria-disabled={!isResultNextReady}
+              className={`${getPrimaryActionButtonClass({
+                theme: "rose",
+                isInactive: !isResultNextReady,
+              })} py-4`}
             >
               다음
             </button>
           </div>
         </div>
       </main>
+      <ValidationToast
+        message={validationToast}
+        onClose={() => setValidationToast(null)}
+        theme="rose"
+      />
+      </>
     );
   }
 
@@ -1602,6 +1959,7 @@ export default function Home() {
 
   if (activeStep === "names") {
     return (
+      <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
           <button
@@ -1677,14 +2035,24 @@ export default function Home() {
               이전으로
             </button>
             <button
-              onClick={() => goToStep("confirm")}
-              className="py-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+              onClick={handleNamesNext}
+              aria-disabled={!isNamesNextReady}
+              className={`${getPrimaryActionButtonClass({
+                theme: "rose",
+                isInactive: !isNamesNextReady,
+              })} py-4`}
             >
               다음 단계로
             </button>
           </div>
         </div>
       </main>
+      <ValidationToast
+        message={validationToast}
+        onClose={() => setValidationToast(null)}
+        theme="rose"
+      />
+      </>
     );
   }
 
@@ -1692,6 +2060,7 @@ export default function Home() {
 
   if (activeStep === "confirm") {
     return (
+      <>
       <main className={wrapper}>
         <div className="max-w-xl w-full space-y-6">
           <button
@@ -1741,8 +2110,11 @@ export default function Home() {
               label="최종 인스타그램 아이디"
               value={finalInstagramId}
               onChange={setFinalInstagramId}
+              onBlur={() => markFieldTouched("finalInstagramId")}
               placeholder="예: our_brand"
               required
+              error={finalInstagramIdError}
+              fieldKey="finalInstagramId"
             />
           </Card>
 
@@ -1757,14 +2129,23 @@ export default function Home() {
               onClick={() => {
                 moveToPayment(finalInstagramId.trim());
               }}
-              disabled={!finalInstagramId.trim()}
-              className="py-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-disabled={!isConfirmReady}
+              className={`${getPrimaryActionButtonClass({
+                theme: "rose",
+                isInactive: !isConfirmReady,
+              })} py-4`}
             >
               확인하고 다음으로
             </button>
           </div>
         </div>
       </main>
+      <ValidationToast
+        message={validationToast}
+        onClose={() => setValidationToast(null)}
+        theme="rose"
+      />
+      </>
     );
   }
 
@@ -1776,6 +2157,7 @@ export default function Home() {
     const totalPrice = basePrice + expressFee;
 
     return (
+      <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
           <button
@@ -1803,10 +2185,15 @@ export default function Home() {
               {/* Plan 1 */}
               <button
                 onClick={() => setSelectedPlan(1)}
+                onBlur={() => markFieldTouched("selectedPlan")}
+                data-validation-field="selectedPlan"
+                aria-invalid={Boolean(selectedPlanError)}
                 className={`text-left p-5 rounded-2xl border-2 transition-all ${
                   selectedPlan === 1
                     ? "border-rose-500 bg-rose-50/50 shadow-md"
-                    : "border-gray-200 bg-white hover:border-gray-300"
+                    : selectedPlanError
+                      ? "border-rose-300 bg-rose-50/40"
+                      : "border-gray-200 bg-white hover:border-gray-300"
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -1858,10 +2245,14 @@ export default function Home() {
               {/* Plan 2 */}
               <button
                 onClick={() => setSelectedPlan(2)}
+                onBlur={() => markFieldTouched("selectedPlan")}
+                aria-invalid={Boolean(selectedPlanError)}
                 className={`text-left p-5 rounded-2xl border-2 transition-all relative overflow-hidden ${
                   selectedPlan === 2
                     ? "border-rose-500 bg-rose-50/50 shadow-md"
-                    : "border-gray-200 bg-white hover:border-gray-300"
+                    : selectedPlanError
+                      ? "border-rose-300 bg-rose-50/40"
+                      : "border-gray-200 bg-white hover:border-gray-300"
                 }`}
               >
                 <div className="absolute top-0 right-0 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl">
@@ -1913,6 +2304,9 @@ export default function Home() {
                 </div>
               </button>
             </div>
+            {selectedPlanError && (
+              <p className={`mt-2 ${getHelperTextClass("rose")}`}>{selectedPlanError}</p>
+            )}
           </div>
 
           {/* Duration selection */}
@@ -1928,10 +2322,15 @@ export default function Home() {
                       setCompletionDate(getDefaultCompletionDate(d));
                     }
                   }}
+                  onBlur={() => markFieldTouched("selectedDuration")}
+                  data-validation-field={d === 1 ? "selectedDuration" : undefined}
+                  aria-invalid={Boolean(selectedDurationError)}
                   className={`p-4 rounded-xl border-2 font-medium transition-all ${
                     selectedDuration === d
                       ? "border-rose-500 bg-rose-50/50 text-rose-600"
-                      : "border-gray-200 bg-white text-gray-700 hover:border-gray-300"
+                      : selectedDurationError
+                        ? "border-rose-300 bg-rose-50/40 text-gray-700"
+                        : "border-gray-200 bg-white text-gray-700 hover:border-gray-300"
                   }`}
                 >
                   <div>{d === 1 ? "1개월 운영" : "2개월 운영"}</div>
@@ -1951,6 +2350,11 @@ export default function Home() {
                 </button>
               ))}
             </div>
+            {selectedDurationError && (
+              <p className={`mt-2 ${getHelperTextClass("rose")}`}>
+                {selectedDurationError}
+              </p>
+            )}
             <p className="text-xs text-emerald-600 mt-3 font-medium">
               2개월 운영이 더 경제적입니다
             </p>
@@ -2179,11 +2583,20 @@ export default function Home() {
                   type="date"
                   value={completionDate}
                   onChange={(e) => setCompletionDate(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-300 transition-colors bg-white"
+                  onBlur={() => markFieldTouched("completionDate")}
+                  data-validation-field="completionDate"
+                  aria-invalid={Boolean(completionDateError)}
+                  className={getTextFieldClass({
+                    theme: "rose",
+                    hasError: Boolean(completionDateError),
+                  })}
                 />
                 <p className="text-xs text-gray-500">
                   원하시는 날짜에 맞춰 우선적으로 작업을 진행합니다
                 </p>
+                {completionDateError && (
+                  <p className={getHelperTextClass("rose")}>{completionDateError}</p>
+                )}
               </div>
             )}
           </Card>
@@ -2255,31 +2668,43 @@ export default function Home() {
               label="담당자명"
               value={managerName}
               onChange={setManagerName}
+              onBlur={() => markFieldTouched("managerName")}
               placeholder="홍길동"
               required
+              error={managerNameError}
+              fieldKey="managerName"
             />
             <InputField
               label="연락처"
               value={phone}
               onChange={setPhone}
+              onBlur={() => markFieldTouched("phone")}
               placeholder="010-0000-0000"
               type="tel"
               required
+              error={phoneError}
+              fieldKey="phone"
             />
             <InputField
               label="이메일"
               value={email}
               onChange={setEmail}
+              onBlur={() => markFieldTouched("email")}
               placeholder="예: brand@company.com"
               type="email"
               required
+              error={emailError}
+              fieldKey="email"
             />
             <InputField
               label="입금자명"
               value={depositorName}
               onChange={setDepositorName}
+              onBlur={() => markFieldTouched("depositorName")}
               placeholder="홍길동"
               required
+              error={depositorNameError}
+              fieldKey="depositorName"
             />
 
             {/* Tax invoice */}
@@ -2369,8 +2794,12 @@ export default function Home() {
 
           <button
             onClick={handleApplicationSubmit}
-            disabled={submittingApplication || (isExpress && !completionDate)}
-            className="w-full py-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+            disabled={submittingApplication}
+            aria-disabled={submittingApplication || !isPaymentSubmitReady}
+            className={`${getPrimaryActionButtonClass({
+              theme: "rose",
+              isInactive: submittingApplication || !isPaymentSubmitReady,
+            })} py-4`}
           >
             {submittingApplication
               ? "신청 정보를 저장하고 있습니다..."
@@ -2378,6 +2807,12 @@ export default function Home() {
           </button>
         </div>
       </main>
+      <ValidationToast
+        message={validationToast}
+        onClose={() => setValidationToast(null)}
+        theme="rose"
+      />
+      </>
     );
   }
 
@@ -2390,6 +2825,7 @@ export default function Home() {
       getPrice(selectedPlan, selectedDuration) + getExpressFee(isExpress);
 
     return (
+      <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
           {/* Hero */}
@@ -2572,6 +3008,12 @@ export default function Home() {
           </div>
         </div>
       </main>
+      <ValidationToast
+        message={validationToast}
+        onClose={() => setValidationToast(null)}
+        theme="violet"
+      />
+      </>
     );
   }
 
@@ -2579,6 +3021,7 @@ export default function Home() {
 
   if (activeStep === "postgen") {
     return (
+      <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
           <button
@@ -2668,7 +3111,15 @@ export default function Home() {
                 </div>
 
                 {uploadedImages.length === 0 ? (
-                  <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-2xl py-10 px-4 cursor-pointer hover:border-violet-300 hover:bg-violet-50/30 transition-colors">
+                  <label
+                    data-validation-field="postInput"
+                    tabIndex={-1}
+                    className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl py-10 px-4 cursor-pointer transition-colors ${
+                      postInputError
+                        ? "border-violet-300 bg-violet-50/50"
+                        : "border-gray-200 hover:border-violet-300 hover:bg-violet-50/30"
+                    }`}
+                  >
                     <div className="text-3xl text-gray-300 mb-2">📷</div>
                     <p className="text-sm font-medium text-gray-500">
                       참고 이미지를 선택하세요
@@ -2710,7 +3161,15 @@ export default function Home() {
                         </div>
                       ))}
                       {uploadedImages.length < 2 && (
-                        <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-2xl px-4 cursor-pointer hover:border-violet-300 hover:bg-violet-50/30 transition-colors aspect-square">
+                        <label
+                          data-validation-field="postInput"
+                          tabIndex={-1}
+                          className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl px-4 cursor-pointer transition-colors aspect-square ${
+                            postInputError
+                              ? "border-violet-300 bg-violet-50/50"
+                              : "border-gray-200 hover:border-violet-300 hover:bg-violet-50/30"
+                          }`}
+                        >
                           <div className="text-3xl text-gray-300 mb-2">＋</div>
                           <p className="text-sm font-medium text-gray-500">
                             참고 이미지 추가
@@ -2733,6 +3192,9 @@ export default function Home() {
                       제품 사진, 참고 게시물, 분위기 이미지를 함께 참고해 제작합니다
                     </p>
                   </div>
+                )}
+                {postInputError && (
+                  <p className={getHelperTextClass("violet")}>{postInputError}</p>
                 )}
 
                 <div className="space-y-3">
@@ -2786,8 +3248,12 @@ export default function Home() {
                   label="원하는 게시물 방향"
                   value={postPrompt}
                   onChange={setPostPrompt}
+                  onBlur={() => markFieldTouched("postInput")}
                   placeholder="예: 참고 이미지는 그대로 두고 더 감성적인 분위기로 만들어주세요. 20대 여성 대상의 따뜻한 홍보 게시물 느낌이면 좋겠어요."
                   rows={5}
+                  error={postInputError}
+                  fieldKey="postInput"
+                  theme="violet"
                 />
                 <div className="rounded-xl bg-violet-50/60 border border-violet-100 px-4 py-3 space-y-1">
                   <p className="text-sm font-medium text-violet-700">
@@ -2805,12 +3271,12 @@ export default function Home() {
 
                 <button
                   onClick={handleGeneratePost}
-                  disabled={
-                    generatingPost ||
-                    (!canUsePaidPostGeneration && !canUseFreeTrial) ||
-                    (uploadedImages.length === 0 && !postPrompt.trim())
-                  }
-                  className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all disabled:opacity-50"
+                  disabled={generatingPost}
+                  aria-disabled={generatingPost || !isPostGenerationReady}
+                  className={`${getPrimaryActionButtonClass({
+                    theme: "violet",
+                    isInactive: generatingPost || !isPostGenerationReady,
+                  })} py-3`}
                 >
                   {generatingPost ? (
                     <span className="flex items-center justify-center gap-2">
@@ -3000,6 +3466,12 @@ export default function Home() {
           </div>
         </div>
       </main>
+      <ValidationToast
+        message={validationToast}
+        onClose={() => setValidationToast(null)}
+        theme="violet"
+      />
+      </>
     );
   }
 

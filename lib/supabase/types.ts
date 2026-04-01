@@ -70,6 +70,8 @@ export type Database = {
           account_number: string | null;
           account_holder: string | null;
           depositor_name: string | null;
+          payment_status: string | null;
+          confirmed_at: string | null;
           created_at: string | null;
         };
         Insert: Record<string, Json | undefined>;
@@ -80,7 +82,6 @@ export type Database = {
           id: string;
           application_id: string | null;
           user_id: string | null;
-          email: string | null;
           title: string | null;
           content: string | null;
           hashtags: string | null;
