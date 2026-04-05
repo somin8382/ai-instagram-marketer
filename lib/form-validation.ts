@@ -122,7 +122,7 @@ export function getApplicationValidationIssues(input: {
     },
     {
       field: "email",
-      message: "이메일을 입력해주세요",
+      message: "아이디(이메일)를 입력해주세요",
       isMissing: isBlank(input.email),
     },
     {

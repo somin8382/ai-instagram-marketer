@@ -27,7 +27,25 @@ export default function RootLayout({
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <div className="flex-1">{children}</div>
+        <footer className="border-t border-gray-200 py-8 px-4">
+          <div className="max-w-4xl mx-auto text-center text-sm text-gray-500 leading-relaxed space-y-1">
+            <p>© 2025 Qmeet. All rights reserved.</p>
+            <p>큐밋(Qmeet)</p>
+            <p>
+              서비스 문의:{" "}
+              <a
+                href="mailto:ceo.qmeet@gmail.com"
+                className="underline underline-offset-2 hover:text-gray-700 transition-colors"
+              >
+                ceo.qmeet@gmail.com
+              </a>
+            </p>
+            <p>문의주시면 빠르게 답변드리겠습니다.</p>
+          </div>
+        </footer>
+      </body>
     </html>
   );
 }

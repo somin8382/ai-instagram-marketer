@@ -1,3 +1,18 @@
+import { createClient } from "@supabase/supabase-js";
+import {
+  getEffectiveDailyUsageCount,
+  getKoreaDateString,
+  getRemainingDailyGenerationCount,
+  getRemainingSubscriptionCredits,
+  isPostGeneratorSubscriptionActive,
+  POST_GENERATOR_PLAN_TYPE,
+} from "@/lib/post-generator/subscription";
+import type { Database } from "@/lib/supabase/types";
+import {
+  INTERNAL_TEST_SESSION_COOKIE_NAME,
+  verifyInternalTestSessionToken,
+} from "@/lib/server/internal-test-session";
+
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const TEXT_MODEL = "openai/gpt-4o-mini";
 const IMAGE_MODEL = "google/gemini-3-pro-image-preview";
@@ -30,6 +45,8 @@ type PostImageResult = {
 
 type AiRequestBody = {
   type?: "planning" | "post_image";
+  usageMode?: "free_trial" | "premium";
+  accessToken?: string | null;
   industry?: string;
   productService?: string;
   instagramHandle?: string;
@@ -81,7 +98,7 @@ export async function POST(request: Request) {
   }
 
   if (body.type === "post_image") {
-    return handlePostImageGeneration(body, apiKey);
+    return handlePostImageGeneration(body, apiKey, request);
   }
 
   return handlePlanning(body, apiKey);
@@ -120,7 +137,27 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
   return Response.json({ ...planningResult.data, source: "api" });
 }
 
-async function handlePostImageGeneration(body: AiRequestBody, apiKey: string) {
+async function handlePostImageGeneration(
+  body: AiRequestBody,
+  apiKey: string,
+  request: Request
+) {
+  const usageMode = body.usageMode === "premium" ? "premium" : "free_trial";
+  const premiumAccess = await verifyPremiumGenerationAccess({
+    usageMode,
+    accessToken: String(body.accessToken ?? "").trim(),
+    request,
+  });
+
+  if (!premiumAccess.ok) {
+    return Response.json(
+      { error: premiumAccess.error },
+      {
+        status: premiumAccess.statusCode,
+      }
+    );
+  }
+
   const industry = String(body.industry ?? "").trim();
   const productService = String(body.productService ?? "").trim();
   const instagramHandle = String(body.instagramHandle ?? "").trim();
@@ -291,6 +328,200 @@ Requirements:
   }
 
   return Response.json({ ...result, source: "api" });
+}
+
+type PremiumUsageMode = "free_trial" | "premium";
+
+type SubscriptionGuardRow = {
+  id: string;
+  plan_type: string;
+  start_date: string;
+  end_date: string;
+  remaining_credits: number;
+  daily_usage_count: number;
+  last_usage_date: string | null;
+};
+
+async function verifyPremiumGenerationAccess(input: {
+  usageMode: PremiumUsageMode;
+  accessToken: string;
+  request: Request;
+}) {
+  if (input.usageMode !== "premium") {
+    return { ok: true as const };
+  }
+
+  const cookieHeader = input.request.headers.get("cookie") ?? "";
+  const internalSessionToken = readCookie(cookieHeader, INTERNAL_TEST_SESSION_COOKIE_NAME);
+  const internalSession = verifyInternalTestSessionToken(internalSessionToken);
+
+  if (internalSession.valid) {
+    return { ok: true as const };
+  }
+
+  if (!input.accessToken) {
+    return {
+      ok: false as const,
+      error: "로그인 후 월 구독으로 이용할 수 있습니다.",
+      statusCode: 401,
+    };
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return {
+      ok: false as const,
+      error: "서비스 설정을 확인해주세요. 잠시 후 다시 시도해주세요.",
+      statusCode: 500,
+    };
+  }
+
+  const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser(input.accessToken);
+
+  if (authError || !user) {
+    return {
+      ok: false as const,
+      error: "로그인 정보가 만료되었습니다. 다시 로그인해주세요.",
+      statusCode: 401,
+    };
+  }
+
+  const subscriptionResponse = (await ((
+    supabase
+      .from("subscriptions")
+      .select(
+        "id, plan_type, start_date, end_date, remaining_credits, daily_usage_count, last_usage_date"
+      )
+      .eq("user_id", user.id)
+      .eq("plan_type", POST_GENERATOR_PLAN_TYPE)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle() as unknown
+  ) as Promise<{
+    data: SubscriptionGuardRow | null;
+    error: { message: string } | null;
+  }>)) as {
+    data: SubscriptionGuardRow | null;
+    error: { message: string } | null;
+  };
+
+  if (subscriptionResponse.error) {
+    return {
+      ok: false as const,
+      error: "구독 정보를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.",
+      statusCode: 403,
+    };
+  }
+
+  const subscription = subscriptionResponse.data;
+
+  if (!subscription || subscription.plan_type !== POST_GENERATOR_PLAN_TYPE) {
+    return {
+      ok: false as const,
+      error: "월 구독 후 이용할 수 있습니다.",
+      statusCode: 403,
+    };
+  }
+
+  const today = getKoreaDateString();
+  const subscriptionForValidation = {
+    startDate: subscription.start_date,
+    endDate: subscription.end_date,
+    remainingCredits: subscription.remaining_credits,
+    dailyUsageCount: subscription.daily_usage_count,
+    lastUsageDate: subscription.last_usage_date,
+  };
+
+  if (!isPostGeneratorSubscriptionActive(subscriptionForValidation, today)) {
+    return {
+      ok: false as const,
+      error: "월 구독 후 이용할 수 있습니다.",
+      statusCode: 403,
+    };
+  }
+
+  if (getRemainingSubscriptionCredits(subscriptionForValidation) <= 0) {
+    return {
+      ok: false as const,
+      error: "남은 생성 횟수가 없습니다",
+      statusCode: 403,
+    };
+  }
+
+  if (getRemainingDailyGenerationCount(subscriptionForValidation, today) <= 0) {
+    return {
+      ok: false as const,
+      error: "오늘 생성 가능한 횟수를 모두 사용했습니다",
+      statusCode: 403,
+    };
+  }
+
+  const nextRemainingCredits =
+    getRemainingSubscriptionCredits(subscriptionForValidation) - 1;
+  const nextDailyUsageCount =
+    getEffectiveDailyUsageCount(subscriptionForValidation, today) + 1;
+
+  const updateResponse = (await ((
+    supabase
+      .from("subscriptions")
+      .update(
+        {
+          remaining_credits: nextRemainingCredits,
+          daily_usage_count: nextDailyUsageCount,
+          last_usage_date: today,
+        } as never
+      )
+      .eq("id", subscription.id)
+      .select("id")
+      .single() as unknown
+  ) as Promise<{
+    data: { id?: string } | null;
+    error: { message: string } | null;
+  }>)) as {
+    data: { id?: string } | null;
+    error: { message: string } | null;
+  };
+
+  if (updateResponse.error || !updateResponse.data?.id) {
+    return {
+      ok: false as const,
+      error: "사용량 차감 처리에 실패했습니다. 다시 시도해주세요.",
+      statusCode: 409,
+    };
+  }
+
+  return { ok: true as const };
+}
+
+function readCookie(cookieHeader: string, name: string) {
+  const item = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`));
+
+  if (!item) {
+    return "";
+  }
+
+  return item.slice(name.length + 1);
 }
 
 async function generatePostPlan({

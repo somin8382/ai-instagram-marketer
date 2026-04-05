@@ -92,6 +92,22 @@ export type Database = {
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;
       };
+      subscriptions: {
+        Row: {
+          id: string;
+          user_id: string;
+          plan_type: string;
+          start_date: string;
+          end_date: string;
+          remaining_credits: number;
+          daily_usage_count: number;
+          last_usage_date: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
     };
   };
 };

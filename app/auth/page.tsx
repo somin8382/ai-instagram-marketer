@@ -21,8 +21,18 @@ import {
   getTextFieldClass,
   ValidationToast,
 } from "@/lib/ui/form-feedback";
+import {
+  requestInternalTestLogin,
+  TEST_ACCOUNT_AUTH_ID,
+  TEST_ACCOUNT_DEFAULT_DURATION,
+  TEST_ACCOUNT_DEFAULT_PLAN,
+  TEST_ACCOUNT_DEFAULT_REMAINING_POSTS,
+  TEST_ACCOUNT_NAME,
+  TEST_ACCOUNT_USER_ID,
+} from "@/lib/mock-account";
 
 const APP_STORAGE_KEY = "qmeet-app-state";
+const AUTH_STORAGE_KEY = "qmeet-auth-state";
 
 type AuthTab = "login" | "signup";
 type AuthValidationField =
@@ -99,7 +109,7 @@ function AuthPageInner() {
     const redirect = searchParams.get("redirect");
 
     if (redirect === "status") return "status";
-    if (redirect === "postgen") return "postgen";
+    if (redirect === "tools" || redirect === "postgen") return "tools";
 
     return "landing";
   }, [searchParams]);
@@ -107,6 +117,10 @@ function AuthPageInner() {
   const redirectHref = useMemo(() => {
     if (redirectTarget === "landing") {
       return "/?screen=landing";
+    }
+
+    if (redirectTarget === "tools") {
+      return "/tools";
     }
 
     return `/?screen=${redirectTarget}`;
@@ -192,17 +206,59 @@ function AuthPageInner() {
     router.replace("/mypage");
   }, [router]);
 
+  const completeMockAuth = useCallback(() => {
+    if (typeof window === "undefined") {
+      router.replace("/mypage");
+      return;
+    }
+
+    const nextAuthState = {
+      isAuthenticated: true,
+      authEmail: TEST_ACCOUNT_AUTH_ID,
+      authName: TEST_ACCOUNT_NAME,
+      userId: TEST_ACCOUNT_USER_ID,
+      isRequestLinked: true,
+    };
+
+    let currentAppState: Record<string, unknown> = {};
+
+    try {
+      const raw = window.localStorage.getItem(APP_STORAGE_KEY);
+      currentAppState = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    } catch {
+      currentAppState = {};
+    }
+
+    const nextAppState = {
+      ...currentAppState,
+      isPaid: true,
+      selectedPlan: TEST_ACCOUNT_DEFAULT_PLAN,
+      selectedDuration: TEST_ACCOUNT_DEFAULT_DURATION,
+      remainingPosts:
+        typeof currentAppState.remainingPosts === "number" &&
+        currentAppState.remainingPosts > 0
+          ? currentAppState.remainingPosts
+          : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS,
+      freeTrialUsed: true,
+    };
+
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuthState));
+    window.localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(nextAppState));
+
+    router.replace("/mypage");
+  }, [router]);
+
   function toKoreanAuthError(message?: string) {
     if (!message) {
       return "잠시 후 다시 시도해주세요.";
     }
 
     if (message.includes("Invalid login credentials")) {
-      return "이메일 또는 비밀번호가 올바르지 않습니다.";
+      return "아이디(이메일) 또는 비밀번호가 올바르지 않습니다.";
     }
 
     if (message.includes("User already registered")) {
-      return "이미 가입된 이메일입니다. 로그인으로 진행해주세요.";
+      return "이미 가입된 아이디(이메일)입니다. 로그인으로 진행해주세요.";
     }
 
     if (message.includes("Password should be")) {
@@ -210,7 +266,7 @@ function AuthPageInner() {
     }
 
     if (message.includes("Email not confirmed")) {
-      return "이메일 인증이 아직 완료되지 않았습니다. 메일함의 인증 링크를 눌러주세요.";
+      return "아이디(이메일) 인증이 아직 완료되지 않았습니다. 메일함의 인증 링크를 눌러주세요.";
     }
 
     return "인증 처리 중 문제가 발생했습니다. 다시 시도해주세요.";
@@ -233,7 +289,10 @@ function AuthPageInner() {
     const issues: ValidationIssue<AuthValidationField>[] = [];
 
     if (isBlank(loginEmail)) {
-      issues.push({ field: "loginEmail", message: "이메일을 입력해주세요" });
+      issues.push({
+        field: "loginEmail",
+        message: "아이디(이메일)를 입력해주세요",
+      });
     }
 
     if (isBlank(loginPassword)) {
@@ -254,7 +313,10 @@ function AuthPageInner() {
     }
 
     if (isBlank(signupEmail)) {
-      issues.push({ field: "signupEmail", message: "이메일을 입력해주세요" });
+      issues.push({
+        field: "signupEmail",
+        message: "아이디(이메일)를 입력해주세요",
+      });
     }
 
     if (isBlank(signupPassword)) {
@@ -363,6 +425,19 @@ function AuthPageInner() {
       return;
     }
 
+    const enteredId = loginEmail.trim().toLowerCase();
+    const enteredPassword = loginPassword.trim();
+
+    const internalTestLogin = await requestInternalTestLogin({
+      id: enteredId,
+      password: enteredPassword,
+    });
+
+    if (internalTestLogin.success) {
+      completeMockAuth();
+      return;
+    }
+
     if (!supabaseReady) {
       setAuthError("Supabase 연결 정보를 다시 확인해주세요.");
       return;
@@ -373,8 +448,8 @@ function AuthPageInner() {
     try {
       const supabase = getSupabaseBrowserClient();
       const { error } = await supabase.auth.signInWithPassword({
-        email: loginEmail.trim(),
-        password: loginPassword,
+        email: enteredId,
+        password: enteredPassword,
       });
 
       if (error) {
@@ -426,7 +501,7 @@ function AuthPageInner() {
           setLoginEmail(signupEmail.trim());
           setLoginPassword("");
           setAuthError(
-            "이미 가입된 이메일입니다. 로그인 탭에서 바로 로그인할 수 있습니다."
+            "이미 가입된 아이디(이메일)입니다. 로그인 탭에서 바로 로그인할 수 있습니다."
           );
           return;
         }
@@ -521,10 +596,10 @@ function AuthPageInner() {
                     <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
                       <div className="space-y-1">
                         <p className="text-lg font-bold text-gray-900">
-                          이메일 인증이 필요합니다
+                          아이디(이메일) 인증이 필요합니다
                         </p>
                         <p className="text-sm text-gray-600">
-                          입력하신 이메일로 인증 메일을 보냈습니다
+                          입력하신 아이디(이메일)로 인증 메일을 보냈습니다
                         </p>
                         <p className="text-sm font-medium text-violet-700">
                           {signupPendingEmail}
@@ -564,14 +639,14 @@ function AuthPageInner() {
                         }}
                         className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                       >
-                        다른 이메일로 가입하기
+                        다른 아이디(이메일)로 가입하기
                       </button>
                     </div>
                   </div>
                 ) : (
                   <>
                     <p className="text-sm text-gray-500">
-                      신청 시 입력한 이메일로 가입하시면 진행 정보가 자동 연결됩니다
+                      신청 시 입력한 아이디(이메일)로 가입하시면 진행 정보가 자동 연결됩니다
                     </p>
                     <p className="text-xs text-gray-500">
                       이미 계정이 있으신가요? 로그인 탭에서 바로 이어서 이용하실 수 있습니다
@@ -586,11 +661,11 @@ function AuthPageInner() {
                       fieldKey="signupName"
                     />
                     <AuthInput
-                      label="이메일"
+                      label="아이디(이메일)"
                       value={signupEmail}
                       onChange={setSignupEmail}
                       onBlur={() => markFieldTouched("signupEmail")}
-                      type="email"
+                      type="text"
                       placeholder="예: brand@company.com"
                       error={signupEmailError}
                       fieldKey="signupEmail"
@@ -635,17 +710,17 @@ function AuthPageInner() {
             ) : (
               <div className="space-y-4">
                 <p className="text-sm text-gray-500">
-                  이미 가입한 이메일로 로그인하면 진행 상태를 바로 확인할 수 있습니다
+                  이미 가입한 아이디(이메일)로 로그인하면 진행 상태를 바로 확인할 수 있습니다
                 </p>
                 <p className="text-xs text-gray-500">
                   아직 회원이 아니신가요? 회원가입 탭에서 바로 시작하실 수 있습니다
                 </p>
                 <AuthInput
-                  label="이메일"
+                  label="아이디(이메일)"
                   value={loginEmail}
                   onChange={setLoginEmail}
                   onBlur={() => markFieldTouched("loginEmail")}
-                  type="email"
+                  type="text"
                   placeholder="예: brand@company.com"
                   error={loginEmailError}
                   fieldKey="loginEmail"

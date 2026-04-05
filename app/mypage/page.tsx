@@ -6,24 +6,46 @@ import { useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import {
+  POST_GENERATOR_DAILY_LIMIT,
+  POST_GENERATOR_MONTHLY_CREDITS,
+  POST_GENERATOR_MONTHLY_PRICE,
+} from "@/lib/post-generator/subscription";
+import {
   fetchMyPageSnapshot,
   syncProfileAndLinkData,
   type MyPageSnapshot,
   type SavedGeneratedPost,
 } from "@/lib/supabase/persistence";
+import {
+  clearTestAccountAccess,
+  fetchTestAccountAccess,
+  isTestAccountUser,
+  TEST_ACCOUNT_AUTH_ID,
+  TEST_ACCOUNT_DEFAULT_DURATION,
+  TEST_ACCOUNT_DEFAULT_PLAN,
+  TEST_ACCOUNT_DEFAULT_REMAINING_POSTS,
+  TEST_ACCOUNT_NAME,
+  TEST_ACCOUNT_USER_ID,
+} from "@/lib/mock-account";
 
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
+const APP_STORAGE_KEY = "qmeet-app-state";
 const APPLICATION_STAGES = ["접수됨", "입금 확인중", "진행중", "완료"] as const;
 
 const EMPTY_SNAPSHOT: MyPageSnapshot = {
   application: null,
   payment: null,
+  subscription: null,
   posts: [],
   usage: {
     freeTrialUsed: false,
+    hasActiveSubscription: false,
     remainingPostCount: 0,
     totalPostLimit: 0,
     usedPaidPostCount: 0,
+    dailyLimit: 0,
+    dailyRemainingCount: 0,
+    dailyUsageCount: 0,
   },
 };
 
@@ -66,6 +88,14 @@ function formatDateKorean(dateStr?: string | null) {
 function formatPrice(amount?: number | null) {
   if (typeof amount !== "number") return "미정";
   return `${amount.toLocaleString()}원`;
+}
+
+function getPrice(plan: number, duration: number): number {
+  if (plan === 1 && duration === 1) return 300000;
+  if (plan === 1 && duration === 2) return 500000;
+  if (plan === 2 && duration === 1) return 500000;
+  if (plan === 2 && duration === 2) return 800000;
+  return 300000;
 }
 
 function getPlanLabel(plan?: number | null) {
@@ -121,14 +151,17 @@ function buildGeneratedPostSignature(post: SavedGeneratedPost) {
 function EmptyState({
   title,
   description,
+  actions,
 }: {
   title: string;
   description: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-5 py-8 text-center">
       <p className="text-sm font-semibold text-gray-700">{title}</p>
       <p className="mt-2 text-sm text-gray-500 leading-relaxed">{description}</p>
+      {actions ? <div className="mt-4">{actions}</div> : null}
     </div>
   );
 }
@@ -136,11 +169,17 @@ function EmptyState({
 export default function MyPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [refreshSeed, setRefreshSeed] = useState(0);
+  const [startingSubscription, setStartingSubscription] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
+  const [authUserId, setAuthUserId] = useState("");
+  const [hasTestAccess, setHasTestAccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<MyPageSnapshot>(EMPTY_SNAPSHOT);
+  const isTestAccountAuthenticated =
+    hasTestAccess && isTestAccountUser(authUserId, authEmail);
 
   async function handleCopy(fieldKey: string, value: string) {
     try {
@@ -155,6 +194,8 @@ export default function MyPage() {
   }
 
   async function handleLogout() {
+    await clearTestAccountAccess();
+
     const supabase = getSupabaseBrowserClientOrNull();
 
     if (supabase) {
@@ -165,92 +206,220 @@ export default function MyPage() {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
     }
 
+    setAuthUserId("");
+    setHasTestAccess(false);
     router.replace("/");
   }
 
-  useEffect(() => {
-    const supabase = getSupabaseBrowserClientOrNull();
-
-    if (!supabase) {
-      router.replace("/auth?redirect=landing&tab=login");
+  async function handleStartSubscription() {
+    if (!authUserId || startingSubscription) {
       return;
     }
 
-    let active = true;
+    if (snapshot.usage.hasActiveSubscription) {
+      router.push("/tools");
+      return;
+    }
 
-    const loadSnapshot = async (userOverride?: User) => {
+    router.push("/tools?screen=postsub-payment");
+  }
+
+  useEffect(() => {
+    let active = true;
+    let authSubscription: { unsubscribe: () => void } | null = null;
+
+    const loadSnapshot = async () => {
+      const testAccessEnabled = await fetchTestAccountAccess();
+
       if (!active) return;
 
-      setLoading(true);
+      setHasTestAccess(testAccessEnabled);
 
-      try {
-        let user = userOverride;
+      if (typeof window !== "undefined") {
+        try {
+          const rawAuthState = window.localStorage.getItem(AUTH_STORAGE_KEY);
+          const rawAppState = window.localStorage.getItem(APP_STORAGE_KEY);
+          const parsedAuth = rawAuthState
+            ? (JSON.parse(rawAuthState) as {
+                isAuthenticated?: boolean;
+                authEmail?: string;
+                authName?: string;
+                userId?: string;
+              })
+            : null;
 
-        if (!user) {
-          const {
-            data: { user: currentUser },
-          } = await supabase.auth.getUser();
-          user = currentUser ?? undefined;
-        }
+          if (
+            parsedAuth?.isAuthenticated &&
+            testAccessEnabled &&
+            isTestAccountUser(parsedAuth.userId, parsedAuth.authEmail)
+          ) {
+            const parsedApp = rawAppState
+              ? (JSON.parse(rawAppState) as {
+                  selectedPlan?: number;
+                  selectedDuration?: number;
+                  isExpress?: boolean;
+                  completionDate?: string;
+                  freeTrialUsed?: boolean;
+                  remainingPosts?: number;
+                })
+              : null;
+            const selectedPlan =
+              parsedApp?.selectedPlan === 1 || parsedApp?.selectedPlan === 2
+                ? parsedApp.selectedPlan
+                : TEST_ACCOUNT_DEFAULT_PLAN;
+            const selectedDuration =
+              parsedApp?.selectedDuration === 1 || parsedApp?.selectedDuration === 2
+                ? parsedApp.selectedDuration
+                : TEST_ACCOUNT_DEFAULT_DURATION;
+            const remainingCredits =
+              typeof parsedApp?.remainingPosts === "number" &&
+              parsedApp.remainingPosts >= 0
+                ? parsedApp.remainingPosts
+                : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS;
+            const dailyRemainingCount = Math.min(
+              remainingCredits,
+              POST_GENERATOR_DAILY_LIMIT
+            );
+            const now = new Date().toISOString();
 
-        if (!active) return;
-
-        if (!user) {
-          router.replace("/auth?redirect=landing&tab=login");
-          return;
-        }
-
-        const authResult = await syncProfileAndLinkData({ user });
-
-        if (!active) return;
-
-        setAuthName(authResult.snapshot.authName);
-        setAuthEmail(authResult.snapshot.authEmail);
-
-        const dashboardResult = await fetchMyPageSnapshot({
-          userId: authResult.snapshot.userId,
-          email: authResult.snapshot.authEmail,
-        });
-
-        if (!active) return;
-
-        setSnapshot(dashboardResult.snapshot);
-        setErrorMessage(dashboardResult.error);
-      } catch (error) {
-        if (!active) return;
-
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : "마이페이지 정보를 불러오지 못했습니다."
-        );
-      } finally {
-        if (active) {
-          setLoading(false);
+            setAuthName(parsedAuth.authName || TEST_ACCOUNT_NAME);
+            setAuthEmail(parsedAuth.authEmail || TEST_ACCOUNT_AUTH_ID);
+            setAuthUserId(parsedAuth.userId || TEST_ACCOUNT_USER_ID);
+            setSnapshot({
+              application: {
+                id: "mock-application",
+                status: "in_progress",
+                selectedPlan,
+                selectedDuration,
+                isExpress: Boolean(parsedApp?.isExpress),
+                createdAt: now,
+                completionDate: parsedApp?.completionDate ?? null,
+              },
+              payment: {
+                id: "mock-payment",
+                applicationId: "mock-application",
+                expectedAmount: getPrice(selectedPlan, selectedDuration),
+                depositorName: "체험 계정",
+                paymentStatus: "confirmed",
+                confirmedAt: now,
+                createdAt: now,
+              },
+              subscription: null,
+              posts: [],
+              usage: {
+                freeTrialUsed: Boolean(parsedApp?.freeTrialUsed),
+                hasActiveSubscription: true,
+                remainingPostCount: remainingCredits,
+                totalPostLimit: POST_GENERATOR_MONTHLY_CREDITS,
+                usedPaidPostCount: Math.max(
+                  POST_GENERATOR_MONTHLY_CREDITS - remainingCredits,
+                  0
+                ),
+                dailyLimit: POST_GENERATOR_DAILY_LIMIT,
+                dailyRemainingCount,
+                dailyUsageCount: POST_GENERATOR_DAILY_LIMIT - dailyRemainingCount,
+              },
+            });
+            setErrorMessage(null);
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // Ignore parse errors and continue with default auth flow.
         }
       }
-    };
 
-    void loadSnapshot();
+      const supabase = getSupabaseBrowserClientOrNull();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!active) return;
-
-      if (!session?.user) {
+      if (!supabase) {
         router.replace("/auth?redirect=landing&tab=login");
         return;
       }
 
-      void loadSnapshot(session.user);
-    });
+      const runSnapshotLoad = async (userOverride?: User) => {
+        if (!active) return;
+
+        setLoading(true);
+
+        try {
+          let user = userOverride;
+
+          if (!user) {
+            const {
+              data: { user: currentUser },
+            } = await supabase.auth.getUser();
+            user = currentUser ?? undefined;
+          }
+
+          if (!active) return;
+
+          if (!user) {
+            router.replace("/auth?redirect=landing&tab=login");
+            return;
+          }
+
+          const authResult = await syncProfileAndLinkData({ user });
+
+          if (!active) return;
+
+          setAuthName(authResult.snapshot.authName);
+          setAuthEmail(authResult.snapshot.authEmail);
+          setAuthUserId(authResult.snapshot.userId);
+
+          const dashboardResult = await fetchMyPageSnapshot({
+            userId: authResult.snapshot.userId,
+            email: authResult.snapshot.authEmail,
+          });
+
+          if (!active) return;
+
+          setSnapshot(dashboardResult.snapshot);
+          setErrorMessage(dashboardResult.error);
+        } catch (error) {
+          if (!active) return;
+
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "마이페이지 정보를 불러오지 못했습니다."
+          );
+          setAuthUserId("");
+        } finally {
+          if (active) {
+            setLoading(false);
+          }
+        }
+      };
+
+      await runSnapshotLoad();
+
+      if (!active) {
+        return;
+      }
+
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (!active) return;
+
+        if (!session?.user) {
+          router.replace("/auth?redirect=landing&tab=login");
+          return;
+        }
+
+        void runSnapshotLoad(session.user);
+      });
+
+      authSubscription = subscription;
+    };
+
+    void loadSnapshot();
 
     return () => {
       active = false;
-      subscription.unsubscribe();
+      authSubscription?.unsubscribe();
     };
-  }, [router]);
+  }, [router, refreshSeed]);
 
   const currentStage = getApplicationStageIndex(snapshot.application?.status);
 
@@ -265,6 +434,11 @@ export default function MyPage() {
             ← 홈으로
           </button>
           <div className="flex items-center gap-2">
+            {isTestAccountAuthenticated && (
+              <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
+                체험 계정
+              </span>
+            )}
             <span className="text-xs font-medium text-gray-500 bg-white border border-gray-200 px-3 py-1.5 rounded-full">
               {authName
                 ? `${authName}님`
@@ -292,6 +466,11 @@ export default function MyPage() {
             진행 상태, 결제 상태, 생성 결과, 현재 이용 현황을 바로 볼 수
             있습니다.
           </p>
+          {isTestAccountAuthenticated && (
+            <p className="text-xs text-violet-600">
+              현재 체험 계정으로 로그인되어 있으며 일부 기능이 미리 활성화되어 있습니다.
+            </p>
+          )}
         </div>
 
         {loading ? (
@@ -409,6 +588,22 @@ export default function MyPage() {
                 <EmptyState
                   title="아직 신청 내역이 없습니다"
                   description="서비스를 신청하면 이곳에서 진행 상태와 운영 정보를 확인할 수 있습니다."
+                  actions={
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        onClick={() => router.push("/?screen=account-check")}
+                        className="w-full py-2.5 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
+                      >
+                        AI 마케터 신청하기
+                      </button>
+                      <button
+                        onClick={() => router.push("/tools")}
+                        className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
+                      >
+                        게시물 AI 생성하기
+                      </button>
+                    </div>
+                  }
                 />
               )}
             </Card>
@@ -479,11 +674,11 @@ export default function MyPage() {
                   현재 사용 가능 상태
                 </h2>
                 <p className="text-sm text-gray-500">
-                  무료 체험 사용 여부와 남은 생성 횟수를 확인할 수 있습니다.
+                  무료 체험, 구독 상태, 남은 생성 횟수를 바로 확인할 수 있습니다.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
                   <p className="text-xs font-semibold text-gray-400">
                     무료 체험
@@ -499,6 +694,20 @@ export default function MyPage() {
                 </div>
                 <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
                   <p className="text-xs font-semibold text-gray-400">
+                    월 구독 상태
+                  </p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {snapshot.usage.hasActiveSubscription
+                      ? "구독 이용중"
+                      : "미구독"}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+                    월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원, 매월{" "}
+                    {POST_GENERATOR_MONTHLY_CREDITS}회 기준입니다.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                  <p className="text-xs font-semibold text-gray-400">
                     남은 생성 횟수
                   </p>
                   <p className="mt-2 text-lg font-bold text-gray-900">
@@ -506,8 +715,78 @@ export default function MyPage() {
                   </p>
                   <p className="mt-1 text-xs text-gray-500 leading-relaxed">
                     사용 {snapshot.usage.usedPaidPostCount}회 / 전체{" "}
-                    {snapshot.usage.totalPostLimit}회 기준입니다.
+                    {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}회
+                    기준입니다.
                   </p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                  <p className="text-xs font-semibold text-gray-400">
+                    오늘 남은 횟수
+                  </p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {snapshot.usage.hasActiveSubscription
+                      ? `${snapshot.usage.dailyRemainingCount}회`
+                      : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+                    오늘 사용 {snapshot.usage.dailyUsageCount}회 / 일일 한도{" "}
+                    {snapshot.usage.dailyLimit || POST_GENERATOR_DAILY_LIMIT}회
+                    입니다.
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-5 py-5 space-y-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-violet-700">
+                    게시물 AI 생성 구독형
+                  </p>
+                  <p className="text-sm text-violet-600 leading-relaxed">
+                    무료 체험 뒤 바로 시작할 수 있는 경량 구독형 도구이며, 이후
+                    AI 인스타그램 마케터 서비스로 자연스럽게 확장할 수 있습니다.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
+                    <p className="text-xs font-semibold text-violet-500">구독 요금</p>
+                    <p className="mt-2 font-bold text-gray-900">
+                      월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
+                    <p className="text-xs font-semibold text-violet-500">제공량</p>
+                    <p className="mt-2 font-bold text-gray-900">
+                      매월 {POST_GENERATOR_MONTHLY_CREDITS}회 · 하루 최대{" "}
+                      {POST_GENERATOR_DAILY_LIMIT}회
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    onClick={
+                      snapshot.usage.hasActiveSubscription
+                        ? () => router.push("/tools")
+                        : handleStartSubscription
+                    }
+                    disabled={startingSubscription}
+                    className={`w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md transition-all ${
+                      startingSubscription
+                        ? "opacity-50 cursor-not-allowed"
+                        : "hover:shadow-lg active:scale-[0.98]"
+                    }`}
+                  >
+                    {startingSubscription
+                      ? "구독을 준비하고 있습니다..."
+                      : snapshot.usage.hasActiveSubscription
+                        ? "게시물 AI 생성으로 이동"
+                        : `월 구독 시작하기 (${POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원)`}
+                  </button>
+                  <button
+                    onClick={() => router.push("/")}
+                    className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    AI 마케팅 서비스 보기
+                  </button>
                 </div>
               </div>
             </Card>
@@ -527,6 +806,22 @@ export default function MyPage() {
                 <EmptyState
                   title="아직 생성된 게시물이 없습니다"
                   description="게시물을 생성하면 이미지, 제목, 내용, 해시태그가 이곳에 저장됩니다."
+                  actions={
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        onClick={() => router.push("/tools")}
+                        className="w-full py-2.5 bg-gradient-to-r from-violet-500 to-purple-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
+                      >
+                        게시물 AI 생성하기
+                      </button>
+                      <button
+                        onClick={() => router.push("/?screen=account-check")}
+                        className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
+                      >
+                        AI 마케터 신청하기
+                      </button>
+                    </div>
+                  }
                 />
               ) : (
                 <div className="space-y-4">

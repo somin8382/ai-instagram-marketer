@@ -19,15 +19,39 @@ import {
   getSupabaseBrowserClientOrNull,
 } from "@/lib/supabase/client";
 import {
+  addMonthsToKoreaDateString,
+  getKoreaDateString,
+  getRemainingDailyGenerationCount,
+  getRemainingSubscriptionCredits,
+  isPostGeneratorSubscriptionActive,
+  POST_GENERATOR_DAILY_LIMIT,
+  POST_GENERATOR_MONTHLY_CREDITS,
+  POST_GENERATOR_MONTHLY_PRICE,
+} from "@/lib/post-generator/subscription";
+import {
+  clearTestAccountAccess,
+  fetchTestAccountAccess,
+  isTestAccountUser,
+  TEST_ACCOUNT_AUTH_ID,
+  TEST_ACCOUNT_DEFAULT_DURATION,
+  TEST_ACCOUNT_DEFAULT_PLAN,
+  TEST_ACCOUNT_DEFAULT_REMAINING_POSTS,
+  TEST_ACCOUNT_NAME,
+  TEST_ACCOUNT_USER_ID,
+} from "@/lib/mock-account";
+import {
   getHelperTextClass,
   getPrimaryActionButtonClass,
   getTextFieldClass,
   ValidationToast,
 } from "@/lib/ui/form-feedback";
 import {
+  fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
   persistApplicationSubmission,
   persistGeneratedPost,
+  startPostGeneratorSubscription,
+  type SavedSubscription,
   type SavedGeneratedPost,
   syncProfileAndLinkData,
 } from "@/lib/supabase/persistence";
@@ -43,7 +67,18 @@ type Step =
   | "confirm"
   | "payment"
   | "status"
-  | "postgen";
+  | "postgen"
+  | "postsub-payment"
+  | "postsub-status";
+
+type ApplicationLifecycleStatus =
+  | "idle"
+  | "submitted"
+  | "payment_pending"
+  | "in_progress"
+  | "completed";
+
+type PaymentLifecycleStatus = "pending" | "confirmed";
 
 type AccountName = {
   name: string;
@@ -68,6 +103,7 @@ type GeneratedPost = {
   imageModelText?: string;
   createdAt?: string;
   isPersisted?: boolean;
+  isFreeTrial?: boolean;
 };
 
 type HomeValidationField =
@@ -75,7 +111,17 @@ type HomeValidationField =
   | "finalInstagramId"
   | "postInput"
   | "planningResult"
-  | "accountNames";
+  | "accountNames"
+  | "postSubManagerName"
+  | "postSubPhone"
+  | "postSubEmail"
+  | "postSubDepositorName"
+  | "postSubBusinessNumber"
+  | "postSubCompanyName"
+  | "postSubCeoName"
+  | "postSubBusinessAddress"
+  | "postSubBusinessType"
+  | "postSubInvoiceEmail";
 
 type OutcomeMetricKey = "followers" | "likes" | "comments";
 
@@ -239,6 +285,7 @@ function mapSavedPostToGeneratedPost(post: SavedGeneratedPost): GeneratedPost {
     imagePreview: post.imageUrl,
     createdAt: post.createdAt,
     isPersisted: true,
+    isFreeTrial: post.isFreeTrial,
   };
 }
 
@@ -248,8 +295,97 @@ const BANK_TRANSFER_INFO = {
   accountHolder: "큐밋(Qmeet)",
 };
 
+const POST_SUBSCRIPTION_BANK_TRANSFER_INFO = {
+  bankName: "하나은행",
+  accountNumber: "588-910292-72307",
+  accountHolder: "큐밋(Qmeet)",
+};
+
 const APP_STORAGE_KEY = "qmeet-app-state";
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
+
+function buildTestAccountSubscription(
+  remainingCredits = TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
+): SavedSubscription {
+  const startDate = getKoreaDateString();
+
+  return {
+    id: `${TEST_ACCOUNT_USER_ID}-subscription`,
+    planType: "post_generator",
+    startDate,
+    endDate: addMonthsToKoreaDateString(startDate, 1),
+    remainingCredits: Math.max(remainingCredits, 0),
+    dailyUsageCount: 0,
+    lastUsageDate: null,
+  };
+}
+
+function getServiceFlowProgress(
+  step: Step,
+  hasAccount: boolean | null
+): { current: number; total: number } | null {
+  if (step === "landing" || step === "postgen") {
+    return null;
+  }
+
+  if (step === "postsub-payment") {
+    return { current: 1, total: 2 };
+  }
+
+  if (step === "postsub-status") {
+    return { current: 2, total: 2 };
+  }
+
+  const total = 5;
+
+  if (step === "account-check") {
+    return { current: 1, total };
+  }
+
+  if (step === "input") {
+    return { current: 2, total };
+  }
+
+  if (step === "result") {
+    return { current: 3, total };
+  }
+
+  if (step === "names" || step === "confirm") {
+    return { current: hasAccount ? 3 : 4, total };
+  }
+
+  if (step === "payment" || step === "status") {
+    return { current: 5, total };
+  }
+
+  return null;
+}
+
+function getApplicationStageIndexFromState(input: {
+  applicationStatus: ApplicationLifecycleStatus;
+  paymentStatus: PaymentLifecycleStatus;
+}) {
+  if (input.applicationStatus === "completed") {
+    return 3;
+  }
+
+  if (input.applicationStatus === "in_progress") {
+    return 2;
+  }
+
+  if (input.paymentStatus === "confirmed") {
+    return 2;
+  }
+
+  if (
+    input.applicationStatus === "payment_pending" ||
+    input.applicationStatus === "submitted"
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
 
 /* ─── Reusable Components ─── */
 
@@ -371,6 +507,72 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function StepUtilityHeader({
+  onBack,
+  onHome,
+  onMyPage,
+  progress,
+}: {
+  onBack?: () => void;
+  onHome: () => void;
+  onMyPage: () => void;
+  progress: { current: number; total: number } | null;
+}) {
+  return (
+    <div className="sticky top-0 z-20 bg-[#f8f9fb] pb-3">
+      <div className="space-y-3 rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
+        <div className="flex items-center justify-between gap-3">
+          {onBack ? (
+            <button
+              onClick={onBack}
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
+            >
+              ← 뒤로
+            </button>
+          ) : (
+            <div className="h-5" aria-hidden="true" />
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onHome}
+              className="text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors border border-gray-200 rounded-full px-3 py-1.5 bg-white"
+            >
+              홈
+            </button>
+            <button
+              onClick={onMyPage}
+              className="text-xs font-medium text-rose-600 hover:text-rose-700 transition-colors border border-rose-100 rounded-full px-3 py-1.5 bg-rose-50"
+            >
+              마이페이지
+            </button>
+          </div>
+        </div>
+        {progress && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-gray-500 font-medium">
+              <span>진행 단계</span>
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-300"
+                style={{
+                  width: `${Math.max(
+                    (progress.current / progress.total) * 100,
+                    10
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main ─── */
 
 export default function Home() {
@@ -413,8 +615,31 @@ export default function Home() {
   const [businessType, setBusinessType] = useState("");
   const [invoiceEmail, setInvoiceEmail] = useState("");
 
-  // Post generation (separate feature)
+  // 게시물 AI 생성 구독 결제(별도 플로우)
+  const [postSubManagerName, setPostSubManagerName] = useState("");
+  const [postSubPhone, setPostSubPhone] = useState("");
+  const [postSubEmail, setPostSubEmail] = useState("");
+  const [postSubDepositorName, setPostSubDepositorName] = useState("");
+  const [postSubTaxInvoiceRequested, setPostSubTaxInvoiceRequested] = useState(false);
+  const [postSubBusinessNumber, setPostSubBusinessNumber] = useState("");
+  const [postSubCompanyName, setPostSubCompanyName] = useState("");
+  const [postSubCeoName, setPostSubCeoName] = useState("");
+  const [postSubBusinessAddress, setPostSubBusinessAddress] = useState("");
+  const [postSubBusinessType, setPostSubBusinessType] = useState("");
+  const [postSubInvoiceEmail, setPostSubInvoiceEmail] = useState("");
+  const [postSubRequestedAt, setPostSubRequestedAt] = useState("");
+  const [postSubSubmitted, setPostSubSubmitted] = useState(false);
+  const [submittingPostSubscription, setSubmittingPostSubscription] =
+    useState(false);
+
+  // 신청 / 결제 상태
   const [isPaid, setIsPaid] = useState(false);
+  const [applicationStatus, setApplicationStatus] =
+    useState<ApplicationLifecycleStatus>("idle");
+  const [paymentStatus, setPaymentStatus] =
+    useState<PaymentLifecycleStatus>("pending");
+
+  // Post generation (separate feature)
   const [remainingPosts, setRemainingPosts] = useState(0);
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [postPrompt, setPostPrompt] = useState("");
@@ -422,18 +647,23 @@ export default function Home() {
   const [generatedPosts, setGeneratedPosts] = useState<GeneratedPost[]>([]);
   const [savedGeneratedPosts, setSavedGeneratedPosts] = useState<GeneratedPost[]>([]);
   const [loadingSavedPosts, setLoadingSavedPosts] = useState(false);
+  const [loadingSubscription, setLoadingSubscription] = useState(false);
+  const [startingSubscription, setStartingSubscription] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [freeTrialUsed, setFreeTrialUsed] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authName, setAuthName] = useState("");
   const [userId, setUserId] = useState("");
+  const [postGeneratorSubscription, setPostGeneratorSubscription] =
+    useState<SavedSubscription | null>(null);
   const [isRequestLinked, setIsRequestLinked] = useState(false);
   const [applicationId, setApplicationId] = useState("");
   const [paymentId, setPaymentId] = useState("");
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [submittingApplication, setSubmittingApplication] = useState(false);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [hasTestAccess, setHasTestAccess] = useState(false);
   const [validationToast, setValidationToast] = useState<string | null>(null);
   const [touchedFields, setTouchedFields] = useState<
     Partial<Record<HomeValidationField, boolean>>
@@ -446,16 +676,44 @@ export default function Home() {
     `${aiResult?.accountPlan.concept || aiResult?.accountPlan.direction || "브랜드 방향"}을 살려 팔로우를 유도할 수 있는 분위기의 게시물로 만들어주세요.`,
   ].map((item) => item.replace(/\s+/g, " ").trim());
 
-  const canUsePaidPostGeneration =
-    isPaid && isAuthenticated && remainingPosts > 0;
-  const canUseFreeTrial = !freeTrialUsed;
-  const canGeneratePost = canUsePaidPostGeneration || canUseFreeTrial;
-  const shouldShowPostLock = !canGeneratePost;
   const effectiveInstagramId = hasAccount ? instagramId : finalInstagramId;
   const mergedGeneratedPosts = mergeGeneratedPostHistory(
     generatedPosts,
     savedGeneratedPosts
   );
+  const hasConsumedFreeTrial =
+    freeTrialUsed || mergedGeneratedPosts.some((post) => post.isFreeTrial);
+  const hasActivePostGeneratorSubscription =
+    isAuthenticated && isPostGeneratorSubscriptionActive(postGeneratorSubscription);
+  const remainingSubscriptionCredits = hasActivePostGeneratorSubscription
+    ? getRemainingSubscriptionCredits(postGeneratorSubscription)
+    : 0;
+  const remainingDailyGenerations = hasActivePostGeneratorSubscription
+    ? getRemainingDailyGenerationCount(postGeneratorSubscription)
+    : 0;
+  const canUseSubscriptionPostGeneration =
+    hasActivePostGeneratorSubscription &&
+    remainingSubscriptionCredits > 0 &&
+    remainingDailyGenerations > 0;
+  const canUseFreeTrial = !hasConsumedFreeTrial;
+  const canGeneratePost = canUseSubscriptionPostGeneration || canUseFreeTrial;
+  const shouldShowPostLock = !canGeneratePost;
+  const isDailyLimitReached =
+    hasActivePostGeneratorSubscription &&
+    remainingSubscriptionCredits > 0 &&
+    remainingDailyGenerations === 0;
+  const isSubscriptionCreditEmpty =
+    hasActivePostGeneratorSubscription && remainingSubscriptionCredits === 0;
+  const formattedSubscriptionPrice =
+    POST_GENERATOR_MONTHLY_PRICE.toLocaleString();
+  const isTestAccountAuthenticated =
+    hasTestAccess && isTestAccountUser(userId, authEmail);
+  const effectivePaymentStatus: PaymentLifecycleStatus = isPaid
+    ? "confirmed"
+    : paymentStatus;
+  const isPaymentConfirmed = effectivePaymentStatus === "confirmed";
+  const hasPersistedApplicationRecord =
+    !!applicationId.trim() && !!paymentId.trim();
 
   function showValidationToast(message: string) {
     setValidationToast(message);
@@ -553,7 +811,7 @@ export default function Home() {
   function hasSubmittedApplication() {
     return (
       hasPaymentPrerequisites() &&
-      isPaid &&
+      hasPersistedApplicationRecord &&
       !!managerName.trim() &&
       !!phone.trim() &&
       !!email.trim() &&
@@ -643,13 +901,74 @@ export default function Home() {
     return collectValidationIssues<HomeValidationField>([
       {
         field: "postInput",
-        message: "이용 조건을 확인해주세요",
-        isMissing: !canUsePaidPostGeneration && !canUseFreeTrial,
+        message: isDailyLimitReached
+          ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
+          : isSubscriptionCreditEmpty
+            ? "남은 생성 횟수가 없습니다"
+            : "월 구독 후 이용할 수 있습니다",
+        isMissing: !canUseSubscriptionPostGeneration && !canUseFreeTrial,
       },
       {
         field: "postInput",
         message: "참고 이미지 또는 게시물 방향을 입력해주세요",
         isMissing: uploadedImages.length === 0 && isBlank(postPrompt),
+      },
+    ]);
+  }
+
+  function getPostSubscriptionPaymentValidationIssues() {
+    return collectValidationIssues<HomeValidationField>([
+      {
+        field: "postSubManagerName",
+        message: "담당자명을 입력해주세요",
+        isMissing: isBlank(postSubManagerName),
+      },
+      {
+        field: "postSubPhone",
+        message: "연락처를 입력해주세요",
+        isMissing: isBlank(postSubPhone),
+      },
+      {
+        field: "postSubEmail",
+        message: "아이디(이메일)를 입력해주세요",
+        isMissing: isBlank(postSubEmail),
+      },
+      {
+        field: "postSubDepositorName",
+        message: "입금자명을 입력해주세요",
+        isMissing: isBlank(postSubDepositorName),
+      },
+      {
+        field: "postSubBusinessNumber",
+        message: "사업자등록번호를 입력해주세요",
+        isMissing:
+          postSubTaxInvoiceRequested && isBlank(postSubBusinessNumber),
+      },
+      {
+        field: "postSubCompanyName",
+        message: "상호를 입력해주세요",
+        isMissing: postSubTaxInvoiceRequested && isBlank(postSubCompanyName),
+      },
+      {
+        field: "postSubCeoName",
+        message: "대표자명을 입력해주세요",
+        isMissing: postSubTaxInvoiceRequested && isBlank(postSubCeoName),
+      },
+      {
+        field: "postSubBusinessAddress",
+        message: "사업장 주소를 입력해주세요",
+        isMissing:
+          postSubTaxInvoiceRequested && isBlank(postSubBusinessAddress),
+      },
+      {
+        field: "postSubBusinessType",
+        message: "업태/종목을 입력해주세요",
+        isMissing: postSubTaxInvoiceRequested && isBlank(postSubBusinessType),
+      },
+      {
+        field: "postSubInvoiceEmail",
+        message: "세금계산서 아이디(이메일)를 입력해주세요",
+        isMissing: postSubTaxInvoiceRequested && isBlank(postSubInvoiceEmail),
       },
     ]);
   }
@@ -660,6 +979,8 @@ export default function Home() {
   const confirmValidationIssues = getConfirmValidationIssues();
   const paymentValidationIssues = getPaymentValidationIssues();
   const postGenerationValidationIssues = getPostGenerationValidationIssues();
+  const postSubscriptionPaymentValidationIssues =
+    getPostSubscriptionPaymentValidationIssues();
 
   const instagramIdError = getFieldError(
     planningValidationIssues,
@@ -721,6 +1042,56 @@ export default function Home() {
     "postInput",
     touchedFields
   );
+  const postSubManagerNameError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubManagerName",
+    touchedFields
+  );
+  const postSubPhoneError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubPhone",
+    touchedFields
+  );
+  const postSubEmailError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubEmail",
+    touchedFields
+  );
+  const postSubDepositorNameError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubDepositorName",
+    touchedFields
+  );
+  const postSubBusinessNumberError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubBusinessNumber",
+    touchedFields
+  );
+  const postSubCompanyNameError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubCompanyName",
+    touchedFields
+  );
+  const postSubCeoNameError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubCeoName",
+    touchedFields
+  );
+  const postSubBusinessAddressError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubBusinessAddress",
+    touchedFields
+  );
+  const postSubBusinessTypeError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubBusinessType",
+    touchedFields
+  );
+  const postSubInvoiceEmailError = getFieldError(
+    postSubscriptionPaymentValidationIssues,
+    "postSubInvoiceEmail",
+    touchedFields
+  );
 
   const isPlanningReady = planningValidationIssues.length === 0;
   const isResultNextReady = resultValidationIssues.length === 0;
@@ -728,12 +1099,22 @@ export default function Home() {
   const isConfirmReady = confirmValidationIssues.length === 0;
   const isPaymentSubmitReady = paymentValidationIssues.length === 0;
   const isPostGenerationReady = postGenerationValidationIssues.length === 0;
+  const isPostSubscriptionPaymentReady =
+    postSubscriptionPaymentValidationIssues.length === 0;
 
   function getSafeStep(nextStep: Step): Step {
     switch (nextStep) {
       case "landing":
       case "postgen":
         return nextStep;
+      case "postsub-payment":
+        if (!isAuthenticated) return "postgen";
+        if (hasActivePostGeneratorSubscription) return "postgen";
+        return "postsub-payment";
+      case "postsub-status":
+        if (!isAuthenticated) return "postgen";
+        if (!postSubSubmitted) return "postsub-payment";
+        return "postsub-status";
       case "account-check":
         return "account-check";
       case "input":
@@ -798,6 +1179,10 @@ export default function Home() {
         return hasPaymentPrerequisites() ? "payment" : "landing";
       case "postgen":
         return "landing";
+      case "postsub-payment":
+        return "postgen";
+      case "postsub-status":
+        return "postsub-payment";
       default:
         return "landing";
     }
@@ -859,6 +1244,7 @@ export default function Home() {
   }
 
   const activeStep = hasHydrated ? getSafeStep(step) : step;
+  const serviceFlowProgress = getServiceFlowProgress(activeStep, hasAccount);
 
   /* ─── Handlers ─── */
 
@@ -893,7 +1279,22 @@ export default function Home() {
           businessAddress?: string;
           businessType?: string;
           invoiceEmail?: string;
+          postSubManagerName?: string;
+          postSubPhone?: string;
+          postSubEmail?: string;
+          postSubDepositorName?: string;
+          postSubTaxInvoiceRequested?: boolean;
+          postSubBusinessNumber?: string;
+          postSubCompanyName?: string;
+          postSubCeoName?: string;
+          postSubBusinessAddress?: string;
+          postSubBusinessType?: string;
+          postSubInvoiceEmail?: string;
+          postSubRequestedAt?: string;
+          postSubSubmitted?: boolean;
           isPaid?: boolean;
+          applicationStatus?: ApplicationLifecycleStatus;
+          paymentStatus?: PaymentLifecycleStatus;
           remainingPosts?: number;
           freeTrialUsed?: boolean;
           applicationId?: string;
@@ -902,7 +1303,15 @@ export default function Home() {
         };
 
         if ("hasAccount" in parsed) setHasAccount(parsed.hasAccount ?? null);
-        if (parsed.step) setStep(parsed.step);
+        if (
+          parsed.step === "postgen" ||
+          parsed.step === "postsub-payment" ||
+          parsed.step === "postsub-status"
+        ) {
+          setStep("landing");
+        } else if (parsed.step) {
+          setStep(parsed.step);
+        }
         setInstagramId(parsed.instagramId ?? "");
         setIndustry(parsed.industry ?? "");
         setProductService(parsed.productService ?? "");
@@ -927,7 +1336,37 @@ export default function Home() {
         setBusinessAddress(parsed.businessAddress ?? "");
         setBusinessType(parsed.businessType ?? "");
         setInvoiceEmail(parsed.invoiceEmail ?? "");
+        setPostSubManagerName(parsed.postSubManagerName ?? "");
+        setPostSubPhone(parsed.postSubPhone ?? "");
+        setPostSubEmail(parsed.postSubEmail ?? "");
+        setPostSubDepositorName(parsed.postSubDepositorName ?? "");
+        setPostSubTaxInvoiceRequested(Boolean(parsed.postSubTaxInvoiceRequested));
+        setPostSubBusinessNumber(parsed.postSubBusinessNumber ?? "");
+        setPostSubCompanyName(parsed.postSubCompanyName ?? "");
+        setPostSubCeoName(parsed.postSubCeoName ?? "");
+        setPostSubBusinessAddress(parsed.postSubBusinessAddress ?? "");
+        setPostSubBusinessType(parsed.postSubBusinessType ?? "");
+        setPostSubInvoiceEmail(parsed.postSubInvoiceEmail ?? "");
+        setPostSubRequestedAt(parsed.postSubRequestedAt ?? "");
+        setPostSubSubmitted(Boolean(parsed.postSubSubmitted));
         setIsPaid(Boolean(parsed.isPaid));
+        if (
+          parsed.applicationStatus === "idle" ||
+          parsed.applicationStatus === "submitted" ||
+          parsed.applicationStatus === "payment_pending" ||
+          parsed.applicationStatus === "in_progress" ||
+          parsed.applicationStatus === "completed"
+        ) {
+          setApplicationStatus(parsed.applicationStatus);
+        }
+        if (
+          parsed.paymentStatus === "pending" ||
+          parsed.paymentStatus === "confirmed"
+        ) {
+          setPaymentStatus(parsed.paymentStatus);
+        } else if (parsed.isPaid) {
+          setPaymentStatus("confirmed");
+        }
         if (typeof parsed.remainingPosts === "number") {
           setRemainingPosts(parsed.remainingPosts);
         }
@@ -977,6 +1416,87 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
+    let isActive = true;
+
+    void fetchTestAccountAccess().then((active) => {
+      if (!isActive) {
+        return;
+      }
+
+      setHasTestAccess(active);
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [hasHydrated]);
+
+  useEffect(() => {
+    if (!hasHydrated || !isTestAccountAuthenticated) {
+      return;
+    }
+
+    setIsAuthenticated(true);
+    setAuthEmail(TEST_ACCOUNT_AUTH_ID);
+    if (!authName.trim()) {
+      setAuthName(TEST_ACCOUNT_NAME);
+    }
+    setUserId(TEST_ACCOUNT_USER_ID);
+    setIsRequestLinked(true);
+    setIsPaid(true);
+    setPaymentStatus("confirmed");
+    if (applicationStatus === "idle" || applicationStatus === "submitted") {
+      setApplicationStatus("in_progress");
+    }
+
+    if (selectedPlan !== TEST_ACCOUNT_DEFAULT_PLAN) {
+      setSelectedPlan(TEST_ACCOUNT_DEFAULT_PLAN);
+    }
+
+    if (selectedDuration !== TEST_ACCOUNT_DEFAULT_DURATION) {
+      setSelectedDuration(TEST_ACCOUNT_DEFAULT_DURATION);
+    }
+
+    if (remainingPosts <= 0) {
+      setRemainingPosts(TEST_ACCOUNT_DEFAULT_REMAINING_POSTS);
+    }
+
+    if (
+      !postGeneratorSubscription ||
+      !isPostGeneratorSubscriptionActive(postGeneratorSubscription)
+    ) {
+      setPostGeneratorSubscription(
+        buildTestAccountSubscription(
+          remainingPosts > 0 ? remainingPosts : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
+        )
+      );
+    }
+  }, [
+    hasHydrated,
+    isTestAccountAuthenticated,
+    authName,
+    applicationStatus,
+    selectedPlan,
+    selectedDuration,
+    remainingPosts,
+    postGeneratorSubscription,
+  ]);
+
+  useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
+    if (hasPersistedApplicationRecord && applicationStatus === "idle") {
+      setApplicationStatus("payment_pending");
+    }
+  }, [hasHydrated, hasPersistedApplicationRecord, applicationStatus]);
+
+  useEffect(() => {
     if (!hasHydrated || typeof window === "undefined") return;
 
     const appStatePayload = {
@@ -995,6 +1515,8 @@ export default function Home() {
         phone,
         email,
         depositorName,
+        applicationStatus,
+        paymentStatus: effectivePaymentStatus,
         taxInvoiceRequested,
         businessNumber,
         companyName,
@@ -1002,6 +1524,19 @@ export default function Home() {
         businessAddress,
         businessType,
         invoiceEmail,
+        postSubManagerName,
+        postSubPhone,
+        postSubEmail,
+        postSubDepositorName,
+        postSubTaxInvoiceRequested,
+        postSubBusinessNumber,
+        postSubCompanyName,
+        postSubCeoName,
+        postSubBusinessAddress,
+        postSubBusinessType,
+        postSubInvoiceEmail,
+        postSubRequestedAt,
+        postSubSubmitted,
         isPaid,
         remainingPosts,
         freeTrialUsed,
@@ -1054,6 +1589,8 @@ export default function Home() {
     phone,
     email,
     depositorName,
+    applicationStatus,
+    effectivePaymentStatus,
     taxInvoiceRequested,
     businessNumber,
     companyName,
@@ -1061,6 +1598,19 @@ export default function Home() {
     businessAddress,
     businessType,
     invoiceEmail,
+    postSubManagerName,
+    postSubPhone,
+    postSubEmail,
+    postSubDepositorName,
+    postSubTaxInvoiceRequested,
+    postSubBusinessNumber,
+    postSubCompanyName,
+    postSubCeoName,
+    postSubBusinessAddress,
+    postSubBusinessType,
+    postSubInvoiceEmail,
+    postSubRequestedAt,
+    postSubSubmitted,
     isPaid,
     remainingPosts,
     freeTrialUsed,
@@ -1076,6 +1626,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!hasHydrated) return;
+    if (isTestAccountAuthenticated) return;
 
     const supabase = getSupabaseBrowserClientOrNull();
     if (!supabase) {
@@ -1096,6 +1647,7 @@ export default function Home() {
         setAuthEmail("");
         setAuthName("");
         setUserId("");
+        setPostGeneratorSubscription(null);
         setIsRequestLinked(false);
         return;
       }
@@ -1126,6 +1678,7 @@ export default function Home() {
         setAuthEmail("");
         setAuthName("");
         setUserId("");
+        setPostGeneratorSubscription(null);
         setIsRequestLinked(false);
         return;
       }
@@ -1148,7 +1701,7 @@ export default function Home() {
       active = false;
       subscription.unsubscribe();
     };
-  }, [hasHydrated, email]);
+  }, [hasHydrated, email, isTestAccountAuthenticated]);
 
   useEffect(() => {
     if (!hasHydrated || typeof window === "undefined") return;
@@ -1164,7 +1717,7 @@ export default function Home() {
     const hasPaymentReady = hasOutput && hasInstagramHandle;
     const hasApplicationReady =
       hasPaymentReady &&
-      isPaid &&
+      hasPersistedApplicationRecord &&
       !!managerName.trim() &&
       !!phone.trim() &&
       !!email.trim() &&
@@ -1184,8 +1737,13 @@ export default function Home() {
       else resolvedStep = hasAccount === null ? "account-check" : "input";
     }
 
-    if (screen === "postgen") {
-      resolvedStep = "postgen";
+    if (
+      screen === "postgen" ||
+      screen === "postsub-payment" ||
+      screen === "postsub-status"
+    ) {
+      router.replace(`/tools?screen=${screen}`);
+      return;
     }
 
     if (resolvedStep) {
@@ -1200,15 +1758,17 @@ export default function Home() {
     productService,
     instagramId,
     effectiveInstagramId,
+    hasPersistedApplicationRecord,
     aiResult,
     finalInstagramId,
-    isPaid,
     managerName,
     phone,
     email,
     depositorName,
     loading,
     aiError,
+    isAuthenticated,
+    postSubSubmitted,
   ]);
 
   async function handleGenerate(targetStep: Step = step) {
@@ -1310,12 +1870,44 @@ export default function Home() {
     setGeneratingPost(true);
     setPostError(null);
     const latestPostContext = mergedGeneratedPosts[0];
+    const isFreeTrialGeneration = canUseFreeTrial && !canUseSubscriptionPostGeneration;
+
+    let accessToken = "";
+
+    if (!isFreeTrialGeneration && !isTestAccountAuthenticated) {
+      const supabase = getSupabaseBrowserClientOrNull();
+
+      if (!supabase) {
+        setGeneratingPost(false);
+        const message = "로그인 정보가 필요합니다. 다시 로그인해주세요.";
+        setPostError(message);
+        showValidationToast(message);
+        return;
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      accessToken = session?.access_token ?? "";
+
+      if (!accessToken) {
+        setGeneratingPost(false);
+        const message = "로그인 정보가 만료되었습니다. 다시 로그인해주세요.";
+        setPostError(message);
+        showValidationToast(message);
+        return;
+      }
+    }
+
     try {
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "post_image",
+          usageMode: isFreeTrialGeneration ? "free_trial" : "premium",
+          accessToken: accessToken || null,
           images: uploadedImages,
           userPrompt: postPrompt,
           instagramHandle: effectiveInstagramId.trim(),
@@ -1354,33 +1946,75 @@ export default function Home() {
         imageModelText: data.imageModelText,
         createdAt: new Date().toISOString(),
         isPersisted: false,
+        isFreeTrial: isFreeTrialGeneration,
       };
+
+      if (!isFreeTrialGeneration) {
+        if (isTestAccountAuthenticated) {
+          const today = getKoreaDateString();
+
+          setPostGeneratorSubscription((current) => {
+            const baseSubscription =
+              current ??
+              buildTestAccountSubscription(
+                remainingPosts > 0
+                  ? remainingPosts
+                  : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
+              );
+            const dailyUsageCount =
+              baseSubscription.lastUsageDate === today
+                ? baseSubscription.dailyUsageCount
+                : 0;
+
+            return {
+              ...baseSubscription,
+              remainingCredits: Math.max(baseSubscription.remainingCredits - 1, 0),
+              dailyUsageCount: dailyUsageCount + 1,
+              lastUsageDate: today,
+            };
+          });
+        } else if (userId) {
+          const subscriptionResult = await fetchPostGeneratorSubscription({
+            userId,
+          });
+
+          if (!subscriptionResult.error) {
+            setPostGeneratorSubscription(subscriptionResult.subscription);
+          }
+        }
+      }
+
+      if (!isTestAccountAuthenticated) {
+        const persistenceResult = await persistGeneratedPost({
+          userId: userId || null,
+          email: authEmail || email || null,
+          applicationId: applicationId || null,
+          title: nextPost.title,
+          content: nextPost.content,
+          hashtags: nextPost.hashtags,
+          imageUrl: nextPost.imagePreview,
+          isFreeTrial: isFreeTrialGeneration,
+        });
+
+        if (
+          persistenceResult.error &&
+          !persistenceResult.saved &&
+          !persistenceResult.queued
+        ) {
+          throw new Error(persistenceResult.error);
+        }
+
+        if (persistenceResult.error) {
+          console.warn(
+            "[Generated Post] Persistence warning:",
+            persistenceResult.error
+          );
+        }
+      }
 
       setGeneratedPosts((prev) => [nextPost, ...prev]);
 
-      const persistenceResult = await persistGeneratedPost({
-        userId: userId || null,
-        email: authEmail || email || null,
-        applicationId: applicationId || null,
-        title: nextPost.title,
-        content: nextPost.content,
-        hashtags: nextPost.hashtags,
-        imageUrl: nextPost.imagePreview,
-        isFreeTrial: !canUsePaidPostGeneration,
-      });
-
-      if (persistenceResult.error && !persistenceResult.saved && !persistenceResult.queued) {
-        setGeneratedPosts((prev) => prev.filter((post) => post.id !== nextPost.id));
-        throw new Error(persistenceResult.error);
-      }
-
-      if (persistenceResult.error) {
-        console.warn("[Generated Post] Persistence warning:", persistenceResult.error);
-      }
-
-      if (canUsePaidPostGeneration) {
-        setRemainingPosts((prev) => prev - 1);
-      } else {
+      if (isFreeTrialGeneration) {
         setFreeTrialUsed(true);
       }
     } catch (err) {
@@ -1420,9 +2054,31 @@ export default function Home() {
     if (!managerName.trim() && authName.trim()) {
       setManagerName(authName.trim());
     }
-  }, [isAuthenticated, authEmail, authName, email, managerName]);
+
+    if (!postSubEmail.trim() && authEmail.trim()) {
+      setPostSubEmail(authEmail.trim());
+    }
+
+    if (!postSubManagerName.trim() && authName.trim()) {
+      setPostSubManagerName(authName.trim());
+    }
+  }, [
+    isAuthenticated,
+    authEmail,
+    authName,
+    email,
+    managerName,
+    postSubEmail,
+    postSubManagerName,
+  ]);
 
   useEffect(() => {
+    if (isTestAccountAuthenticated) {
+      setSavedGeneratedPosts([]);
+      setLoadingSavedPosts(false);
+      return;
+    }
+
     if (!isAuthenticated || !userId) {
       setSavedGeneratedPosts([]);
       setLoadingSavedPosts(false);
@@ -1456,10 +2112,159 @@ export default function Home() {
     return () => {
       isActive = false;
     };
-  }, [isAuthenticated, userId, authEmail, email]);
+  }, [isAuthenticated, userId, authEmail, email, isTestAccountAuthenticated]);
+
+  useEffect(() => {
+    if (!savedGeneratedPosts.length) {
+      return;
+    }
+
+    if (savedGeneratedPosts.some((post) => post.isFreeTrial)) {
+      setFreeTrialUsed(true);
+    }
+  }, [savedGeneratedPosts]);
+
+  useEffect(() => {
+    if (isTestAccountAuthenticated) {
+      setPostGeneratorSubscription((current) => {
+        if (current && isPostGeneratorSubscriptionActive(current)) {
+          return current;
+        }
+
+        return buildTestAccountSubscription(
+          remainingPosts > 0 ? remainingPosts : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
+        );
+      });
+      setLoadingSubscription(false);
+      return;
+    }
+
+    if (!isAuthenticated || !userId) {
+      setPostGeneratorSubscription(null);
+      setLoadingSubscription(false);
+      return;
+    }
+
+    let isActive = true;
+    setLoadingSubscription(true);
+
+    void fetchPostGeneratorSubscription({ userId })
+      .then(({ subscription, error }) => {
+        if (!isActive) return;
+
+        if (error) {
+          setPostError(error);
+        }
+
+        setPostGeneratorSubscription(subscription);
+      })
+      .finally(() => {
+        if (isActive) {
+          setLoadingSubscription(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [isAuthenticated, userId, isTestAccountAuthenticated, remainingPosts]);
 
   function handleSignupCta() {
     openAuthPage("status");
+  }
+
+  function handleMoveToPostSubscriptionPayment() {
+    if (hasActivePostGeneratorSubscription) {
+      showValidationToast("이미 월 구독이 활성화되어 있습니다");
+      goToStep("postgen");
+      return;
+    }
+
+    if (!isAuthenticated) {
+      openAuthPage("postgen");
+      return;
+    }
+
+    goToStep("postsub-payment");
+  }
+
+  async function handlePostSubscriptionSubmit() {
+    if (submittingPostSubscription) {
+      return;
+    }
+
+    if (!surfaceValidationIssues(postSubscriptionPaymentValidationIssues)) {
+      return;
+    }
+
+    setSubmittingPostSubscription(true);
+    setPostError(null);
+
+    try {
+      setPostSubSubmitted(true);
+      setPostSubRequestedAt(new Date().toISOString());
+      goToStep("postsub-status");
+    } finally {
+      setSubmittingPostSubscription(false);
+    }
+  }
+
+  async function handleActivatePostSubscription() {
+    if (startingSubscription) {
+      return;
+    }
+
+    if (hasActivePostGeneratorSubscription) {
+      showValidationToast("이미 월 구독이 활성화되어 있습니다");
+      goToStep("postgen");
+      return;
+    }
+
+    if (isTestAccountAuthenticated) {
+      setPostGeneratorSubscription(
+        buildTestAccountSubscription(POST_GENERATOR_MONTHLY_CREDITS)
+      );
+      setPostSubSubmitted(true);
+      setPostSubRequestedAt((current) => current || new Date().toISOString());
+      showValidationToast("체험 계정 월 구독이 활성화되었습니다");
+      goToStep("postgen");
+      return;
+    }
+
+    if (!isAuthenticated || !userId) {
+      openAuthPage("postgen");
+      return;
+    }
+
+    setStartingSubscription(true);
+    setPostError(null);
+
+    try {
+      const result = await startPostGeneratorSubscription({
+        userId,
+        bypassPaymentRequirement: true,
+      });
+
+      if (result.error || !result.subscription) {
+        throw new Error(result.error ?? "구독을 시작하지 못했습니다.");
+      }
+
+      setPostGeneratorSubscription(result.subscription);
+      setPostSubSubmitted(true);
+      setPostSubRequestedAt((current) => current || new Date().toISOString());
+      setFreeTrialUsed(true);
+      showValidationToast("월 구독이 시작되었습니다");
+      goToStep("postgen");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "구독을 시작하지 못했습니다. 다시 시도해주세요.";
+      setPostError(message);
+      showValidationToast(message);
+    } finally {
+      setStartingSubscription(false);
+    }
   }
 
   async function handleApplicationSubmit() {
@@ -1474,6 +2279,7 @@ export default function Home() {
 
     setSubmissionError(null);
     setSubmittingApplication(true);
+    setApplicationStatus("submitted");
 
     const totalPrice =
       getPrice(selectedPlan, selectedDuration) + getExpressFee(isExpress);
@@ -1515,8 +2321,9 @@ export default function Home() {
 
       setApplicationId(result.applicationId ?? "");
       setPaymentId(result.paymentId ?? "");
-      setIsPaid(true);
-      setRemainingPosts(getPostLimit(selectedDuration));
+      setIsPaid(false);
+      setApplicationStatus("payment_pending");
+      setPaymentStatus("pending");
       goToStep("status");
     } catch (error) {
       const message =
@@ -1524,6 +2331,9 @@ export default function Home() {
           ? error.message
           : "신청 정보를 저장하지 못했습니다. 다시 시도해주세요.";
       setSubmissionError(message);
+      if (!applicationId.trim()) {
+        setApplicationStatus("idle");
+      }
       showValidationToast(message);
     } finally {
       setSubmittingApplication(false);
@@ -1531,6 +2341,8 @@ export default function Home() {
   }
 
   async function handleLogout() {
+    await clearTestAccountAccess();
+
     const supabase = getSupabaseBrowserClientOrNull();
     if (supabase) {
       await supabase.auth.signOut();
@@ -1544,7 +2356,9 @@ export default function Home() {
     setAuthEmail("");
     setAuthName("");
     setUserId("");
+    setPostGeneratorSubscription(null);
     setIsRequestLinked(false);
+    setHasTestAccess(false);
   }
 
   const wrapper =
@@ -1560,6 +2374,7 @@ export default function Home() {
       imageModelText: post.imageModelText,
       createdAt: post.createdAt,
       isPersisted: post.isPersisted,
+      isFreeTrial: post.isFreeTrial,
     }));
   }
 
@@ -1569,48 +2384,60 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
         <div className="max-w-xl w-full text-center space-y-10">
-          <div className="flex items-center justify-end gap-2">
-            {hasHydrated ? (
-              isAuthenticated ? (
-                <>
-                  <button
-                    onClick={() => router.push("/mypage")}
-                    className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
-                  >
-                    마이페이지
-                  </button>
-                  <span className="text-xs font-medium text-gray-500 bg-white border border-gray-200 px-3 py-1.5 rounded-full">
-                    {authName
-                      ? `${authName}님 로그인됨`
-                      : authEmail
-                        ? `${authEmail} 로그인됨`
-                        : "로그인됨"}
-                  </span>
-                  <button
-                    onClick={handleLogout}
-                    className="text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
-                  >
-                    로그아웃
-                  </button>
-                </>
+          <div className="space-y-2">
+            <div className="flex items-center justify-end gap-2">
+              {hasHydrated ? (
+                isAuthenticated ? (
+                  <>
+                    {isTestAccountAuthenticated && (
+                      <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
+                        체험 계정
+                      </span>
+                    )}
+                    <button
+                      onClick={() => router.push("/mypage")}
+                      className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
+                    >
+                      마이페이지
+                    </button>
+                    <span className="text-xs font-medium text-gray-500 bg-white border border-gray-200 px-3 py-1.5 rounded-full">
+                      {authName
+                        ? `${authName}님 로그인됨`
+                        : authEmail
+                          ? `${authEmail} 로그인됨`
+                          : "로그인됨"}
+                    </span>
+                    <button
+                      onClick={handleLogout}
+                      className="text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
+                    >
+                      로그아웃
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                    onClick={() => openAuthPage("landing", "login")}
+                      className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
+                    >
+                      로그인
+                    </button>
+                    <button
+                    onClick={() => openAuthPage("landing", "signup")}
+                      className="text-sm font-medium text-violet-600 hover:text-violet-700 transition-colors"
+                    >
+                      회원가입
+                    </button>
+                  </>
+                )
               ) : (
-                <>
-                  <button
-                  onClick={() => openAuthPage("landing", "login")}
-                    className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
-                  >
-                    로그인
-                  </button>
-                  <button
-                  onClick={() => openAuthPage("landing", "signup")}
-                    className="text-sm font-medium text-violet-600 hover:text-violet-700 transition-colors"
-                  >
-                    회원가입
-                  </button>
-                </>
-              )
-            ) : (
-              <div className="h-6 w-32" aria-hidden="true" />
+                <div className="h-6 w-32" aria-hidden="true" />
+              )}
+            </div>
+            {hasHydrated && isTestAccountAuthenticated && (
+              <p className="text-xs text-violet-600 text-right">
+                현재 체험 계정으로 로그인되어 있으며 일부 기능이 미리 활성화되어 있습니다.
+              </p>
             )}
           </div>
 
@@ -1662,9 +2489,11 @@ export default function Home() {
 
               {/* Feature 2: 게시물 AI 생성 */}
               <button
-                onClick={() => goToStep("postgen")}
+                onClick={() => router.push("/tools")}
                 className={`group text-left p-6 rounded-2xl border-2 transition-all ${
-                  canGeneratePost || isPaid || isAuthenticated
+                  canGeneratePost ||
+                  hasActivePostGeneratorSubscription ||
+                  isAuthenticated
                     ? "bg-white border-gray-100 hover:border-violet-300 hover:shadow-lg active:scale-[0.99]"
                     : "bg-gray-50 border-gray-100 opacity-70"
                 }`}
@@ -1678,18 +2507,22 @@ export default function Home() {
                       <p className="font-bold text-gray-900 text-lg group-hover:text-violet-600 transition-colors">
                         게시물 AI 생성
                       </p>
-                      {!freeTrialUsed ? (
+                      {!hasConsumedFreeTrial ? (
                         <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
                           1회 무료 체험
                         </span>
-                      ) : (!isPaid || !isAuthenticated) && (
+                      ) : hasActivePostGeneratorSubscription ? (
+                        <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded-full">
+                          월 구독 이용중
+                        </span>
+                      ) : (
                         <span className="text-[10px] font-semibold bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full">
-                          결제 후 이용
+                          월 {formattedSubscriptionPrice}원
                         </span>
                       )}
                     </div>
                     <p className="text-sm text-gray-500">
-                      무료로 한 번 체험한 뒤 회원가입과 결제로 이어갈 수 있습니다
+                      무료 체험 뒤 월 구독으로 이어지고, 이후 AI 마케터 서비스로 확장할 수 있습니다
                     </p>
                   </div>
                 </div>
@@ -1707,12 +2540,12 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
         <div className="max-w-xl w-full text-center space-y-8">
-          <button
-            onClick={() => navigateBack("account-check")}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 뒤로
-          </button>
+          <StepUtilityHeader
+            onBack={() => navigateBack("account-check")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
 
           <div className="space-y-3">
             <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
@@ -1762,12 +2595,12 @@ export default function Home() {
       <>
         <main className={wrapper}>
           <div className="max-w-xl w-full space-y-6">
-            <button
-              onClick={() => navigateBack("input")}
-              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-            >
-              ← 뒤로
-            </button>
+            <StepUtilityHeader
+              onBack={() => navigateBack("input")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
 
             <div className="text-center space-y-1">
               <h2 className="text-2xl font-bold text-gray-900">
@@ -1848,12 +2681,20 @@ export default function Home() {
   if (activeStep === "result") {
     if (loading) {
       return (
-        <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
-          <div className="text-center space-y-4">
-            <div className="w-10 h-10 border-4 border-rose-200 border-t-rose-500 rounded-full animate-spin mx-auto" />
-            <p className="text-gray-500 text-sm">
-              AI가 기획안을 생성 중입니다...
-            </p>
+        <main className={wrapper}>
+          <div className="max-w-2xl w-full space-y-6">
+            <StepUtilityHeader
+              onBack={() => navigateBack("result")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
+            <div className="text-center space-y-4 py-12">
+              <div className="w-10 h-10 border-4 border-rose-200 border-t-rose-500 rounded-full animate-spin mx-auto" />
+              <p className="text-gray-500 text-sm">
+                AI가 기획안을 생성 중입니다...
+              </p>
+            </div>
           </div>
         </main>
       );
@@ -1863,12 +2704,12 @@ export default function Home() {
       <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
-          <button
-            onClick={() => navigateBack("result")}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 뒤로
-          </button>
+          <StepUtilityHeader
+            onBack={() => navigateBack("result")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
 
           <div className="text-center space-y-1">
             <h2 className="text-2xl font-bold text-gray-900">AI 기획 결과</h2>
@@ -1962,12 +2803,12 @@ export default function Home() {
       <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
-          <button
-            onClick={() => navigateBack("names")}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 뒤로
-          </button>
+          <StepUtilityHeader
+            onBack={() => navigateBack("names")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
 
           <div className="text-center space-y-2">
             <div className="inline-flex items-center gap-2 bg-rose-50 text-rose-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-rose-100">
@@ -2063,12 +2904,12 @@ export default function Home() {
       <>
       <main className={wrapper}>
         <div className="max-w-xl w-full space-y-6">
-          <button
-            onClick={() => navigateBack("confirm")}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 이전으로
-          </button>
+          <StepUtilityHeader
+            onBack={() => navigateBack("confirm")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
 
           <div className="text-center space-y-2">
             <h2 className="text-2xl font-bold text-gray-900">
@@ -2160,14 +3001,14 @@ export default function Home() {
       <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
-          <button
-            onClick={() => {
+          <StepUtilityHeader
+            onBack={() => {
               navigateBack("payment");
             }}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 이전으로
-          </button>
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
 
           <div className="text-center space-y-1">
             <h2 className="text-2xl font-bold text-gray-900">
@@ -2659,6 +3500,10 @@ export default function Home() {
                 {BANK_TRANSFER_INFO.accountHolder}
               </p>
             </div>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              입금자명은 신청 시 입력한 이름과 동일하게 입력해주세요. 입금 확인 후
+              서비스가 시작됩니다.
+            </p>
           </Card>
 
           {/* Form */}
@@ -2686,7 +3531,7 @@ export default function Home() {
               fieldKey="phone"
             />
             <InputField
-              label="이메일"
+              label="아이디(이메일)"
               value={email}
               onChange={setEmail}
               onBlur={() => markFieldTouched("email")}
@@ -2771,7 +3616,7 @@ export default function Home() {
                   placeholder="서비스업 / 마케팅"
                 />
                 <InputField
-                  label="세금계산서 이메일"
+                  label="세금계산서 아이디(이메일)"
                   value={invoiceEmail}
                   onChange={setInvoiceEmail}
                   placeholder="예: tax@company.com"
@@ -2820,7 +3665,10 @@ export default function Home() {
 
   if (activeStep === "status") {
     const statusStages = ["접수됨", "입금 확인중", "진행중", "완료"];
-    const currentStage = 1;
+    const currentStage = getApplicationStageIndexFromState({
+      applicationStatus,
+      paymentStatus: effectivePaymentStatus,
+    });
     const totalPrice =
       getPrice(selectedPlan, selectedDuration) + getExpressFee(isExpress);
 
@@ -2828,16 +3676,26 @@ export default function Home() {
       <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
+          <StepUtilityHeader
+            onBack={() => goToStep("landing")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
           {/* Hero */}
           <Card className="text-center space-y-3 py-8">
             <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
               <span className="text-white text-2xl">✓</span>
             </div>
             <h2 className="text-2xl font-bold text-gray-900">
-              신청이 접수되었습니다
+              {isPaymentConfirmed
+                ? "입금 확인이 완료되었습니다"
+                : "신청이 접수되었습니다"}
             </h2>
             <p className="text-gray-500 text-sm">
-              입금 확인 후 마케팅이 시작됩니다
+              {isPaymentConfirmed
+                ? "마케팅 준비가 진행중입니다"
+                : "입금 확인 후 마케팅이 시작됩니다"}
             </p>
           </Card>
 
@@ -2979,8 +3837,8 @@ export default function Home() {
               </p>
               <p className="text-xs text-gray-500">
                 {isRequestLinked
-                  ? "신청 시 입력한 이메일과 연결되어 진행 정보가 자동으로 준비되었습니다"
-                  : "신청 시 입력한 이메일로 가입하시면 진행 정보가 더 자연스럽게 연결됩니다"}
+                  ? "신청 시 입력한 아이디(이메일)와 연결되어 진행 정보가 자동으로 준비되었습니다"
+                  : "신청 시 입력한 아이디(이메일)로 가입하시면 진행 정보가 더 자연스럽게 연결됩니다"}
               </p>
             </div>
           </Card>
@@ -2989,7 +3847,7 @@ export default function Home() {
             <button
               onClick={() => {
                 if (isAuthenticated) {
-                  goToStep("postgen");
+                  router.push("/tools");
                   return;
                 }
 
@@ -3017,6 +3875,383 @@ export default function Home() {
     );
   }
 
+  /* ═══════════════ POST SUBSCRIPTION PAYMENT ═══════════════ */
+
+  if (activeStep === "postsub-payment") {
+    return (
+      <>
+        <main className={wrapper}>
+          <div className="max-w-2xl w-full space-y-6">
+            <StepUtilityHeader
+              onBack={() => navigateBack("postsub-payment")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
+
+            <div className="text-center space-y-2">
+              <div className="inline-flex items-center gap-2 bg-violet-50 text-violet-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-violet-100">
+                구독 결제
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">
+                게시물 AI 생성 구독 신청
+              </h2>
+              <p className="text-sm text-gray-500">
+                이미지를 업로드하면 AI가 게시물을 자동으로 생성해드립니다.
+              </p>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 이용할 수
+                있습니다. 매월 {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
+                {POST_GENERATOR_DAILY_LIMIT}회까지 게시물 생성이 가능합니다.
+              </p>
+            </div>
+
+            <Card className="space-y-4 border-violet-100">
+              <SectionLabel>요금 안내</SectionLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
+                  <p className="text-xs font-semibold text-violet-500">월 요금</p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {formattedSubscriptionPrice}원
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
+                  <p className="text-xs font-semibold text-violet-500">월 제공량</p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {POST_GENERATOR_MONTHLY_CREDITS}회
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
+                  <p className="text-xs font-semibold text-violet-500">일일 한도</p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {POST_GENERATOR_DAILY_LIMIT}회
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="space-y-4 border-violet-100">
+              <SectionLabel>결제 방법</SectionLabel>
+              <div className="rounded-2xl bg-gradient-to-r from-violet-500 to-purple-500 text-white px-5 py-4">
+                <p className="text-xs font-semibold text-white/80">결제 방식</p>
+                <p className="mt-2 text-2xl font-extrabold tracking-tight">무통장 입금</p>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-gray-400">은행</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {POST_SUBSCRIPTION_BANK_TRANSFER_INFO.bankName}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-gray-400">계좌번호</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {POST_SUBSCRIPTION_BANK_TRANSFER_INFO.accountNumber}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-gray-400">예금주</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {POST_SUBSCRIPTION_BANK_TRANSFER_INFO.accountHolder}
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                입금자명은 신청 시 입력한 이름과 동일하게 입력해주세요. 입금 확인 후
+                서비스가 시작됩니다.
+              </p>
+              <button
+                onClick={() =>
+                  handleCopy(
+                    "postsub-account-number",
+                    POST_SUBSCRIPTION_BANK_TRANSFER_INFO.accountNumber
+                  )
+                }
+                className={`${getPrimaryActionButtonClass({
+                  theme: "violet",
+                })} py-3`}
+              >
+                {copiedField === "postsub-account-number"
+                  ? "복사됨"
+                  : "계좌번호 복사"}
+              </button>
+            </Card>
+
+            <Card className="space-y-5">
+              <SectionLabel>신청자 정보</SectionLabel>
+              <InputField
+                label="담당자명"
+                value={postSubManagerName}
+                onChange={setPostSubManagerName}
+                onBlur={() => markFieldTouched("postSubManagerName")}
+                placeholder="홍길동"
+                required
+                error={postSubManagerNameError}
+                fieldKey="postSubManagerName"
+                theme="violet"
+              />
+              <InputField
+                label="연락처"
+                value={postSubPhone}
+                onChange={setPostSubPhone}
+                onBlur={() => markFieldTouched("postSubPhone")}
+                placeholder="010-0000-0000"
+                type="tel"
+                required
+                error={postSubPhoneError}
+                fieldKey="postSubPhone"
+                theme="violet"
+              />
+              <InputField
+                label="아이디(이메일)"
+                value={postSubEmail}
+                onChange={setPostSubEmail}
+                onBlur={() => markFieldTouched("postSubEmail")}
+                placeholder="예: brand@company.com"
+                type="email"
+                required
+                error={postSubEmailError}
+                fieldKey="postSubEmail"
+                theme="violet"
+              />
+              <InputField
+                label="입금자명"
+                value={postSubDepositorName}
+                onChange={setPostSubDepositorName}
+                onBlur={() => markFieldTouched("postSubDepositorName")}
+                placeholder="홍길동"
+                required
+                error={postSubDepositorNameError}
+                fieldKey="postSubDepositorName"
+                theme="violet"
+              />
+
+              <div className="pt-3 border-t border-gray-100">
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={postSubTaxInvoiceRequested}
+                      onChange={(e) =>
+                        setPostSubTaxInvoiceRequested(e.target.checked)
+                      }
+                      className="sr-only"
+                    />
+                    <div
+                      className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                        postSubTaxInvoiceRequested
+                          ? "bg-violet-500 border-violet-500"
+                          : "border-gray-300 group-hover:border-gray-400"
+                      }`}
+                    >
+                      {postSubTaxInvoiceRequested && (
+                        <span className="text-white text-xs font-bold">✓</span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-sm font-medium text-gray-700">
+                    세금계산서 발행 요청
+                  </span>
+                </label>
+              </div>
+
+              {postSubTaxInvoiceRequested && (
+                <div className="space-y-4 pt-3 border-t border-gray-100">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                    세금계산서 정보
+                  </p>
+                  <InputField
+                    label="사업자등록번호"
+                    value={postSubBusinessNumber}
+                    onChange={setPostSubBusinessNumber}
+                    onBlur={() => markFieldTouched("postSubBusinessNumber")}
+                    placeholder="000-00-00000"
+                    error={postSubBusinessNumberError}
+                    fieldKey="postSubBusinessNumber"
+                    theme="violet"
+                  />
+                  <InputField
+                    label="상호"
+                    value={postSubCompanyName}
+                    onChange={setPostSubCompanyName}
+                    onBlur={() => markFieldTouched("postSubCompanyName")}
+                    placeholder="(주)회사명"
+                    error={postSubCompanyNameError}
+                    fieldKey="postSubCompanyName"
+                    theme="violet"
+                  />
+                  <InputField
+                    label="대표자명"
+                    value={postSubCeoName}
+                    onChange={setPostSubCeoName}
+                    onBlur={() => markFieldTouched("postSubCeoName")}
+                    placeholder="홍길동"
+                    error={postSubCeoNameError}
+                    fieldKey="postSubCeoName"
+                    theme="violet"
+                  />
+                  <InputField
+                    label="사업장 주소"
+                    value={postSubBusinessAddress}
+                    onChange={setPostSubBusinessAddress}
+                    onBlur={() => markFieldTouched("postSubBusinessAddress")}
+                    placeholder="서울시 강남구 ..."
+                    error={postSubBusinessAddressError}
+                    fieldKey="postSubBusinessAddress"
+                    theme="violet"
+                  />
+                  <InputField
+                    label="업태/종목"
+                    value={postSubBusinessType}
+                    onChange={setPostSubBusinessType}
+                    onBlur={() => markFieldTouched("postSubBusinessType")}
+                    placeholder="서비스업 / 마케팅"
+                    error={postSubBusinessTypeError}
+                    fieldKey="postSubBusinessType"
+                    theme="violet"
+                  />
+                  <InputField
+                    label="세금계산서 아이디(이메일)"
+                    value={postSubInvoiceEmail}
+                    onChange={setPostSubInvoiceEmail}
+                    onBlur={() => markFieldTouched("postSubInvoiceEmail")}
+                    placeholder="예: tax@company.com"
+                    type="email"
+                    error={postSubInvoiceEmailError}
+                    fieldKey="postSubInvoiceEmail"
+                    theme="violet"
+                  />
+                </div>
+              )}
+            </Card>
+
+            <button
+              onClick={handlePostSubscriptionSubmit}
+              disabled={submittingPostSubscription}
+              aria-disabled={
+                submittingPostSubscription || !isPostSubscriptionPaymentReady
+              }
+              className={`${getPrimaryActionButtonClass({
+                theme: "violet",
+                isInactive:
+                  submittingPostSubscription || !isPostSubscriptionPaymentReady,
+              })} py-4`}
+            >
+              {submittingPostSubscription
+                ? "구독 신청 정보를 저장하고 있습니다..."
+                : "구독 신청 완료 (입금 진행하기)"}
+            </button>
+          </div>
+        </main>
+        <ValidationToast
+          message={validationToast}
+          onClose={() => setValidationToast(null)}
+          theme="violet"
+        />
+      </>
+    );
+  }
+
+  /* ═══════════════ POST SUBSCRIPTION STATUS ═══════════════ */
+
+  if (activeStep === "postsub-status") {
+    return (
+      <>
+        <main className={wrapper}>
+          <div className="max-w-2xl w-full space-y-6">
+            <StepUtilityHeader
+              onBack={() => navigateBack("postsub-status")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
+
+            <Card className="text-center space-y-3 py-8">
+              <div className="w-16 h-16 bg-gradient-to-br from-violet-400 to-purple-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
+                <span className="text-white text-2xl">✓</span>
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">
+                구독 신청이 접수되었습니다
+              </h2>
+              <p className="text-sm text-gray-500">
+                입금 확인 후 구독이 활성화됩니다
+              </p>
+            </Card>
+
+            <Card className="space-y-4 border-violet-100">
+              <SectionLabel>구독 상태 안내</SectionLabel>
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-5 py-5 space-y-3">
+                <p className="text-sm font-semibold text-violet-700">
+                  구독 시작 예정 안내
+                </p>
+                <p className="text-sm text-violet-600 leading-relaxed">
+                  입금 확인이 완료되면 게시물 AI 생성 기능이 즉시 활성화됩니다.
+                </p>
+                <p className="text-sm text-violet-600 leading-relaxed">
+                  활성화 후 매월 {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
+                  {POST_GENERATOR_DAILY_LIMIT}회까지 이용할 수 있습니다.
+                </p>
+                {postSubRequestedAt && (
+                  <p className="text-xs text-violet-500">
+                    신청 시각: {formatDateKorean(postSubRequestedAt)}
+                  </p>
+                )}
+              </div>
+            </Card>
+
+            <Card className="space-y-3">
+              <SectionLabel>입금 정보</SectionLabel>
+              <div className="text-sm space-y-1 text-gray-700">
+                <p>
+                  <span className="text-gray-400">은행:</span>{" "}
+                  {POST_SUBSCRIPTION_BANK_TRANSFER_INFO.bankName}
+                </p>
+                <p>
+                  <span className="text-gray-400">계좌번호:</span>{" "}
+                  {POST_SUBSCRIPTION_BANK_TRANSFER_INFO.accountNumber}
+                </p>
+                <p>
+                  <span className="text-gray-400">예금주:</span>{" "}
+                  {POST_SUBSCRIPTION_BANK_TRANSFER_INFO.accountHolder}
+                </p>
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                입금자명은 신청 시 입력한 이름과 동일하게 입력해주세요. 입금 확인 후
+                서비스가 시작됩니다.
+              </p>
+            </Card>
+
+            <div className="space-y-3">
+              <button
+                onClick={handleActivatePostSubscription}
+                disabled={startingSubscription}
+                className={`${getPrimaryActionButtonClass({
+                  theme: "violet",
+                  isInactive: startingSubscription,
+                })} py-4`}
+              >
+                {startingSubscription
+                  ? "입금 확인을 반영하고 있습니다..."
+                  : "입금 확인 완료 처리하고 구독 시작하기"}
+              </button>
+              <button
+                onClick={() => goToStep("postgen")}
+                className="w-full py-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                게시물 AI 생성 화면으로 돌아가기
+              </button>
+            </div>
+          </div>
+        </main>
+        <ValidationToast
+          message={validationToast}
+          onClose={() => setValidationToast(null)}
+          theme="violet"
+        />
+      </>
+    );
+  }
+
   /* ═══════════════ POST GENERATION (SEPARATE) ═══════════════ */
 
   if (activeStep === "postgen") {
@@ -3024,12 +4259,12 @@ export default function Home() {
       <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
-          <button
-            onClick={() => navigateBack("postgen")}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 뒤로
-          </button>
+          <StepUtilityHeader
+            onBack={() => navigateBack("postgen")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
 
           <div className="text-center space-y-2">
             <div className="inline-flex items-center gap-2 bg-violet-50 text-violet-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-violet-100">
@@ -3044,13 +4279,54 @@ export default function Home() {
           </div>
 
           <div className="space-y-4">
-            <Card className="bg-violet-50/60 border-violet-100 space-y-2">
-              <p className="text-sm font-semibold text-violet-700">
-                게시물 AI 생성은 1회 무료로 체험할 수 있습니다
-              </p>
-              <p className="text-xs text-violet-600">
-                무료 체험 후 계속 이용하려면 결제와 회원가입이 필요합니다
-              </p>
+            <Card className="bg-violet-50/60 border-violet-100 space-y-4">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-violet-700">
+                  게시물 AI 생성은 구독형으로 운영됩니다
+                </p>
+                <p className="text-xs text-violet-600 leading-relaxed">
+                  1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 매월{" "}
+                  {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
+                  {POST_GENERATOR_DAILY_LIMIT}회까지 바로 생성할 수 있습니다.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
+                  <p className="text-xs font-semibold text-violet-500">
+                    구독 상태
+                  </p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {loadingSubscription
+                      ? "확인 중"
+                      : hasActivePostGeneratorSubscription
+                        ? "월 구독 이용중"
+                        : "무료 체험 또는 미구독"}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
+                  <p className="text-xs font-semibold text-violet-500">
+                    남은 생성 횟수
+                  </p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {hasActivePostGeneratorSubscription
+                      ? `${remainingSubscriptionCredits}회`
+                      : hasConsumedFreeTrial
+                        ? "구독 필요"
+                        : "무료 1회 가능"}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
+                  <p className="text-xs font-semibold text-violet-500">
+                    오늘 남은 횟수
+                  </p>
+                  <p className="mt-2 text-lg font-bold text-gray-900">
+                    {hasActivePostGeneratorSubscription
+                      ? `${remainingDailyGenerations}회`
+                      : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
+                  </p>
+                </div>
+              </div>
             </Card>
 
             {shouldShowPostLock ? (
@@ -3060,27 +4336,63 @@ export default function Home() {
                 </div>
                 <div className="space-y-1">
                   <p className="font-semibold text-gray-700 text-lg">
-                    무료 체험 1회를 모두 사용하셨습니다
+                    {isDailyLimitReached
+                      ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
+                      : isSubscriptionCreditEmpty
+                        ? "이번 달 남은 생성 횟수가 없습니다"
+                        : hasConsumedFreeTrial
+                          ? "무료 체험 1회를 모두 사용하셨습니다"
+                          : "이용 조건을 확인해주세요"}
                   </p>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
                     새 게시물 생성은 잠겨 있지만, 이전에 생성한 게시물은 계속 확인할 수 있습니다
                   </p>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                    계속 이용하려면 결제 후 회원가입을 진행해주세요
+                    {isDailyLimitReached
+                      ? "하루 제한이 초기화되면 다시 생성할 수 있습니다"
+                      : hasActivePostGeneratorSubscription
+                        ? "다음 결제 주기에 다시 충전되거나 이후 추가 크레딧 기능으로 확장될 예정입니다"
+                        : "계속 이용하려면 로그인 후 월 구독을 시작해주세요"}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    onClick={() => openAuthPage("postgen")}
-                    className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
-                  >
-                    회원가입 또는 로그인
-                  </button>
+                  {hasActivePostGeneratorSubscription && !isDailyLimitReached ? (
+                    <button
+                      disabled
+                      className={`${getPrimaryActionButtonClass({
+                        theme: "violet",
+                        isInactive: true,
+                      })} py-3`}
+                    >
+                      구독 이용중 (재시작 불가)
+                    </button>
+                  ) : (
+                    <button
+                      onClick={
+                        isAuthenticated
+                          ? handleMoveToPostSubscriptionPayment
+                          : () => openAuthPage("postgen")
+                      }
+                      disabled={startingSubscription || isDailyLimitReached}
+                      className={`${getPrimaryActionButtonClass({
+                        theme: "violet",
+                        isInactive: startingSubscription || isDailyLimitReached,
+                      })} py-3`}
+                    >
+                      {isDailyLimitReached
+                        ? "내일 다시 이용하기"
+                        : startingSubscription
+                          ? "구독을 준비하고 있습니다..."
+                          : isAuthenticated
+                            ? `월 구독 시작하기 (${formattedSubscriptionPrice}원)`
+                            : "회원가입 또는 로그인"}
+                    </button>
+                  )}
                   <button
                     onClick={() => goToStep("account-check")}
                     className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                   >
-                    마케팅 서비스 신청하기
+                    AI 마케팅 서비스 신청하기
                   </button>
                 </div>
               </Card>
@@ -3089,12 +4401,37 @@ export default function Home() {
                 <div className="flex items-center justify-between mb-4">
                   <SectionLabel>게시물 제작</SectionLabel>
                   <span className="text-xs font-semibold text-violet-600 bg-violet-50 px-3 py-1 rounded-full">
-                    {canUsePaidPostGeneration
-                      ? `남은 횟수: ${remainingPosts}개`
-                      : freeTrialUsed
-                        ? "무료 체험 완료"
+                    {hasActivePostGeneratorSubscription
+                      ? `남은 생성 횟수: ${remainingSubscriptionCredits}회`
+                      : hasConsumedFreeTrial
+                        ? "월 구독 필요"
                         : "무료 체험 가능"}
                   </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
+                    <p className="text-xs font-semibold text-violet-500">
+                      이번 달 사용 현황
+                    </p>
+                    <p className="mt-2 text-lg font-bold text-gray-900">
+                      {hasActivePostGeneratorSubscription
+                        ? `${POST_GENERATOR_MONTHLY_CREDITS - remainingSubscriptionCredits}회 사용 / ${POST_GENERATOR_MONTHLY_CREDITS}회 제공`
+                        : hasConsumedFreeTrial
+                          ? `월 ${formattedSubscriptionPrice}원 구독으로 ${POST_GENERATOR_MONTHLY_CREDITS}회`
+                          : "무료 체험 1회 제공"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
+                    <p className="text-xs font-semibold text-violet-500">
+                      오늘 남은 횟수
+                    </p>
+                    <p className="mt-2 text-lg font-bold text-gray-900">
+                      {hasActivePostGeneratorSubscription
+                        ? `${remainingDailyGenerations}회`
+                        : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -3283,7 +4620,7 @@ export default function Home() {
                       <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                       게시물을 만들고 있습니다...
                     </span>
-                  ) : canUsePaidPostGeneration ? (
+                  ) : canUseSubscriptionPostGeneration ? (
                     "게시물 생성하기"
                   ) : canUseFreeTrial ? (
                     "무료로 게시물 체험하기"
@@ -3437,28 +4774,46 @@ export default function Home() {
               );
             })}
 
-            {mergedGeneratedPosts.length > 0 && !canUsePaidPostGeneration && (
+            {mergedGeneratedPosts.length > 0 && !canUseSubscriptionPostGeneration && (
               <Card className="space-y-4 border-violet-100 bg-violet-50/50">
                 <div className="space-y-1">
                   <p className="text-sm font-semibold text-violet-700">
-                    무료 체험이 완료되었습니다
+                    {hasActivePostGeneratorSubscription
+                      ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
+                      : "무료 체험이 완료되었습니다"}
                   </p>
                   <p className="text-sm text-violet-600">
-                    회원가입 후 진행 상태를 확인하고, 결제 후 계속 이용해보세요
+                    {hasActivePostGeneratorSubscription
+                      ? "내일 다시 이용하거나 다음 결제 주기에 맞춰 계속 사용해보세요"
+                      : `월 ${formattedSubscriptionPrice}원 구독으로 매월 ${POST_GENERATOR_MONTHLY_CREDITS}회 생성할 수 있습니다`}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
-                    onClick={() => openAuthPage("status")}
-                    className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+                    onClick={
+                      isAuthenticated
+                        ? handleMoveToPostSubscriptionPayment
+                        : () => openAuthPage("postgen")
+                    }
+                    disabled={startingSubscription || isDailyLimitReached}
+                    className={`${getPrimaryActionButtonClass({
+                      theme: "violet",
+                      isInactive: startingSubscription || isDailyLimitReached,
+                    })} py-3`}
                   >
-                    회원가입 또는 로그인
+                    {isDailyLimitReached
+                      ? "오늘은 모두 사용했습니다"
+                      : startingSubscription
+                        ? "구독을 준비하고 있습니다..."
+                        : isAuthenticated
+                          ? `월 구독 시작하기 (${formattedSubscriptionPrice}원)`
+                          : "회원가입 또는 로그인"}
                   </button>
                   <button
                     onClick={() => goToStep("account-check")}
                     className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                   >
-                    마케팅 서비스 신청하기
+                    AI 마케팅 서비스 신청하기
                   </button>
                 </div>
               </Card>
