@@ -22,6 +22,7 @@ import {
   ValidationToast,
 } from "@/lib/ui/form-feedback";
 import {
+  clearTestAccountAccess,
   requestInternalTestLogin,
   TEST_ACCOUNT_AUTH_ID,
   TEST_ACCOUNT_DEFAULT_DURATION,
@@ -188,6 +189,8 @@ function AuthPageInner() {
   }
 
   const completeAuth = useCallback(async () => {
+    await clearTestAccountAccess();
+
     const supabase = getSupabaseBrowserClient();
     const {
       data: { user },

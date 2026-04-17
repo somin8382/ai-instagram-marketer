@@ -1402,11 +1402,15 @@ export default function Home() {
           userId?: string;
           isRequestLinked?: boolean;
         };
+        const isStoredTestAccount =
+          Boolean(parsed.isAuthenticated) &&
+          isTestAccountUser(parsed.userId, parsed.authEmail);
         setIsAuthenticated(Boolean(parsed.isAuthenticated));
         setAuthEmail(parsed.authEmail ?? "");
         setAuthName(parsed.authName ?? "");
         setUserId(parsed.userId ?? "");
         setIsRequestLinked(Boolean(parsed.isRequestLinked));
+        setHasTestAccess(isStoredTestAccount);
       } catch {
         window.localStorage.removeItem(AUTH_STORAGE_KEY);
       }
@@ -1436,7 +1440,7 @@ export default function Home() {
   }, [hasHydrated]);
 
   useEffect(() => {
-    if (!hasHydrated || !isTestAccountAuthenticated) {
+    if (!hasHydrated || !hasTestAccess) {
       return;
     }
 
@@ -1477,7 +1481,7 @@ export default function Home() {
     }
   }, [
     hasHydrated,
-    isTestAccountAuthenticated,
+    hasTestAccess,
     authName,
     applicationStatus,
     selectedPlan,
@@ -1626,7 +1630,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!hasHydrated) return;
-    if (isTestAccountAuthenticated) return;
+    if (hasTestAccess) return;
 
     const supabase = getSupabaseBrowserClientOrNull();
     if (!supabase) {
@@ -1701,7 +1705,7 @@ export default function Home() {
       active = false;
       subscription.unsubscribe();
     };
-  }, [hasHydrated, email, isTestAccountAuthenticated]);
+  }, [hasHydrated, email, hasTestAccess]);
 
   useEffect(() => {
     if (!hasHydrated || typeof window === "undefined") return;
@@ -1908,6 +1912,7 @@ export default function Home() {
           type: "post_image",
           usageMode: isFreeTrialGeneration ? "free_trial" : "premium",
           accessToken: accessToken || null,
+          isInternalTestAccount: isTestAccountAuthenticated,
           images: uploadedImages,
           userPrompt: postPrompt,
           instagramHandle: effectiveInstagramId.trim(),
@@ -2286,7 +2291,7 @@ export default function Home() {
 
     try {
       const result = await persistApplicationSubmission({
-        userId: userId || null,
+        userId: isTestAccountAuthenticated ? null : userId || null,
         email,
         instagramId: effectiveInstagramId.trim(),
         hasAccount: Boolean(hasAccount),
@@ -3822,26 +3827,28 @@ export default function Home() {
             </div>
           </Card>
 
-          <Card className="space-y-3">
-            <SectionLabel>회원가입 안내</SectionLabel>
-            <div className="space-y-1">
-              <h3 className="text-lg font-bold text-gray-900">
-                {isAuthenticated
-                  ? "회원가입이 완료되었습니다"
-                  : "입금 후 회원가입을 진행해주세요"}
-              </h3>
-              <p className="text-sm text-gray-500">
-                {isAuthenticated
-                  ? "이제 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"
-                  : "회원가입을 완료하면 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"}
-              </p>
-              <p className="text-xs text-gray-500">
-                {isRequestLinked
-                  ? "신청 시 입력한 아이디(이메일)와 연결되어 진행 정보가 자동으로 준비되었습니다"
-                  : "신청 시 입력한 아이디(이메일)로 가입하시면 진행 정보가 더 자연스럽게 연결됩니다"}
-              </p>
-            </div>
-          </Card>
+          {!isTestAccountAuthenticated && (
+            <Card className="space-y-3">
+              <SectionLabel>회원가입 안내</SectionLabel>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-gray-900">
+                  {isAuthenticated
+                    ? "회원가입이 완료되었습니다"
+                    : "입금 후 회원가입을 진행해주세요"}
+                </h3>
+                <p className="text-sm text-gray-500">
+                  {isAuthenticated
+                    ? "이제 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"
+                    : "회원가입을 완료하면 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {isRequestLinked
+                    ? "신청 시 입력한 아이디(이메일)와 연결되어 진행 정보가 자동으로 준비되었습니다"
+                    : "신청 시 입력한 아이디(이메일)로 가입하시면 진행 정보가 더 자연스럽게 연결됩니다"}
+                </p>
+              </div>
+            </Card>
+          )}
 
           <div className="space-y-3">
             <button

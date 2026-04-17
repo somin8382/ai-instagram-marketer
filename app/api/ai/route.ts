@@ -47,6 +47,7 @@ type AiRequestBody = {
   type?: "planning" | "post_image";
   usageMode?: "free_trial" | "premium";
   accessToken?: string | null;
+  isInternalTestAccount?: boolean;
   industry?: string;
   productService?: string;
   instagramHandle?: string;
@@ -146,6 +147,7 @@ async function handlePostImageGeneration(
   const premiumAccess = await verifyPremiumGenerationAccess({
     usageMode,
     accessToken: String(body.accessToken ?? "").trim(),
+    allowInternalTestBypass: body.isInternalTestAccount === true,
     request,
   });
 
@@ -345,9 +347,16 @@ type SubscriptionGuardRow = {
 async function verifyPremiumGenerationAccess(input: {
   usageMode: PremiumUsageMode;
   accessToken: string;
+  allowInternalTestBypass: boolean;
   request: Request;
 }) {
   if (input.usageMode !== "premium") {
+    return { ok: true as const };
+  }
+
+  // Local development fallback for the hardcoded internal test account.
+  // Keep this bypass disabled in production.
+  if (input.allowInternalTestBypass && process.env.NODE_ENV !== "production") {
     return { ok: true as const };
   }
 

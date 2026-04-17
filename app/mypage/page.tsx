@@ -248,10 +248,14 @@ export default function MyPage() {
               })
             : null;
 
+          const parsedIsTestAccount = isTestAccountUser(
+            parsedAuth?.userId,
+            parsedAuth?.authEmail
+          );
+
           if (
-            parsedAuth?.isAuthenticated &&
             testAccessEnabled &&
-            isTestAccountUser(parsedAuth.userId, parsedAuth.authEmail)
+            (parsedIsTestAccount || !parsedAuth?.isAuthenticated)
           ) {
             const parsedApp = rawAppState
               ? (JSON.parse(rawAppState) as {
@@ -282,9 +286,21 @@ export default function MyPage() {
             );
             const now = new Date().toISOString();
 
-            setAuthName(parsedAuth.authName || TEST_ACCOUNT_NAME);
-            setAuthEmail(parsedAuth.authEmail || TEST_ACCOUNT_AUTH_ID);
-            setAuthUserId(parsedAuth.userId || TEST_ACCOUNT_USER_ID);
+            setAuthName(
+              parsedIsTestAccount && parsedAuth?.authName
+                ? parsedAuth.authName
+                : TEST_ACCOUNT_NAME
+            );
+            setAuthEmail(
+              parsedIsTestAccount && parsedAuth?.authEmail
+                ? parsedAuth.authEmail
+                : TEST_ACCOUNT_AUTH_ID
+            );
+            setAuthUserId(
+              parsedIsTestAccount && parsedAuth?.userId
+                ? parsedAuth.userId
+                : TEST_ACCOUNT_USER_ID
+            );
             setSnapshot({
               application: {
                 id: "mock-application",

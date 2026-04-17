@@ -747,11 +747,15 @@ export default function ToolsPage() {
           userId?: string;
           isRequestLinked?: boolean;
         };
+        const isStoredTestAccount =
+          Boolean(parsed.isAuthenticated) &&
+          isTestAccountUser(parsed.userId, parsed.authEmail);
         setIsAuthenticated(Boolean(parsed.isAuthenticated));
         setAuthEmail(parsed.authEmail ?? "");
         setAuthName(parsed.authName ?? "");
         setUserId(parsed.userId ?? "");
         setIsRequestLinked(Boolean(parsed.isRequestLinked));
+        setHasTestAccess(isStoredTestAccount);
       } catch {
         window.localStorage.removeItem(AUTH_STORAGE_KEY);
       }
@@ -859,7 +863,7 @@ export default function ToolsPage() {
   }, [hasHydrated]);
 
   useEffect(() => {
-    if (!hasHydrated || !isTestAccountAuthenticated) {
+    if (!hasHydrated || !hasTestAccess) {
       return;
     }
 
@@ -882,14 +886,14 @@ export default function ToolsPage() {
     });
   }, [
     hasHydrated,
-    isTestAccountAuthenticated,
+    hasTestAccess,
     authName,
     testRemainingPosts,
   ]);
 
   useEffect(() => {
     if (!hasHydrated) return;
-    if (isTestAccountAuthenticated) return;
+    if (hasTestAccess) return;
 
     const supabase = getSupabaseBrowserClientOrNull();
     if (!supabase) {
@@ -962,7 +966,7 @@ export default function ToolsPage() {
       active = false;
       subscription.unsubscribe();
     };
-  }, [hasHydrated, postSubEmail, authEmail, isTestAccountAuthenticated]);
+  }, [hasHydrated, postSubEmail, authEmail, hasTestAccess]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1321,6 +1325,7 @@ export default function ToolsPage() {
           type: "post_image",
           usageMode: isFreeTrialGeneration ? "free_trial" : "premium",
           accessToken: accessToken || null,
+          isInternalTestAccount: isTestAccountAuthenticated,
           images: uploadedImages,
           userPrompt: postPrompt,
           instagramHandle: contextInstagramHandle.trim(),
