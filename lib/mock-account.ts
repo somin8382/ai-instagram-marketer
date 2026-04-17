@@ -37,14 +37,9 @@ export async function requestInternalTestLogin(input: {
 }) {
   const normalizedId = input.id.trim().toLowerCase();
   const normalizedPassword = input.password.trim();
-
-  if (
+  const isHardcodedTestCredential =
     normalizedId === TEST_ACCOUNT_EMAIL.toLowerCase() &&
-    normalizedPassword === TEST_ACCOUNT_PASSWORD
-  ) {
-    setLocalTestAccountAccess(true);
-    return { success: true as const };
-  }
+    normalizedPassword === TEST_ACCOUNT_PASSWORD;
 
   try {
     const response = await fetch("/api/internal-test-login", {
@@ -71,12 +66,27 @@ export async function requestInternalTestLogin(input: {
 
     return { success };
   } catch {
+    // Keep local-only fallback for fast local development.
+    // In production, require server session issuance so API routes can verify it.
+    if (
+      process.env.NODE_ENV !== "production" &&
+      isHardcodedTestCredential
+    ) {
+      setLocalTestAccountAccess(true);
+      return { success: true as const };
+    }
+
     return { success: false as const };
   }
 }
 
 export async function fetchTestAccountAccess() {
-  if (hasLocalTestAccountAccess()) {
+  // In production we must validate the signed server session cookie.
+  // Local storage alone is not enough for API authorization checks.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    hasLocalTestAccountAccess()
+  ) {
     return true;
   }
 
@@ -95,10 +105,19 @@ export async function fetchTestAccountAccess() {
 
     if (active) {
       setLocalTestAccountAccess(true);
+      return true;
     }
 
-    return active;
+    setLocalTestAccountAccess(false);
+    return false;
   } catch {
+    if (
+      process.env.NODE_ENV !== "production" &&
+      hasLocalTestAccountAccess()
+    ) {
+      return true;
+    }
+
     return false;
   }
 }
