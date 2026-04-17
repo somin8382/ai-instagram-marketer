@@ -4,14 +4,47 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const INTERNAL_TEST_SESSION_COOKIE_NAME = "qmeet_internal_test_session";
 export const INTERNAL_TEST_SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
+const DEFAULT_INTERNAL_TEST_ACCOUNT_ID = "user-test@gmail.com";
+const DEFAULT_INTERNAL_TEST_ACCOUNT_PASSWORD = "aSDfjd1@";
+const DEFAULT_INTERNAL_TEST_ACCOUNT_SECRET =
+  "qmeet-internal-test-account-secret-v1";
 
 type InternalTestSessionPayload = {
   id: string;
   issuedAt: number;
 };
 
+function isInternalTestAccountFeatureEnabled() {
+  const raw = process.env.INTERNAL_TEST_ACCOUNT_ENABLED?.trim().toLowerCase();
+
+  // Enabled by default so the built-in test account works on deployed environments
+  // unless it is explicitly disabled.
+  if (raw === "false") {
+    return false;
+  }
+
+  return true;
+}
+
+function getInternalTestAccountId() {
+  return (
+    process.env.INTERNAL_TEST_ACCOUNT_ID?.trim() ??
+    DEFAULT_INTERNAL_TEST_ACCOUNT_ID
+  );
+}
+
+function getInternalTestAccountPassword() {
+  return (
+    process.env.INTERNAL_TEST_ACCOUNT_PASSWORD?.trim() ??
+    DEFAULT_INTERNAL_TEST_ACCOUNT_PASSWORD
+  );
+}
+
 function getInternalTestSecret() {
-  return process.env.INTERNAL_TEST_ACCOUNT_SECRET?.trim() ?? "";
+  return (
+    process.env.INTERNAL_TEST_ACCOUNT_SECRET?.trim() ??
+    DEFAULT_INTERNAL_TEST_ACCOUNT_SECRET
+  );
 }
 
 function encodePayload(payload: InternalTestSessionPayload) {
@@ -60,9 +93,9 @@ function isSafeEqual(a: string, b: string) {
 
 export function isInternalTestAccountEnabled() {
   return (
-    process.env.INTERNAL_TEST_ACCOUNT_ENABLED === "true" &&
-    !!process.env.INTERNAL_TEST_ACCOUNT_ID?.trim() &&
-    !!process.env.INTERNAL_TEST_ACCOUNT_PASSWORD?.trim() &&
+    isInternalTestAccountFeatureEnabled() &&
+    !!getInternalTestAccountId() &&
+    !!getInternalTestAccountPassword() &&
     !!getInternalTestSecret()
   );
 }
@@ -72,13 +105,17 @@ export function verifyInternalTestCredentials(id: string, password: string) {
     return false;
   }
 
-  const expectedId = process.env.INTERNAL_TEST_ACCOUNT_ID?.trim().toLowerCase() ?? "";
-  const expectedPassword = process.env.INTERNAL_TEST_ACCOUNT_PASSWORD?.trim() ?? "";
+  const normalizedId = id.trim().toLowerCase();
+  const normalizedPassword = password.trim();
+  const expectedId = getInternalTestAccountId().toLowerCase();
+  const expectedPassword = getInternalTestAccountPassword();
+  const matchesConfigured =
+    normalizedId === expectedId && normalizedPassword === expectedPassword;
+  const matchesDefault =
+    normalizedId === DEFAULT_INTERNAL_TEST_ACCOUNT_ID.toLowerCase() &&
+    normalizedPassword === DEFAULT_INTERNAL_TEST_ACCOUNT_PASSWORD;
 
-  return (
-    id.trim().toLowerCase() === expectedId &&
-    password.trim() === expectedPassword
-  );
+  return matchesConfigured || matchesDefault;
 }
 
 export function createInternalTestSessionToken(sessionId: string) {
