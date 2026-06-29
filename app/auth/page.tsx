@@ -488,8 +488,9 @@ function AuthPageInner() {
 
     try {
       const supabase = getSupabaseBrowserClient();
+      const submittedEmail = signupEmail.trim();
       const { data, error } = await supabase.auth.signUp({
-        email: signupEmail.trim(),
+        email: submittedEmail,
         password: signupPassword,
         options: {
           data: {
@@ -501,7 +502,7 @@ function AuthPageInner() {
       if (error) {
         if (isDuplicateSignupError(error.message)) {
           setTab("login");
-          setLoginEmail(signupEmail.trim());
+          setLoginEmail(submittedEmail);
           setLoginPassword("");
           setAuthError(
             "이미 가입된 아이디(이메일)입니다. 로그인 탭에서 바로 로그인할 수 있습니다."
@@ -513,7 +514,7 @@ function AuthPageInner() {
       }
 
       if (!data.user || !data.session) {
-        setSignupPendingEmail(signupEmail.trim());
+        setSignupPendingEmail(submittedEmail);
         return;
       }
 
@@ -610,15 +611,8 @@ function AuthPageInner() {
                       </div>
                       <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
                         <p>메일함에서 인증 링크를 눌러 회원가입을 완료해주세요</p>
-                        <p>메일이 보이지 않으면 스팸함도 함께 확인해주세요</p>
-                        <p>
-                          보낸 사람 이름이 익숙하지 않을 수 있으니 제목과 발신 주소를
-                          함께 확인해주세요
-                        </p>
-                        <p>
-                          기본 인증 메일로 발송될 수 있으니 회원가입 인증 메일도 함께
-                          확인해주세요
-                        </p>
+                        <p>5분 내로 메일이 보이지 않으면 스팸함도 확인 부탁드립니다</p>
+                        <p>1대1 문의 : https://open.kakao.com/o/s0Viuxzi</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
