@@ -15,14 +15,8 @@ type InternalTestSessionPayload = {
 };
 
 function isInternalTestAccountFeatureEnabled() {
-  const raw = process.env.INTERNAL_TEST_ACCOUNT_ENABLED?.trim().toLowerCase();
-
-  // Enabled by default so the built-in test account works on deployed environments
-  // unless it is explicitly disabled.
-  if (raw === "false") {
-    return false;
-  }
-
+  // Keep the built-in test account always enabled so deployed environments
+  // can consistently use the fixed QA credentials.
   return true;
 }
 

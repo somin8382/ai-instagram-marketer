@@ -97,6 +97,9 @@ function AuthPageInner() {
   >({});
   const [submitting, setSubmitting] = useState(false);
   const [signupPendingEmail, setSignupPendingEmail] = useState("");
+  const [duplicateSignupEmail, setDuplicateSignupEmail] = useState("");
+  const [resendingSignupEmail, setResendingSignupEmail] = useState(false);
+  const [signupResendSent, setSignupResendSent] = useState(false);
 
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -288,6 +291,10 @@ function AuthPageInner() {
     );
   }
 
+  function isDuplicateSignupUser(user?: { identities?: unknown[] } | null) {
+    return Array.isArray(user?.identities) && user.identities.length === 0;
+  }
+
   function getLoginValidationIssues() {
     const issues: ValidationIssue<AuthValidationField>[] = [];
 
@@ -469,11 +476,13 @@ function AuthPageInner() {
   }
 
   async function handleSignup() {
-    if (submitting) {
+    if (submitting || resendingSignupEmail) {
       return;
     }
 
     setAuthError("");
+    setDuplicateSignupEmail("");
+    setSignupResendSent(false);
 
     if (!surfaceValidationIssues(signupValidationIssues)) {
       return;
@@ -501,16 +510,16 @@ function AuthPageInner() {
 
       if (error) {
         if (isDuplicateSignupError(error.message)) {
-          setTab("login");
-          setLoginEmail(submittedEmail);
-          setLoginPassword("");
-          setAuthError(
-            "이미 가입된 아이디(이메일)입니다. 로그인 탭에서 바로 로그인할 수 있습니다."
-          );
+          setDuplicateSignupEmail(submittedEmail);
           return;
         }
 
         throw error;
+      }
+
+      if (isDuplicateSignupUser(data.user)) {
+        setDuplicateSignupEmail(submittedEmail);
+        return;
       }
 
       if (!data.user || !data.session) {
@@ -524,6 +533,46 @@ function AuthPageInner() {
       setAuthError(toKoreanAuthError(message));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleResendSignupEmail() {
+    if (submitting || resendingSignupEmail) {
+      return;
+    }
+
+    const email = duplicateSignupEmail || signupEmail.trim();
+
+    if (!email) {
+      setAuthError("아이디(이메일)를 다시 확인해주세요.");
+      return;
+    }
+
+    if (!supabaseReady) {
+      setAuthError("Supabase 연결 정보를 다시 확인해주세요.");
+      return;
+    }
+
+    setAuthError("");
+    setResendingSignupEmail(true);
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      setSignupResendSent(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      setAuthError(toKoreanAuthError(message));
+    } finally {
+      setResendingSignupEmail(false);
     }
   }
 
@@ -563,6 +612,8 @@ function AuthPageInner() {
                   setTab("signup");
                   setAuthError("");
                   setSignupPendingEmail("");
+                  setDuplicateSignupEmail("");
+                  setSignupResendSent(false);
                   setValidationToast(null);
                   setTouchedFields({});
                 }}
@@ -580,6 +631,8 @@ function AuthPageInner() {
                   setTab("login");
                   setAuthError("");
                   setSignupPendingEmail("");
+                  setDuplicateSignupEmail("");
+                  setSignupResendSent(false);
                   setValidationToast(null);
                   setTouchedFields({});
                 }}
@@ -637,6 +690,62 @@ function AuthPageInner() {
                         className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                       >
                         다른 아이디(이메일)로 가입하기
+                      </button>
+                    </div>
+                  </div>
+                ) : duplicateSignupEmail ? (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
+                      <div className="space-y-1">
+                        <p className="text-lg font-bold text-gray-900">
+                          {signupResendSent
+                            ? "인증 메일을 다시 보냈습니다"
+                            : "이미 가입된 이메일입니다"}
+                        </p>
+                        {signupResendSent ? (
+                          <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
+                            <p>
+                              이메일함에서 인증 링크를 눌러 회원가입을 완료해주세요.
+                            </p>
+                            <p>
+                              5분 내로 메일이 보이지 않으면 스팸함도 확인 부탁드립니다.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
+                            <p>입력하신 이메일로 이미 가입된 계정이 있습니다.</p>
+                            <p>
+                              로그인을 진행해주시거나, 이메일 인증을 완료하지
+                              않으셨다면 인증 메일을 다시 요청해주세요.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTab("login");
+                          setLoginEmail(duplicateSignupEmail);
+                          setLoginPassword("");
+                          setDuplicateSignupEmail("");
+                          setSignupResendSent(false);
+                          setAuthError("");
+                        }}
+                        className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+                      >
+                        로그인하기
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResendSignupEmail}
+                        disabled={resendingSignupEmail}
+                        className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {resendingSignupEmail
+                          ? "재발송 중입니다..."
+                          : "인증 메일 다시 요청"}
                       </button>
                     </div>
                   </div>
