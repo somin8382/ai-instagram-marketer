@@ -99,7 +99,6 @@ function AuthPageInner() {
   const [signupPendingEmail, setSignupPendingEmail] = useState("");
   const [duplicateSignupEmail, setDuplicateSignupEmail] = useState("");
   const [resendingSignupEmail, setResendingSignupEmail] = useState(false);
-  const [signupResendSent, setSignupResendSent] = useState(false);
 
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -201,7 +200,7 @@ function AuthPageInner() {
     } = await supabase.auth.getUser();
 
     if (error || !user) {
-      throw new Error("로그인 정보를 확인하지 못했습니다. 다시 시도해주세요.");
+      throw new Error("로그인 정보를 확인하지 못했습니다. 다시 로그인해주세요.");
     }
 
     await syncProfileAndLinkData({
@@ -256,7 +255,7 @@ function AuthPageInner() {
 
   function toKoreanAuthError(message?: string) {
     if (!message) {
-      return "잠시 후 다시 시도해주세요.";
+      return "잠시 후 다시 진행해주세요.";
     }
 
     if (message.includes("Invalid login credentials")) {
@@ -275,7 +274,7 @@ function AuthPageInner() {
       return "아이디(이메일) 인증이 아직 완료되지 않았습니다. 메일함의 인증 링크를 눌러주세요.";
     }
 
-    return "인증 처리 중 문제가 발생했습니다. 다시 시도해주세요.";
+    return "인증 요청 처리 중 오류가 발생했습니다. 네트워크 상태를 확인해주세요.";
   }
 
   function isDuplicateSignupError(message?: string) {
@@ -303,7 +302,29 @@ function AuthPageInner() {
     return timestamp < signupRequestedAt - 5000;
   }
 
-  function isDuplicateSignupUser(
+  function isCompletedSignupUser(
+    user:
+      | {
+          confirmed_at?: string;
+          email_confirmed_at?: string;
+          identities?: unknown[];
+        }
+      | null
+  ) {
+    if (!user) return false;
+
+    if (Array.isArray(user.identities) && user.identities.length === 0) {
+      return true;
+    }
+
+    if (user.confirmed_at || user.email_confirmed_at) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function isExistingUnconfirmedSignupUser(
     user:
       | {
           confirmed_at?: string;
@@ -315,15 +336,7 @@ function AuthPageInner() {
       | null,
     signupRequestedAt: number
   ) {
-    if (!user) return false;
-
-    if (Array.isArray(user.identities) && user.identities.length === 0) {
-      return true;
-    }
-
-    if (user.confirmed_at || user.email_confirmed_at) {
-      return true;
-    }
+    if (!user || isCompletedSignupUser(user)) return false;
 
     return (
       isTimestampBeforeSignupRequest(
@@ -520,7 +533,6 @@ function AuthPageInner() {
 
     setAuthError("");
     setDuplicateSignupEmail("");
-    setSignupResendSent(false);
 
     if (!surfaceValidationIssues(signupValidationIssues)) {
       return;
@@ -536,6 +548,7 @@ function AuthPageInner() {
     try {
       const supabase = getSupabaseBrowserClient();
       const submittedEmail = signupEmail.trim();
+      // eslint-disable-next-line react-hooks/purity
       const signupRequestedAt = Date.now();
       const { data, error } = await supabase.auth.signUp({
         email: submittedEmail,
@@ -557,9 +570,19 @@ function AuthPageInner() {
         throw error;
       }
 
-      if (isDuplicateSignupUser(data.user, signupRequestedAt)) {
+      if (isCompletedSignupUser(data.user)) {
         setSignupPendingEmail("");
         setDuplicateSignupEmail(submittedEmail);
+        return;
+      }
+
+      if (isExistingUnconfirmedSignupUser(data.user, signupRequestedAt)) {
+        const resendSucceeded = await resendSignupConfirmation(submittedEmail);
+
+        if (resendSucceeded) {
+          setSignupPendingEmail(submittedEmail);
+        }
+
         return;
       }
 
@@ -577,24 +600,9 @@ function AuthPageInner() {
     }
   }
 
-  async function handleResendSignupEmail() {
-    if (submitting || resendingSignupEmail) {
-      return;
-    }
-
-    const email = duplicateSignupEmail || signupEmail.trim();
-
-    if (!email) {
-      setAuthError("아이디(이메일)를 다시 확인해주세요.");
-      return;
-    }
-
-    if (!supabaseReady) {
-      setAuthError("Supabase 연결 정보를 다시 확인해주세요.");
-      return;
-    }
-
+  async function resendSignupConfirmation(email: string) {
     setAuthError("");
+    setSignupPendingEmail(email);
     setResendingSignupEmail(true);
 
     try {
@@ -608,10 +616,11 @@ function AuthPageInner() {
         throw error;
       }
 
-      setSignupResendSent(true);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       setAuthError(toKoreanAuthError(message));
+      return false;
     } finally {
       setResendingSignupEmail(false);
     }
@@ -654,7 +663,6 @@ function AuthPageInner() {
                   setAuthError("");
                   setSignupPendingEmail("");
                   setDuplicateSignupEmail("");
-                  setSignupResendSent(false);
                   setValidationToast(null);
                   setTouchedFields({});
                 }}
@@ -673,7 +681,6 @@ function AuthPageInner() {
                   setAuthError("");
                   setSignupPendingEmail("");
                   setDuplicateSignupEmail("");
-                  setSignupResendSent(false);
                   setValidationToast(null);
                   setTouchedFields({});
                 }}
@@ -694,31 +701,18 @@ function AuthPageInner() {
                     <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
                       <div className="space-y-1">
                         <p className="text-lg font-bold text-gray-900">
-                          {signupResendSent
-                            ? "인증 메일을 다시 보냈습니다"
-                            : "이미 가입된 이메일입니다"}
+                          이미 가입된 이메일입니다
                         </p>
-                        {signupResendSent ? (
-                          <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
-                            <p>
-                              이메일함에서 인증 링크를 눌러 회원가입을 완료해주세요.
-                            </p>
-                            <p>
-                              5분 내로 메일이 보이지 않으면 스팸함도 확인 부탁드립니다.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
-                            <p>입력하신 이메일로 이미 가입된 계정이 있습니다.</p>
-                            <p>
-                              로그인을 진행해주시거나, 이메일 인증을 완료하지
-                              않으셨다면 인증 메일을 다시 요청해주세요.
-                            </p>
-                          </div>
-                        )}
+                        <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
+                          <p>
+                            입력하신 이메일로 이미 가입된 계정이 있습니다.
+                            로그인을 진행해주시거나 다른 이메일로
+                            회원가입해주세요.
+                          </p>
+                        </div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <button
                         type="button"
                         onClick={() => {
@@ -726,7 +720,6 @@ function AuthPageInner() {
                           setLoginEmail(duplicateSignupEmail);
                           setLoginPassword("");
                           setDuplicateSignupEmail("");
-                          setSignupResendSent(false);
                           setAuthError("");
                         }}
                         className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
@@ -735,19 +728,8 @@ function AuthPageInner() {
                       </button>
                       <button
                         type="button"
-                        onClick={handleResendSignupEmail}
-                        disabled={resendingSignupEmail}
-                        className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {resendingSignupEmail
-                          ? "재발송 중입니다..."
-                          : "인증 메일 다시 보내기"}
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => {
                           setDuplicateSignupEmail("");
-                          setSignupResendSent(false);
                           setAuthError("");
                         }}
                         className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -761,18 +743,18 @@ function AuthPageInner() {
                     <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
                       <div className="space-y-1">
                         <p className="text-lg font-bold text-gray-900">
-                          아이디(이메일) 인증이 필요합니다
+                          인증 메일을 다시 보냈습니다.
                         </p>
                         <p className="text-sm text-gray-600">
-                          입력하신 아이디(이메일)로 인증 메일을 보냈습니다
+                          입력하신 이메일로 인증 메일을 다시 발송했습니다.
                         </p>
                         <p className="text-sm font-medium text-violet-700">
                           {signupPendingEmail}
                         </p>
                       </div>
                       <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
-                        <p>메일함에서 인증 링크를 눌러 회원가입을 완료해주세요</p>
-                        <p>5분 내로 메일이 보이지 않으면 스팸함도 확인 부탁드립니다</p>
+                        <p>이메일함에서 인증 링크를 눌러 회원가입을 완료해주세요.</p>
+                        <p>5분 내로 메일이 보이지 않으면 스팸함도 확인 부탁드립니다.</p>
                         <p>1대1 문의 : https://open.kakao.com/o/s0Viuxzi</p>
                       </div>
                     </div>
