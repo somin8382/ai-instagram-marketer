@@ -12,6 +12,9 @@ export type RequiredValidationRule<Field extends string> = {
 export type ApplicationValidationField =
   | "selectedPlan"
   | "selectedDuration"
+  | "marketingChannel"
+  | "channelUrl"
+  | "mainContentUrl"
   | "instagramId"
   | "industry"
   | "productService"
@@ -29,6 +32,10 @@ export type GeneratedPostPersistenceField =
 
 export function isBlank(value?: string | null) {
   return !value?.trim();
+}
+
+export function isValidHttpUrl(value?: string | null) {
+  return /^https?:\/\//i.test(value?.trim() ?? "");
 }
 
 export function collectValidationIssues<Field extends string>(
@@ -74,6 +81,9 @@ export function isValidDurationSelection(value?: number | null): value is 1 | 2 
 export function getApplicationValidationIssues(input: {
   selectedPlan?: number | null;
   selectedDuration?: number | null;
+  marketingChannel?: string | null;
+  channelUrl?: string | null;
+  mainContentUrl?: string | null;
   instagramId?: string | null;
   industry?: string | null;
   productService?: string | null;
@@ -96,9 +106,39 @@ export function getApplicationValidationIssues(input: {
       isMissing: !isValidDurationSelection(input.selectedDuration),
     },
     {
+      field: "marketingChannel",
+      message: "마케팅할 채널을 선택해주세요",
+      isMissing:
+        input.marketingChannel !== "instagram" &&
+        input.marketingChannel !== "youtube",
+    },
+    {
+      field: "channelUrl",
+      message: "채널 URL을 입력해주세요",
+      isMissing: isBlank(input.channelUrl),
+    },
+    {
+      field: "channelUrl",
+      message: "채널 URL은 http:// 또는 https://로 시작해야 합니다",
+      isMissing: !isBlank(input.channelUrl) && !isValidHttpUrl(input.channelUrl),
+    },
+    {
+      field: "mainContentUrl",
+      message: "대표 URL을 입력해주세요",
+      isMissing: isBlank(input.mainContentUrl),
+    },
+    {
+      field: "mainContentUrl",
+      message: "대표 URL은 http:// 또는 https://로 시작해야 합니다",
+      isMissing:
+        !isBlank(input.mainContentUrl) &&
+        !isValidHttpUrl(input.mainContentUrl),
+    },
+    {
       field: "instagramId",
       message: "인스타그램 아이디를 입력해주세요",
-      isMissing: isBlank(input.instagramId),
+      isMissing:
+        input.marketingChannel !== "youtube" && isBlank(input.instagramId),
     },
     {
       field: "industry",

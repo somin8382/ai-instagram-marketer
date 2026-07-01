@@ -11,6 +11,7 @@ import {
   getIssueFields,
   isValidDurationSelection,
   isBlank,
+  isValidHttpUrl,
   isValidPlanSelection,
   type ApplicationValidationField,
   type ValidationIssue,
@@ -60,16 +61,20 @@ import {
 
 type Step =
   | "landing"
+  | "channel"
   | "account-check"
   | "input"
   | "result"
   | "names"
   | "confirm"
+  | "channel-materials"
   | "payment"
   | "status"
   | "postgen"
   | "postsub-payment"
   | "postsub-status";
+
+type MarketingChannel = "instagram" | "youtube";
 
 type ApplicationLifecycleStatus =
   | "idle"
@@ -122,6 +127,66 @@ type HomeValidationField =
   | "postSubBusinessAddress"
   | "postSubBusinessType"
   | "postSubInvoiceEmail";
+
+const MARKETING_CHANNEL_OPTIONS: Array<{
+  value: MarketingChannel;
+  label: string;
+  icon: string;
+  description: string;
+}> = [
+  {
+    value: "instagram",
+    label: "인스타그램",
+    icon: "📱",
+    description:
+      "제품을 '보는 순간 사고 싶게' 만드는 채널 (브랜드·감성·바이럴)",
+  },
+  {
+    value: "youtube",
+    label: "유튜브",
+    icon: "▶",
+    description:
+      "제품을 '이해하고 신뢰하게' 만드는 채널 (설명·검색·신뢰)",
+  },
+];
+
+const CHANNEL_COMPARISON_ROWS = [
+  ["10~30대 비중이 높은 소비재", "전 연령 대상 서비스"],
+  [
+    "굿즈, 캐릭터, 뷰티, 패션, 카페, 음식",
+    "B2B, B2G, SaaS, 교육, 의료, 제조",
+  ],
+  [
+    "감성과 브랜드 이미지를 전달해야 하는 경우",
+    "전문성과 신뢰를 전달해야 하는 경우",
+  ],
+  [
+    "팬을 만들고 팔로워를 늘리고 싶은 경우",
+    "서비스를 이해시키고 설득해야 하는 경우",
+  ],
+  ["충동구매가 많은 상품", "구매 결정까지 시간이 오래 걸리는 상품"],
+  ["릴스 중심의 바이럴이 중요한 경우", "검색과 누적 조회가 중요한 경우"],
+] as const;
+
+const CHANNEL_MATERIAL_VALIDATION_FIELDS = new Set<HomeValidationField>([
+  "marketingChannel",
+  "channelUrl",
+  "mainContentUrl",
+]);
+
+const CUSTOM_INDUSTRY_OPTION = "__custom__";
+
+const INDUSTRY_OPTIONS = [
+  "뷰티/패션",
+  "카페/음식(F&B)",
+  "굿즈/캐릭터",
+  "교육/에듀테크",
+  "IT/SaaS/정보통신",
+  "의료/헬스케어",
+  "제조",
+  "로컬/소상공인",
+  "B2B·B2G 서비스",
+] as const;
 
 type OutcomeMetricKey = "followers" | "likes" | "comments";
 
@@ -176,9 +241,9 @@ const OUTCOME_META: Array<{
 
 function getPrice(plan: number, duration: number): number {
   if (plan === 1 && duration === 1) return 300000;
-  if (plan === 1 && duration === 2) return 500000;
-  if (plan === 2 && duration === 1) return 500000;
-  if (plan === 2 && duration === 2) return 800000;
+  if (plan === 1 && duration === 2) return 600000;
+  if (plan === 2 && duration === 1) return 550000;
+  if (plan === 2 && duration === 2) return 1000000;
   return 300000;
 }
 
@@ -235,6 +300,45 @@ function formatOutcomeDiff(metric: OutcomeMetricKey, value: number): string {
   }
 
   return `+${value.toLocaleString()}개 이상`;
+}
+
+function isMarketingChannel(value?: string | null): value is MarketingChannel {
+  return value === "instagram" || value === "youtube";
+}
+
+function normalizeInstagramHandle(handle?: string | null) {
+  return (handle ?? "").trim().replace(/^@+/, "").replace(/\s+/g, "");
+}
+
+function buildInstagramPageUrl(handle?: string | null) {
+  const normalizedHandle = normalizeInstagramHandle(handle);
+  return normalizedHandle
+    ? `https://www.instagram.com/${normalizedHandle}`
+    : "";
+}
+
+function getResolvedChannelUrl(
+  channel: MarketingChannel | "",
+  instagramHandle: string,
+  currentChannelUrl: string
+) {
+  if (channel === "instagram") {
+    return buildInstagramPageUrl(instagramHandle);
+  }
+
+  return currentChannelUrl.trim();
+}
+
+function getIndustrySelectionFromValue(value?: string | null) {
+  const normalized = value?.trim() ?? "";
+
+  if (!normalized) {
+    return "";
+  }
+
+  return (INDUSTRY_OPTIONS as readonly string[]).includes(normalized)
+    ? normalized
+    : CUSTOM_INDUSTRY_OPTION;
 }
 
 function buildGeneratedPostSignature(post: GeneratedPost): string {
@@ -321,8 +425,7 @@ function buildTestAccountSubscription(
 }
 
 function getServiceFlowProgress(
-  step: Step,
-  hasAccount: boolean | null
+  step: Step
 ): { current: number; total: number } | null {
   if (step === "landing" || step === "postgen") {
     return null;
@@ -336,26 +439,34 @@ function getServiceFlowProgress(
     return { current: 2, total: 2 };
   }
 
-  const total = 5;
+  const total = 6;
 
-  if (step === "account-check") {
+  if (step === "channel") {
     return { current: 1, total };
   }
 
-  if (step === "input") {
+  if (step === "account-check") {
     return { current: 2, total };
   }
 
-  if (step === "result") {
+  if (step === "input") {
     return { current: 3, total };
   }
 
+  if (step === "result") {
+    return { current: 4, total };
+  }
+
   if (step === "names" || step === "confirm") {
-    return { current: hasAccount ? 3 : 4, total };
+    return { current: 4, total };
+  }
+
+  if (step === "channel-materials") {
+    return { current: 5, total };
   }
 
   if (step === "payment" || step === "status") {
-    return { current: 5, total };
+    return { current: total, total };
   }
 
   return null;
@@ -400,6 +511,7 @@ function InputField({
   error,
   fieldKey,
   theme = "rose",
+  readOnly = false,
 }: {
   label: string;
   value: string;
@@ -411,6 +523,7 @@ function InputField({
   error?: string;
   fieldKey?: string;
   theme?: "rose" | "violet";
+  readOnly?: boolean;
 }) {
   return (
     <div className="space-y-1.5">
@@ -424,12 +537,13 @@ function InputField({
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
         placeholder={placeholder}
+        readOnly={readOnly}
         data-validation-field={fieldKey}
         aria-invalid={Boolean(error)}
-        className={getTextFieldClass({
+        className={`${getTextFieldClass({
           theme,
           hasError: Boolean(error),
-        })}
+        })}${readOnly ? " bg-gray-50 text-gray-600 cursor-default" : ""}`}
       />
       {error && <p className={getHelperTextClass(theme)}>{error}</p>}
     </div>
@@ -579,10 +693,16 @@ export default function Home() {
   const router = useRouter();
   const [step, setStep] = useState<Step>("landing");
   const [hasAccount, setHasAccount] = useState<boolean | null>(null);
+  const [marketingChannel, setMarketingChannel] = useState<MarketingChannel | "">(
+    ""
+  );
+  const [channelUrl, setChannelUrl] = useState("");
+  const [mainContentUrl, setMainContentUrl] = useState("");
 
   // Input
   const [instagramId, setInstagramId] = useState("");
   const [industry, setIndustry] = useState("");
+  const [industrySelection, setIndustrySelection] = useState("");
   const [productService, setProductService] = useState("");
 
   // AI
@@ -677,6 +797,13 @@ export default function Home() {
   ].map((item) => item.replace(/\s+/g, " ").trim());
 
   const effectiveInstagramId = hasAccount ? instagramId : finalInstagramId;
+  const isYoutubeChannel = marketingChannel === "youtube";
+  const channelDisplayName = isYoutubeChannel ? "유튜브" : "인스타그램";
+  const resolvedChannelUrl = getResolvedChannelUrl(
+    marketingChannel,
+    effectiveInstagramId,
+    channelUrl
+  );
   const mergedGeneratedPosts = mergeGeneratedPostHistory(
     generatedPosts,
     savedGeneratedPosts
@@ -789,10 +916,14 @@ export default function Home() {
   });
 
   function hasPlanningInput() {
+    const hasRequiredChannelInput = isYoutubeChannel
+      ? isValidHttpUrl(channelUrl)
+      : hasAccount !== true || !!instagramId.trim();
+
     return (
       !!industry.trim() &&
       !!productService.trim() &&
-      (hasAccount !== true || !!instagramId.trim())
+      hasRequiredChannelInput
     );
   }
 
@@ -801,11 +932,23 @@ export default function Home() {
   }
 
   function hasRecommendedNames() {
-    return !hasAccount && Boolean(aiResult?.accountNames?.length);
+    return (
+      marketingChannel === "instagram" &&
+      !hasAccount &&
+      Boolean(aiResult?.accountNames?.length)
+    );
   }
 
   function hasPaymentPrerequisites() {
-    return hasPlanningOutput() && !!effectiveInstagramId.trim();
+    if (!hasPlanningOutput()) {
+      return false;
+    }
+
+    if (isYoutubeChannel) {
+      return isValidHttpUrl(resolvedChannelUrl);
+    }
+
+    return !!effectiveInstagramId.trim();
   }
 
   function hasSubmittedApplication() {
@@ -824,7 +967,21 @@ export default function Home() {
       {
         field: "instagramId",
         message: "인스타그램 아이디를 입력해주세요",
-        isMissing: Boolean(hasAccount) && isBlank(instagramId),
+        isMissing:
+          marketingChannel === "instagram" &&
+          Boolean(hasAccount) &&
+          isBlank(instagramId),
+      },
+      {
+        field: "channelUrl",
+        message: "유튜브 채널 URL을 입력해주세요",
+        isMissing: isYoutubeChannel && isBlank(channelUrl),
+      },
+      {
+        field: "channelUrl",
+        message: "유튜브 채널 URL은 http:// 또는 https://로 시작해야 합니다",
+        isMissing:
+          isYoutubeChannel && !isBlank(channelUrl) && !isValidHttpUrl(channelUrl),
       },
       {
         field: "industry",
@@ -885,6 +1042,9 @@ export default function Home() {
     return getApplicationValidationIssues({
       selectedPlan,
       selectedDuration,
+      marketingChannel,
+      channelUrl: resolvedChannelUrl,
+      mainContentUrl,
       instagramId: effectiveInstagramId,
       industry,
       productService,
@@ -895,6 +1055,12 @@ export default function Home() {
       isExpress,
       completionDate,
     });
+  }
+
+  function getChannelMaterialsValidationIssues() {
+    return getPaymentValidationIssues().filter((issue) =>
+      CHANNEL_MATERIAL_VALIDATION_FIELDS.has(issue.field)
+    );
   }
 
   function getPostGenerationValidationIssues() {
@@ -978,6 +1144,7 @@ export default function Home() {
   const namesValidationIssues = getNamesStepValidationIssues();
   const confirmValidationIssues = getConfirmValidationIssues();
   const paymentValidationIssues = getPaymentValidationIssues();
+  const channelMaterialsValidationIssues = getChannelMaterialsValidationIssues();
   const postGenerationValidationIssues = getPostGenerationValidationIssues();
   const postSubscriptionPaymentValidationIssues =
     getPostSubscriptionPaymentValidationIssues();
@@ -995,6 +1162,11 @@ export default function Home() {
   const productServiceError = getFieldError(
     planningValidationIssues,
     "productService",
+    touchedFields
+  );
+  const planningChannelUrlError = getFieldError(
+    planningValidationIssues,
+    "channelUrl",
     touchedFields
   );
   const finalInstagramIdError = getFieldError(
@@ -1035,6 +1207,21 @@ export default function Home() {
   const completionDateError = getFieldError(
     paymentValidationIssues,
     "completionDate",
+    touchedFields
+  );
+  const marketingChannelError = getFieldError(
+    channelMaterialsValidationIssues,
+    "marketingChannel",
+    touchedFields
+  );
+  const channelUrlError = getFieldError(
+    channelMaterialsValidationIssues,
+    "channelUrl",
+    touchedFields
+  );
+  const mainContentUrlError = getFieldError(
+    channelMaterialsValidationIssues,
+    "mainContentUrl",
     touchedFields
   );
   const postInputError = getFieldError(
@@ -1097,6 +1284,7 @@ export default function Home() {
   const isResultNextReady = resultValidationIssues.length === 0;
   const isNamesNextReady = namesValidationIssues.length === 0;
   const isConfirmReady = confirmValidationIssues.length === 0;
+  const isChannelMaterialsReady = channelMaterialsValidationIssues.length === 0;
   const isPaymentSubmitReady = paymentValidationIssues.length === 0;
   const isPostGenerationReady = postGenerationValidationIssues.length === 0;
   const isPostSubscriptionPaymentReady =
@@ -1105,6 +1293,7 @@ export default function Home() {
   function getSafeStep(nextStep: Step): Step {
     switch (nextStep) {
       case "landing":
+      case "channel":
       case "postgen":
         return nextStep;
       case "postsub-payment":
@@ -1116,16 +1305,22 @@ export default function Home() {
         if (!postSubSubmitted) return "postsub-payment";
         return "postsub-status";
       case "account-check":
-        return "account-check";
+        return marketingChannel ? "account-check" : "channel";
       case "input":
+        if (!marketingChannel) return "channel";
         return hasAccount === null ? "account-check" : "input";
       case "result":
+        if (!marketingChannel) return "channel";
         return hasAccount === null
           ? "account-check"
           : hasPlanningInput() || loading || aiError
             ? "result"
             : "input";
       case "names":
+        if (!marketingChannel) return "channel";
+        if (isYoutubeChannel) {
+          return hasPlanningOutput() ? "channel-materials" : "input";
+        }
         return hasRecommendedNames()
           ? "names"
           : hasPlanningOutput()
@@ -1134,6 +1329,10 @@ export default function Home() {
               ? "account-check"
               : "input";
       case "confirm":
+        if (!marketingChannel) return "channel";
+        if (isYoutubeChannel) {
+          return hasPlanningOutput() ? "channel-materials" : "input";
+        }
         return hasRecommendedNames()
           ? "confirm"
           : hasPlanningOutput()
@@ -1141,14 +1340,22 @@ export default function Home() {
             : hasAccount === null
               ? "account-check"
               : "input";
+      case "channel-materials":
+        if (!marketingChannel) return "channel";
+        if (hasPaymentPrerequisites()) return "channel-materials";
+        if (hasRecommendedNames() && !hasAccount) return "confirm";
+        if (hasPlanningOutput()) return "result";
+        return hasAccount === null ? "account-check" : "input";
       case "payment":
-        if (hasPaymentPrerequisites()) return "payment";
+        if (hasPaymentPrerequisites() && isChannelMaterialsReady) return "payment";
+        if (hasPaymentPrerequisites()) return "channel-materials";
         if (hasRecommendedNames() && !hasAccount) return "confirm";
         if (hasPlanningOutput()) return "result";
         return hasAccount === null ? "account-check" : "input";
       case "status":
         if (hasSubmittedApplication()) return "status";
-        if (hasPaymentPrerequisites()) return "payment";
+        if (hasPaymentPrerequisites() && isChannelMaterialsReady) return "payment";
+        if (hasPaymentPrerequisites()) return "channel-materials";
         if (hasRecommendedNames() && !hasAccount) return "confirm";
         if (hasPlanningOutput()) return "result";
         return hasAccount === null ? "account-check" : "input";
@@ -1163,8 +1370,10 @@ export default function Home() {
 
   function getPreviousStep(currentStep: Step): Step {
     switch (currentStep) {
-      case "account-check":
+      case "channel":
         return "landing";
+      case "account-check":
+        return "channel";
       case "input":
         return "account-check";
       case "result":
@@ -1173,8 +1382,10 @@ export default function Home() {
         return "result";
       case "confirm":
         return "names";
+      case "channel-materials":
+        return hasAccount || isYoutubeChannel ? "result" : "confirm";
       case "payment":
-        return hasAccount ? "result" : "confirm";
+        return "channel-materials";
       case "status":
         return hasPaymentPrerequisites() ? "payment" : "landing";
       case "postgen":
@@ -1201,10 +1412,12 @@ export default function Home() {
     router.push(`/auth?${params.toString()}`);
   }
 
-  function moveToPayment(nextInstagramId?: string) {
+  function moveToChannelMaterials(nextInstagramId?: string) {
     const issues = [
       ...getResultStepValidationIssues(),
-      ...(hasAccount ? [] : getConfirmValidationIssues(nextInstagramId)),
+      ...(marketingChannel === "instagram" && !hasAccount
+        ? getConfirmValidationIssues(nextInstagramId)
+        : []),
     ];
 
     if (!surfaceValidationIssues(issues)) {
@@ -1215,11 +1428,19 @@ export default function Home() {
       setFinalInstagramId(nextInstagramId);
     }
 
+    if (marketingChannel === "instagram") {
+      setChannelUrl(
+        buildInstagramPageUrl(
+          typeof nextInstagramId === "string" ? nextInstagramId : effectiveInstagramId
+        )
+      );
+    }
+
     if (isExpress && !completionDate) {
       setCompletionDate(getDefaultCompletionDate(selectedDuration));
     }
 
-    goToStep("payment");
+    goToStep("channel-materials");
   }
 
   function handleResultNext() {
@@ -1227,8 +1448,8 @@ export default function Home() {
       return;
     }
 
-    if (hasAccount) {
-      moveToPayment(instagramId);
+    if (hasAccount || isYoutubeChannel) {
+      moveToChannelMaterials(isYoutubeChannel ? undefined : instagramId);
       return;
     }
 
@@ -1243,8 +1464,16 @@ export default function Home() {
     goToStep("confirm");
   }
 
+  function handleChannelMaterialsNext() {
+    if (!surfaceValidationIssues(channelMaterialsValidationIssues)) {
+      return;
+    }
+
+    goToStep("payment");
+  }
+
   const activeStep = hasHydrated ? getSafeStep(step) : step;
-  const serviceFlowProgress = getServiceFlowProgress(activeStep, hasAccount);
+  const serviceFlowProgress = getServiceFlowProgress(activeStep);
 
   /* ─── Handlers ─── */
 
@@ -1260,7 +1489,11 @@ export default function Home() {
           hasAccount?: boolean | null;
           instagramId?: string;
           industry?: string;
+          industrySelection?: string;
           productService?: string;
+          marketingChannel?: string;
+          channelUrl?: string;
+          mainContentUrl?: string;
           aiResult?: AiResult | null;
           step?: Step;
           finalInstagramId?: string;
@@ -1314,7 +1547,22 @@ export default function Home() {
         }
         setInstagramId(parsed.instagramId ?? "");
         setIndustry(parsed.industry ?? "");
+        setIndustrySelection(
+          parsed.industrySelection === CUSTOM_INDUSTRY_OPTION ||
+            (INDUSTRY_OPTIONS as readonly string[]).includes(
+              parsed.industrySelection ?? ""
+            )
+            ? parsed.industrySelection ?? ""
+            : getIndustrySelectionFromValue(parsed.industry)
+        );
         setProductService(parsed.productService ?? "");
+        setMarketingChannel(
+          isMarketingChannel(parsed.marketingChannel)
+            ? parsed.marketingChannel
+            : ""
+        );
+        setChannelUrl(parsed.channelUrl ?? "");
+        setMainContentUrl(parsed.mainContentUrl ?? "");
         setAiResult(parsed.aiResult ?? null);
         setFinalInstagramId(parsed.finalInstagramId ?? "");
         if (isValidPlanSelection(parsed.selectedPlan)) {
@@ -1508,7 +1756,11 @@ export default function Home() {
         hasAccount,
         instagramId,
         industry,
+        industrySelection,
         productService,
+        marketingChannel,
+        channelUrl,
+        mainContentUrl,
         aiResult,
         finalInstagramId,
         selectedPlan,
@@ -1582,7 +1834,11 @@ export default function Home() {
     hasAccount,
     instagramId,
     industry,
+    industrySelection,
     productService,
+    marketingChannel,
+    channelUrl,
+    mainContentUrl,
     aiResult,
     finalInstagramId,
     selectedPlan,
@@ -1714,11 +1970,22 @@ export default function Home() {
     const hasInput =
       !!industry.trim() &&
       !!productService.trim() &&
-      (hasAccount !== true || !!instagramId.trim());
+      (isYoutubeChannel
+        ? isValidHttpUrl(channelUrl)
+        : hasAccount !== true || !!instagramId.trim());
     const hasOutput = Boolean(aiResult?.accountPlan && hasInput);
-    const hasNames = !hasAccount && Boolean(aiResult?.accountNames?.length);
+    const hasNames =
+      marketingChannel === "instagram" &&
+      !hasAccount &&
+      Boolean(aiResult?.accountNames?.length);
     const hasInstagramHandle = !!effectiveInstagramId.trim();
-    const hasPaymentReady = hasOutput && hasInstagramHandle;
+    const hasPaymentReady =
+      hasOutput &&
+      (isYoutubeChannel ? isValidHttpUrl(resolvedChannelUrl) : hasInstagramHandle);
+    const hasChannelMaterialsReady =
+      isMarketingChannel(marketingChannel) &&
+      isValidHttpUrl(resolvedChannelUrl) &&
+      isValidHttpUrl(mainContentUrl);
     const hasApplicationReady =
       hasPaymentReady &&
       hasPersistedApplicationRecord &&
@@ -1735,7 +2002,9 @@ export default function Home() {
 
     if (screen === "status") {
       if (hasApplicationReady) resolvedStep = "status";
-      else if (hasPaymentReady) resolvedStep = "payment";
+      else if (hasPaymentReady && hasChannelMaterialsReady)
+        resolvedStep = "payment";
+      else if (hasPaymentReady) resolvedStep = "channel-materials";
       else if (hasNames && !hasAccount) resolvedStep = "confirm";
       else if (hasOutput) resolvedStep = "result";
       else resolvedStep = hasAccount === null ? "account-check" : "input";
@@ -1762,6 +2031,11 @@ export default function Home() {
     productService,
     instagramId,
     effectiveInstagramId,
+    isYoutubeChannel,
+    marketingChannel,
+    channelUrl,
+    resolvedChannelUrl,
+    mainContentUrl,
     hasPersistedApplicationRecord,
     aiResult,
     finalInstagramId,
@@ -2293,10 +2567,13 @@ export default function Home() {
       const result = await persistApplicationSubmission({
         userId: isTestAccountAuthenticated ? null : userId || null,
         email,
-        instagramId: effectiveInstagramId.trim(),
+        instagramId: isYoutubeChannel ? "" : effectiveInstagramId.trim(),
         hasAccount: Boolean(hasAccount),
         industry,
         productService,
+        marketingChannel,
+        channelUrl: resolvedChannelUrl,
+        mainContentUrl,
         accountDirection: aiResult?.accountPlan.direction,
         accountBio: aiResult?.accountPlan.bio,
         accountConcept: aiResult?.accountPlan.concept,
@@ -2474,7 +2751,7 @@ export default function Home() {
             <div className="grid grid-cols-1 gap-3">
               {/* Feature 1: AI 마케터 */}
               <button
-                onClick={() => goToStep("account-check")}
+                onClick={() => goToStep("channel")}
                 className="group text-left p-6 rounded-2xl bg-white border-2 border-gray-100 hover:border-rose-300 hover:shadow-lg active:scale-[0.99] transition-all"
               >
                 <div className="flex items-start gap-4">
@@ -2539,6 +2816,123 @@ export default function Home() {
     );
   }
 
+  /* ═══════════════ CHANNEL SELECTION ═══════════════ */
+
+  if (activeStep === "channel") {
+    return (
+      <>
+        <main className={wrapper}>
+          <div className="max-w-3xl w-full space-y-6">
+            <StepUtilityHeader
+              onBack={() => navigateBack("channel")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
+
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-bold text-gray-900">
+                어떤 채널로 마케팅할까요?
+              </h2>
+              <p className="text-sm text-gray-500">
+                제품과 고객에게 맞는 운영 채널을 선택해주세요
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {MARKETING_CHANNEL_OPTIONS.map((option) => {
+                const isSelected = marketingChannel === option.value;
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      setMarketingChannel(option.value);
+                      markFieldTouched("marketingChannel");
+                    }}
+                    onBlur={() => markFieldTouched("marketingChannel")}
+                    data-validation-field={
+                      option.value === "instagram"
+                        ? "marketingChannel"
+                        : undefined
+                    }
+                    className={`text-left p-6 rounded-2xl border-2 transition-all active:scale-[0.99] ${
+                      isSelected
+                        ? "border-rose-500 bg-rose-50/50 shadow-md"
+                        : marketingChannelError
+                          ? "border-rose-300 bg-rose-50/40"
+                          : "border-gray-100 bg-white hover:border-rose-300 hover:shadow-lg"
+                    }`}
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-400 to-pink-500 flex items-center justify-center text-white text-xl flex-shrink-0">
+                        {option.icon}
+                      </div>
+                      <div className="space-y-2">
+                        <p className="font-bold text-gray-900 text-lg">
+                          {option.label}
+                        </p>
+                        <p className="text-sm text-gray-500 leading-relaxed">
+                          {option.description}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {marketingChannelError && (
+              <p className={`text-center ${getHelperTextClass("rose")}`}>
+                {marketingChannelError}
+              </p>
+            )}
+
+            <Card className="space-y-4">
+              <SectionLabel>채널 추천 기준</SectionLabel>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-2xl bg-rose-50 px-4 py-3">
+                  <p className="font-semibold text-rose-600">인스타그램 추천</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                  <p className="font-semibold text-gray-800">유튜브 추천</p>
+                </div>
+                {CHANNEL_COMPARISON_ROWS.map(([instagramText, youtubeText]) => (
+                  <div key={instagramText} className="contents">
+                    <div className="rounded-xl border border-rose-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                      {instagramText}
+                    </div>
+                    <div className="rounded-xl border border-gray-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                      {youtubeText}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <button
+              type="button"
+              onClick={() => goToStep("account-check")}
+              disabled={!marketingChannel}
+              aria-disabled={!marketingChannel}
+              className={`${getPrimaryActionButtonClass({
+                theme: "rose",
+                isInactive: !marketingChannel,
+              })} py-4`}
+            >
+              다음
+            </button>
+          </div>
+        </main>
+        <ValidationToast
+          message={validationToast}
+          onClose={() => setValidationToast(null)}
+          theme="rose"
+        />
+      </>
+    );
+  }
+
   /* ═══════════════ ACCOUNT CHECK ═══════════════ */
 
   if (activeStep === "account-check") {
@@ -2568,7 +2962,7 @@ export default function Home() {
             <button
               onClick={() => {
                 setHasAccount(true);
-                goToStep("input");
+                setStep("input");
               }}
               className="p-6 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all space-y-1"
             >
@@ -2579,7 +2973,7 @@ export default function Home() {
             <button
               onClick={() => {
                 setHasAccount(false);
-                goToStep("input");
+                setStep("input");
               }}
               className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-gray-700 font-semibold hover:border-gray-300 hover:shadow-md active:scale-[0.98] transition-all space-y-1"
             >
@@ -2617,28 +3011,91 @@ export default function Home() {
             </div>
 
             <Card className="space-y-5">
-              {hasAccount && (
+              {isYoutubeChannel ? (
                 <InputField
-                  label="인스타그램 아이디"
-                  value={instagramId}
-                  onChange={setInstagramId}
-                  onBlur={() => markFieldTouched("instagramId")}
-                  placeholder="예: our_brand"
+                  label="유튜브 채널 (URL)"
+                  value={channelUrl}
+                  onChange={setChannelUrl}
+                  onBlur={() => markFieldTouched("channelUrl")}
+                  placeholder="https://www.youtube.com/@our_brand"
+                  type="url"
                   required
-                  error={instagramIdError}
-                  fieldKey="instagramId"
+                  error={planningChannelUrlError}
+                  fieldKey="channelUrl"
+                />
+              ) : (
+                hasAccount && (
+                  <InputField
+                    label="인스타그램 아이디"
+                    value={instagramId}
+                    onChange={setInstagramId}
+                    onBlur={() => markFieldTouched("instagramId")}
+                    placeholder="예: our_brand"
+                    required
+                    error={instagramIdError}
+                    fieldKey="instagramId"
+                  />
+                )
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-gray-700">
+                  업종
+                  <span className="text-rose-500 ml-0.5">*</span>
+                </label>
+                <select
+                  value={industrySelection}
+                  onChange={(event) => {
+                    const nextSelection = event.target.value;
+                    setIndustrySelection(nextSelection);
+                    setIndustry(
+                      nextSelection === CUSTOM_INDUSTRY_OPTION
+                        ? ""
+                        : nextSelection
+                    );
+                  }}
+                  onBlur={() => markFieldTouched("industry")}
+                  data-validation-field="industry"
+                  aria-invalid={Boolean(
+                    industryError && industrySelection !== CUSTOM_INDUSTRY_OPTION
+                  )}
+                  className={getTextFieldClass({
+                    theme: "rose",
+                    hasError:
+                      Boolean(industryError) &&
+                      industrySelection !== CUSTOM_INDUSTRY_OPTION,
+                  })}
+                >
+                  <option value="">업종을 선택해주세요</option>
+                  {INDUSTRY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                  <option value={CUSTOM_INDUSTRY_OPTION}>
+                    기타(직접 입력)
+                  </option>
+                </select>
+                {industryError &&
+                  industrySelection !== CUSTOM_INDUSTRY_OPTION && (
+                    <p className={getHelperTextClass("rose")}>
+                      {industryError}
+                    </p>
+                  )}
+              </div>
+
+              {industrySelection === CUSTOM_INDUSTRY_OPTION && (
+                <InputField
+                  label="업종 직접 입력"
+                  value={industry}
+                  onChange={setIndustry}
+                  onBlur={() => markFieldTouched("industry")}
+                  placeholder="예: 반려동물 용품"
+                  required
+                  error={industryError}
+                  fieldKey="industry"
                 />
               )}
-              <InputField
-                label="업종"
-                value={industry}
-                onChange={setIndustry}
-                onBlur={() => markFieldTouched("industry")}
-                placeholder="예: 정보통신업"
-                required
-                error={industryError}
-                fieldKey="industry"
-              />
               <TextareaField
                 label="판매하는 상품 / 서비스"
                 value={productService}
@@ -2719,7 +3176,7 @@ export default function Home() {
           <div className="text-center space-y-1">
             <h2 className="text-2xl font-bold text-gray-900">AI 기획 결과</h2>
             <p className="text-sm text-gray-500">
-              아래 전략을 바탕으로 인스타그램을 운영해 보세요
+              아래 전략을 바탕으로 {channelDisplayName}를 운영해 보세요
             </p>
             {aiSource && (
               <span className={`inline-block text-[10px] font-mono px-2 py-0.5 rounded-full ${aiSource === "api" ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"}`}>
@@ -2770,6 +3227,126 @@ export default function Home() {
               </div>
             ))}
           </Card>
+
+          {/* 운영 안내 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG), info(blue) 톤 */}
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="mb-4 flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-5 w-5"
+                >
+                  <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                  <path d="M12 11h4" />
+                  <path d="M12 16h4" />
+                  <path d="M8 11h.01" />
+                  <path d="M8 16h.01" />
+                </svg>
+              </span>
+              <div>
+                <p className="text-base font-semibold text-gray-900">
+                  운영 안내
+                </p>
+                <p className="text-sm text-gray-500">
+                  AI 마케터 서비스 이용 전 확인해 주세요
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-start gap-2.5">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                >
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                  <line x1="16" y1="2" x2="16" y2="6" />
+                  <line x1="8" y1="2" x2="8" y2="6" />
+                  <line x1="3" y1="10" x2="21" y2="10" />
+                </svg>
+                <p className="text-sm leading-relaxed text-gray-800">
+                  본 기획안을 바탕으로{" "}
+                  <span className="font-semibold">월 1~2회</span> 게시물
+                  업로드를 권장드립니다.
+                </p>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+                <p className="text-sm leading-relaxed text-gray-800">
+                  AI 마케터는 콘텐츠 기획 및 마케팅 전략을 지원하는
+                  서비스이며,{" "}
+                  <span className="text-gray-500">
+                    게시물 업로드는 직접 진행
+                  </span>
+                  해 주셔야 합니다.
+                </p>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                >
+                  <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                  <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                </svg>
+                <p className="text-sm leading-relaxed text-gray-800">
+                  직접 운영이 어려우신 경우, 콘텐츠 제작 및 업로드를 포함한{" "}
+                  <span className="font-semibold">운영 대행 서비스</span>를
+                  별도로 신청하실 수 있습니다.
+                </p>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                >
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                </svg>
+                <p className="text-sm leading-relaxed text-gray-800">
+                  비즈니스 문의:{" "}
+                  <a
+                    href="mailto:ceo.qmeet@gmail.com"
+                    className="font-medium text-blue-600 hover:underline"
+                  >
+                    ceo.qmeet@gmail.com
+                  </a>
+                </p>
+              </div>
+            </div>
+          </div>
 
           {/* Actions */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2973,7 +3550,7 @@ export default function Home() {
             </button>
             <button
               onClick={() => {
-                moveToPayment(finalInstagramId.trim());
+                moveToChannelMaterials(finalInstagramId.trim());
               }}
               aria-disabled={!isConfirmReady}
               className={`${getPrimaryActionButtonClass({
@@ -2991,6 +3568,292 @@ export default function Home() {
         onClose={() => setValidationToast(null)}
         theme="rose"
       />
+      </>
+    );
+  }
+
+  /* ═══════════════ CHANNEL MATERIALS ═══════════════ */
+
+  if (activeStep === "channel-materials") {
+    const isInstagramChannel = marketingChannel === "instagram";
+    const channelUrlLabel = isInstagramChannel
+      ? "인스타그램 페이지 (URL)"
+      : "유튜브 채널 (URL)";
+    const mainContentUrlLabel = isInstagramChannel
+      ? "대표 게시물 (URL)"
+      : "대표 영상 (URL)";
+    const representativeContentLabel = isInstagramChannel
+      ? "대표 게시물"
+      : "대표 영상";
+    const mainContentHelp = isInstagramChannel
+      ? "대표님의 아이템 소개를 담은, 대표적으로 홍보하고 싶은 게시물 1개"
+      : "대표님의 아이템 소개를 담은, 대표적으로 홍보하고 싶은 영상 1개";
+
+    return (
+      <>
+        <main className={wrapper}>
+          <div className="max-w-xl w-full space-y-6">
+            <StepUtilityHeader
+              onBack={() => navigateBack("channel-materials")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
+
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-bold text-gray-900">
+                대표 URL을 알려주세요
+              </h2>
+              <p className="text-sm text-gray-500">
+                AI 마케터가 홍보에 활용할 기준 콘텐츠를 확인합니다
+              </p>
+            </div>
+
+            <Card className="space-y-5">
+              <div className="flex items-center justify-between gap-3 rounded-2xl bg-rose-50 px-4 py-3">
+                <span className="text-sm font-semibold text-rose-600">
+                  선택 채널
+                </span>
+                <span className="text-sm font-bold text-gray-900">
+                  {isInstagramChannel ? "인스타그램" : "유튜브"}
+                </span>
+              </div>
+
+              <InputField
+                label={channelUrlLabel}
+                value={resolvedChannelUrl}
+                onChange={() => undefined}
+                onBlur={() => markFieldTouched("channelUrl")}
+                placeholder={
+                  isInstagramChannel
+                    ? "https://www.instagram.com/our_brand"
+                    : "https://www.youtube.com/@our_brand"
+                }
+                type="url"
+                required
+                error={channelUrlError}
+                fieldKey="channelUrl"
+                readOnly
+              />
+
+              <div className="space-y-1.5">
+                <InputField
+                  label={mainContentUrlLabel}
+                  value={mainContentUrl}
+                  onChange={setMainContentUrl}
+                  onBlur={() => markFieldTouched("mainContentUrl")}
+                  placeholder={
+                    isInstagramChannel
+                      ? "https://www.instagram.com/p/..."
+                      : "https://www.youtube.com/watch?v=..."
+                  }
+                  type="url"
+                  required
+                  error={mainContentUrlError}
+                  fieldKey="mainContentUrl"
+                />
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  {mainContentHelp}
+                </p>
+              </div>
+            </Card>
+
+            {/* 실행 전 경고 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG), warning(red) 톤 */}
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-red-100 text-red-600">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-5 w-5"
+                  >
+                    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </span>
+                <div>
+                  <p className="text-base font-semibold text-red-900">
+                    실행 전 꼭 확인해 주세요
+                  </p>
+                  <p className="text-sm text-red-700">
+                    실행 이후에는 되돌릴 수 없습니다
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2.5">
+                <div className="flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 text-red-500"
+                  >
+                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-red-800">
+                    <span className="font-semibold">채널 URL</span>과{" "}
+                    <span className="font-semibold">
+                      {representativeContentLabel}
+                    </span>
+                    을 꼭 확인해 주세요.
+                  </p>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 text-red-500"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-red-800">
+                    실행(운영 시작) 이후에는{" "}
+                    <span className="font-semibold">취소 및 수정이 불가능</span>
+                    합니다.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 급행 지원 안내 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG) */}
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-5 w-5"
+                  >
+                    <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                    <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                    <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+                    <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+                  </svg>
+                </span>
+                <div>
+                  <p className="text-base font-semibold text-gray-900">
+                    메인 게시물·영상 업로드가 어렵다면?
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    일정이 빠듯해도 마케팅 성과는 챙겨드립니다
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2.5">
+                <div className="flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-gray-800">
+                    7월 20일까지 업로드가 어려운 경우(예: MVP 개발 지연, 서비스
+                    제작 일정)에는{" "}
+                    <span className="text-gray-500">미리 말씀해 주세요.</span>
+                  </p>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                  >
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <line x1="19" y1="8" x2="19" y2="14" />
+                    <line x1="22" y1="11" x2="16" y2="11" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-gray-800">
+                    AI 마케터를{" "}
+                    <span className="font-semibold">2~3명 추가 투입</span>해
+                    우선적으로 운영해드립니다.
+                  </p>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 text-emerald-600"
+                  >
+                    <polyline points="20 12 20 22 4 22 4 12" />
+                    <rect x="2" y="7" width="20" height="5" />
+                    <line x1="12" y1="22" x2="12" y2="7" />
+                    <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+                    <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-gray-800">
+                    모두의창업 참여 기업은 별도 비용 없이 제공됩니다.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3.5 flex gap-2 border-t border-gray-100 pt-3">
+                <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                  무료 제공
+                </span>
+                <span className="rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                  모두의창업 한정
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => navigateBack("channel-materials")}
+                className="py-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                이전으로
+              </button>
+              <button
+                onClick={handleChannelMaterialsNext}
+                aria-disabled={!isChannelMaterialsReady}
+                className={`${getPrimaryActionButtonClass({
+                  theme: "rose",
+                  isInactive: !isChannelMaterialsReady,
+                })} py-4`}
+              >
+                다음 단계로
+              </button>
+            </div>
+          </div>
+        </main>
+        <ValidationToast
+          message={validationToast}
+          onClose={() => setValidationToast(null)}
+          theme="rose"
+        />
       </>
     );
   }
@@ -3060,7 +3923,7 @@ export default function Home() {
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>2개월</span>
-                    <span className="font-semibold">50만원</span>
+                    <span className="font-semibold">60만원</span>
                   </div>
                 </div>
                 <div className="mt-4 pt-3 border-t border-gray-100">
@@ -3118,11 +3981,11 @@ export default function Home() {
                 <div className="mt-4 space-y-2">
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>1개월</span>
-                    <span className="font-semibold">50만원</span>
+                    <span className="font-semibold">55만원</span>
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>2개월</span>
-                    <span className="font-semibold">80만원</span>
+                    <span className="font-semibold">100만원</span>
                   </div>
                 </div>
                 <div className="mt-4 pt-3 border-t border-gray-100">
@@ -3328,11 +4191,29 @@ export default function Home() {
               )}
             </div>
 
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-3">
-              <p className="text-xs text-gray-500 leading-relaxed">
-                업종, 콘텐츠 주제, 계정 상태에 따라 실제 성과는 달라질 수
-                있습니다. 위 수치는 운영 기준 예상치이며, 보장 수치는 아닙니다.
-              </p>
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-start gap-2.5">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+                <p className="text-sm leading-relaxed text-gray-800">
+                  업종, 콘텐츠 주제, 계정 상태에 따라 실제 성과는 달라질 수
+                  있습니다.{" "}
+                  <span className="text-gray-500">
+                    위 수치는 운영 기준 예상치이며, 보장 수치는 아닙니다.
+                  </span>
+                </p>
+              </div>
             </div>
           </Card>
 
@@ -3505,10 +4386,28 @@ export default function Home() {
                 {BANK_TRANSFER_INFO.accountHolder}
               </p>
             </div>
-            <p className="text-xs text-gray-500 leading-relaxed">
-              입금자명은 신청 시 입력한 이름과 동일하게 입력해주세요. 입금 확인 후
-              서비스가 시작됩니다.
-            </p>
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-start gap-2.5">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                >
+                  <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                  <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                </svg>
+                <p className="text-sm leading-relaxed text-gray-800">
+                  입금자명은 신청 시 입력한 이름과 동일하게 입력해주세요.{" "}
+                  <span className="text-gray-500">
+                    입금 확인 후 서비스가 시작됩니다.
+                  </span>
+                </p>
+              </div>
+            </div>
           </Card>
 
           {/* Form */}
@@ -3711,12 +4610,44 @@ export default function Home() {
               <h3 className="text-xl font-bold text-gray-900">
                 아래 계좌로 입금해주세요
               </h3>
-              <p className="text-sm text-gray-500">
-                아래 계좌로 입금해주시면 확인 후 마케팅이 시작됩니다
-              </p>
-              <p className="text-xs text-gray-500">
-                신청 시 입력한 입금자명과 동일하게 입금해주세요
-              </p>
+              <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                    >
+                      <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                      <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                    </svg>
+                    <p className="text-sm leading-relaxed text-gray-800">
+                      아래 계좌로 입금해주시면 확인 후 마케팅이 시작됩니다
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2.5">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                    >
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                      <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <p className="text-sm leading-relaxed text-gray-800">
+                      신청 시 입력한 입금자명과 동일하게 입금해주세요
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white px-5 py-4">
@@ -3836,16 +4767,49 @@ export default function Home() {
                     ? "회원가입이 완료되었습니다"
                     : "입금 후 회원가입을 진행해주세요"}
                 </h3>
-                <p className="text-sm text-gray-500">
-                  {isAuthenticated
-                    ? "이제 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"
-                    : "회원가입을 완료하면 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {isRequestLinked
-                    ? "신청 시 입력한 아이디(이메일)와 연결되어 진행 정보가 자동으로 준비되었습니다"
-                    : "신청 시 입력한 아이디(이메일)로 가입하시면 진행 정보가 더 자연스럽게 연결됩니다"}
-                </p>
+                <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="16" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12.01" y2="8" />
+                      </svg>
+                      <p className="text-sm leading-relaxed text-gray-800">
+                        {isAuthenticated
+                          ? "이제 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"
+                          : "회원가입을 완료하면 진행 상태 확인과 게시물 AI 생성 기능을 이용하실 수 있습니다"}
+                      </p>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                      >
+                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                      </svg>
+                      <p className="text-sm leading-relaxed text-gray-800">
+                        {isRequestLinked
+                          ? "신청 시 입력한 아이디(이메일)와 연결되어 진행 정보가 자동으로 준비되었습니다"
+                          : "신청 시 입력한 아이디(이메일)로 가입하시면 진행 정보가 더 자연스럽게 연결됩니다"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </Card>
           )}

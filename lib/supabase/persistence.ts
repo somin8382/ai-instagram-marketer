@@ -113,6 +113,9 @@ type ApplicationPersistenceInput = {
   hasAccount: boolean;
   industry: string;
   productService: string;
+  marketingChannel: string;
+  channelUrl: string;
+  mainContentUrl: string;
   accountDirection?: string;
   accountBio?: string;
   accountConcept?: string;
@@ -154,6 +157,9 @@ type ApplicationRow = {
   instagram_id?: string | null;
   industry?: string | null;
   product_service?: string | null;
+  marketing_channel?: string | null;
+  channel_url?: string | null;
+  main_content_url?: string | null;
   manager_name?: string | null;
   phone?: string | null;
   depositor_name?: string | null;
@@ -390,6 +396,8 @@ const OPTIONAL_APPLICATION_COLUMNS = new Set([
   "business_address",
   "business_type",
   "invoice_email",
+  "channel_url",
+  "main_content_url",
 ]);
 
 function getMissingApplicationColumnName(errorMessage?: string | null) {
@@ -450,7 +458,7 @@ async function fetchApplicationsByColumn(
   const query = client
     .from("applications")
     .select(
-      "id, user_id, email, instagram_id, industry, product_service, manager_name, phone, depositor_name, status, selected_plan, selected_duration, is_express, created_at, completion_date"
+      "id, user_id, email, instagram_id, industry, product_service, marketing_channel, channel_url, main_content_url, manager_name, phone, depositor_name, status, selected_plan, selected_duration, is_express, created_at, completion_date"
     )
     .eq(column, value)
     .order("created_at", { ascending: false })
@@ -671,6 +679,13 @@ function isCompleteApplicationRow(row: ApplicationRow) {
       industry: typeof row.industry === "string" ? row.industry : null,
       productService:
         typeof row.product_service === "string" ? row.product_service : null,
+      marketingChannel:
+        typeof row.marketing_channel === "string" ? row.marketing_channel : null,
+      channelUrl: typeof row.channel_url === "string" ? row.channel_url : null,
+      mainContentUrl:
+        typeof row.main_content_url === "string"
+          ? row.main_content_url
+          : null,
       managerName:
         typeof row.manager_name === "string" ? row.manager_name : null,
       phone: typeof row.phone === "string" ? row.phone : null,
@@ -852,6 +867,11 @@ export async function persistApplicationSubmission(
   const normalizedInstagramId = input.instagramId.trim();
   const normalizedIndustry = input.industry.trim();
   const normalizedProductService = input.productService.trim();
+  const normalizedMarketingChannel = input.marketingChannel.trim();
+  const normalizedChannelUrl = input.channelUrl.trim();
+  const normalizedMainContentUrl = input.mainContentUrl.trim();
+  const persistedInstagramId =
+    normalizedMarketingChannel === "youtube" ? null : normalizedInstagramId;
   const normalizedManagerName = input.managerName.trim();
   const normalizedPhone = input.phone.trim();
   const normalizedDepositorName = input.depositorName.trim();
@@ -862,6 +882,9 @@ export async function persistApplicationSubmission(
     instagramId: normalizedInstagramId,
     industry: normalizedIndustry,
     productService: normalizedProductService,
+    marketingChannel: normalizedMarketingChannel,
+    channelUrl: normalizedChannelUrl,
+    mainContentUrl: normalizedMainContentUrl,
     managerName: normalizedManagerName,
     phone: normalizedPhone,
     email: normalizedEmail,
@@ -901,10 +924,11 @@ export async function persistApplicationSubmission(
   const baseApplicationPayload: Record<string, unknown> = {
     user_id: input.userId ?? null,
     email: normalizedEmail,
-    instagram_id: normalizedInstagramId,
+    instagram_id: persistedInstagramId,
     has_account: input.hasAccount,
     industry: normalizedIndustry,
     product_service: normalizedProductService,
+    marketing_channel: normalizedMarketingChannel,
     selected_plan: input.selectedPlan,
     selected_duration: input.selectedDuration,
     is_express: input.isExpress,
@@ -937,6 +961,14 @@ export async function persistApplicationSubmission(
 
   if (normalizedAccountConcept) {
     optionalApplicationPayload.account_concept = normalizedAccountConcept;
+  }
+
+  if (normalizedChannelUrl) {
+    optionalApplicationPayload.channel_url = normalizedChannelUrl;
+  }
+
+  if (normalizedMainContentUrl) {
+    optionalApplicationPayload.main_content_url = normalizedMainContentUrl;
   }
 
   if (input.taxInvoiceRequested) {

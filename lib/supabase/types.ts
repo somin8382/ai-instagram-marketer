@@ -38,6 +38,9 @@ export type Database = {
           has_account: boolean | null;
           industry: string | null;
           product_service: string | null;
+          marketing_channel: string | null;
+          channel_url: string | null;
+          main_content_url: string | null;
           account_direction: string | null;
           account_bio: string | null;
           account_concept: string | null;
