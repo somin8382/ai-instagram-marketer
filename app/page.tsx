@@ -19,6 +19,7 @@ import {
 import {
   getSupabaseBrowserClientOrNull,
 } from "@/lib/supabase/client";
+import { stripTrailingPunct } from "@/lib/text/korean";
 import {
   addMonthsToKoreaDateString,
   getKoreaDateString,
@@ -790,10 +791,15 @@ export default function Home() {
   >({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const _conceptOrDirection = stripTrailingPunct(
+    aiResult?.accountPlan.concept || aiResult?.accountPlan.direction || ""
+  );
   const suggestedPostPrompts = [
     `${industry || "브랜드"}의 첫 인사를 전하면서 ${productService || "서비스"}의 매력을 자연스럽게 소개하는 게시물로 만들어주세요.`,
     `${productService || "서비스"}를 처음 보는 사람이 한눈에 이해하고 관심을 가질 수 있는 홍보 게시물로 만들어주세요.`,
-    `${aiResult?.accountPlan.concept || aiResult?.accountPlan.direction || "브랜드 방향"}을 살려 팔로우를 유도할 수 있는 분위기의 게시물로 만들어주세요.`,
+    _conceptOrDirection
+      ? `${_conceptOrDirection} — 이 방향성을 살려 팔로우를 유도하는 게시물로 만들어주세요.`
+      : `브랜드만의 분위기와 컨셉을 살려 팔로우를 유도하는 게시물로 만들어주세요.`,
   ].map((item) => item.replace(/\s+/g, " ").trim());
 
   const effectiveInstagramId = hasAccount ? instagramId : finalInstagramId;
@@ -2195,6 +2201,7 @@ export default function Home() {
           accountDirection: aiResult?.accountPlan.direction ?? "",
           accountBio: aiResult?.accountPlan.bio ?? "",
           accountConcept: aiResult?.accountPlan.concept ?? "",
+          marketingChannel,
           requestId: crypto.randomUUID(),
           previousPost: latestPostContext
             ? {

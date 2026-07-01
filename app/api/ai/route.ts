@@ -8,6 +8,7 @@ import {
   POST_GENERATOR_PLAN_TYPE,
 } from "@/lib/post-generator/subscription";
 import type { Database } from "@/lib/supabase/types";
+import { sanitizeGenerated } from "@/lib/text/korean";
 import {
   INTERNAL_TEST_SESSION_COOKIE_NAME,
   verifyInternalTestSessionToken,
@@ -29,7 +30,7 @@ type AccountPlanResult = {
 type PostPlanResult = {
   title: string;
   content: string;
-  hashtags: string;
+  hashtags: string | string[];
   visualPrompt: string;
 };
 
@@ -64,6 +65,10 @@ type AiRequestBody = {
   image?: string;
   images?: string[];
   userPrompt?: string;
+  marketingChannel?: string;
+  contentTone?: string;
+  emojiUsage?: string;
+  imageStyle?: string;
 };
 
 type OpenRouterMessage =
@@ -172,6 +177,22 @@ async function handlePostImageGeneration(
   const normalizedAccountDirection = accountDirection || "계정 방향 정보 없음";
   const normalizedAccountBio = accountBio || "소개글 정보 없음";
   const normalizedAccountConcept = accountConcept || "운영 컨셉 정보 없음";
+  const marketingChannel = String(body.marketingChannel ?? "").trim();
+  const contentTone = (["friendly", "informative", "story", "witty"] as const).includes(
+    String(body.contentTone ?? "").trim() as "friendly"
+  )
+    ? (String(body.contentTone).trim() as "friendly" | "informative" | "story" | "witty")
+    : "friendly";
+  const emojiUsage = (["rich", "minimal", "off"] as const).includes(
+    String(body.emojiUsage ?? "").trim() as "minimal"
+  )
+    ? (String(body.emojiUsage).trim() as "rich" | "minimal" | "off")
+    : "minimal";
+  const imageStyle = (["photoreal", "webtoon", "mood", "3d"] as const).includes(
+    String(body.imageStyle ?? "").trim() as "photoreal"
+  )
+    ? (String(body.imageStyle).trim() as "photoreal" | "webtoon" | "mood" | "3d")
+    : "photoreal";
   const requestId = String(body.requestId ?? "").trim();
   const images = Array.isArray(body.images)
     ? body.images.map((item) => String(item ?? "")).filter(Boolean).slice(0, 2)
@@ -219,6 +240,10 @@ async function handlePostImageGeneration(
     accountDirection: normalizedAccountDirection,
     accountBio: normalizedAccountBio,
     accountConcept: normalizedAccountConcept,
+    marketingChannel,
+    contentTone,
+    emojiUsage,
+    imageStyle,
     requestId,
     previousPost: body.previousPost ?? null,
     userPrompt,
@@ -541,6 +566,10 @@ async function generatePostPlan({
   accountDirection,
   accountBio,
   accountConcept,
+  marketingChannel,
+  contentTone,
+  emojiUsage,
+  imageStyle,
   requestId,
   previousPost,
   userPrompt,
@@ -552,15 +581,58 @@ async function generatePostPlan({
   accountDirection: string;
   accountBio: string;
   accountConcept: string;
+  marketingChannel: string;
+  contentTone: string;
+  emojiUsage: string;
+  imageStyle: string;
   requestId: string;
   previousPost: AiRequestBody["previousPost"];
   userPrompt: string;
 }) {
-  const userInput = `
-당신은 한국의 인스타그램 마케팅 전문가입니다.
-인스타그램 게시물 기획을 작성해 주세요.
+  const isYoutube = marketingChannel === "youtube";
+  const minHashtags = isYoutube ? 3 : 5;
+  const maxHashtags = isYoutube ? 5 : 8;
 
-인스타그램 계정명: ${instagramHandle}
+  const channelTone = isYoutube
+    ? `채널 타입: 유튜브
+- 정보성·전문성 중심의 톤 사용. 신뢰와 설명력 강조.
+- 검색 키워드를 의식한 문구 작성. 구체적인 정보가 드러나야 함.
+- content는 후킹 1줄 → 핵심/정보 2~4줄 → CTA 1줄 구성. 다소 길어도 무방.
+- hashtags는 ${minHashtags}~${maxHashtags}개, 검색 최적화 키워드 위주로.`
+    : `채널 타입: 인스타그램
+- 감성·브랜드·바이럴 중심의 짧고 임팩트 있는 톤.
+- 릴스/피드 친화적인 후킹 문구. 감성과 브랜드 이미지를 전달.
+- content는 후킹 1줄 → 핵심/가치 2~4줄 → 행동유도(CTA) 1줄 구성.
+- hashtags는 ${minHashtags}~${maxHashtags}개, 니치 중심·브랜드 태그 포함.`;
+
+  const toneGuideMap: Record<string, string> = {
+    friendly: "친근하게 말 걸기. 당신·우리 등 2인칭, 따뜻한 어조.",
+    informative: "정보·숫자·사실 중심. 구체적 수치와 근거를 드러내야 함.",
+    story: "장면·감정 묘사로 시작. 독자를 상황 속으로 끌어들이는 서술.",
+    witty: "반전·언어유희·뜻밖의 표현. 예상치 못한 전개로 시선 고정.",
+  };
+  const toneGuide = toneGuideMap[contentTone] ?? toneGuideMap.friendly;
+
+  const emojiGuideMap: Record<string, string> = {
+    off: "이모지 0개. 텍스트만으로 깔끔하게. 이모지를 단 하나도 사용하지 마세요.",
+    minimal: "핵심을 짚는 곳에만 1~2개. 의미 없는 나열 금지.",
+    rich: "문장마다 생동감 있게, 총 5~8개 내외. 같은 이모지 반복·도배 금지.",
+  };
+  const emojiGuide = emojiGuideMap[emojiUsage] ?? emojiGuideMap.minimal;
+
+  const imageStyleGuideMap: Record<string, string> = {
+    photoreal: "Photorealistic style, natural lighting, sharp details, premium brand look.",
+    webtoon: "Webtoon/illustration style, clean line art, cute and expressive characters.",
+    mood: "Moody aesthetic photo style, soft colors, bokeh blur, dreamy film grain.",
+    "3d": "3D rendering style, volumetric lighting, metallic and glossy materials, sharp shadows.",
+  };
+  const imageStyleGuide = imageStyleGuideMap[imageStyle] ?? imageStyleGuideMap.photoreal;
+
+  const userInput = `
+당신은 한국의 SNS 마케팅 전문가입니다.
+아래 계정 정보를 바탕으로 게시물 기획을 작성해 주세요.
+
+계정명: ${instagramHandle}
 업종: ${industry}
 상품/서비스: ${productService}
 계정 방향: ${accountDirection}
@@ -568,21 +640,40 @@ async function generatePostPlan({
 운영 컨셉: ${accountConcept}
 사용자 요청 방향: ${userPrompt || "없음"}
 
+채널 가이드:
+${channelTone}
+
+말투(톤): ${contentTone}
+- ${toneGuide}
+
+이모지 정책: ${emojiUsage}
+- ${emojiGuide}
+- 공통 금지: 의미 없는 나열, 단위·특수기호(㎢ ㎡ 등), 깨진 문자.
+
+해시태그 구성 (티어 혼합, 니치 중심):
+1. 니치·핵심 2~3개: 업종+아이템 구체 조합 (예: #체육에듀테크 #학교체육수업)
+2. 중간 규모 1~2개: 관련 카테고리 (예: #에듀테크)
+3. 브랜드/캠페인 1개: 계정명(instagramHandle) 기반 고유 태그
+4. 지역 태그: 로컬 업종이면 1개, 온라인 서비스이면 생략
+- 금지: #선팔 #맞팔 #f4f #좋아요반사 등 스팸 태그
+- 게시물 내용과 무관한 태그, 범용 #일상 #감성 같은 초광범 태그 금지
+- 한글 위주. 총 ${minHashtags}~${maxHashtags}개.
+
 중요 규칙:
-- 업종이나 상품/서비스 정보가 비어 있거나 일반적으로 들어오면, 사용자 요청 방향과 참고 이미지를 바탕으로 자연스럽게 맥락을 추론하세요
+- title은 공백 포함 25자 이내, 스크롤을 멈추게 하는 강한 후킹 한 줄. 업종/아이템 구체 키워드 1개 이상 포함.
+- 위 업종·상품/서비스·계정명을 구체적으로 드러내고, 일반적인 미사여구나 업종 불문 범용 표현으로 대체하지 말 것
+- 업종이나 상품/서비스 정보가 비어 있으면, 사용자 요청 방향과 참고 이미지를 바탕으로 자연스럽게 맥락을 추론하세요
 - 반드시 계정명, 업종, 상품/서비스, 계정 방향, 소개글, 운영 컨셉을 우선 참고해 이 계정에 실제로 올라갈 법한 게시물만 작성하세요
 - 결과는 하나의 일회성 광고처럼 쓰지 말고, 이 계정이 꾸준히 운영되는 흐름 안에 들어가는 게시물처럼 써주세요
 - 계정 소개글과 운영 컨셉에 드러난 말투, 분위기, 브랜드 톤을 자연스럽게 반영하세요
 - 상품/서비스의 실제 쓰임, 장점, 타깃 고객, 사용 장면이 드러나야 하며 일반적인 마케팅 문구로 얼버무리지 마세요
 - 사용자 요청 방향이 있으면 가장 우선으로 반영하되, 나머지 계정 정보와 충돌 없이 자연스럽게 결합하세요
-- 제공된 데이터와 관련 없는 추상적인 문구, 흔한 광고 문장, 업종 불문 범용 표현을 피하세요
 - title, content, hashtags는 모두 이 비즈니스에 맞는 구체적인 결과여야 합니다
-- title은 인스타그램 피드에서 바로 사용할 수 있는 짧고 강한 한국어 제목 한 줄이어야 합니다
-- content는 3~5문장, 자연스러운 한국어, 이모지 포함
-- hashtags는 공백으로 구분된 해시태그 5개 이상
+- 특수 기호나 단위 기호(㎢, ㎡, ㎤ 등)는 절대 사용하지 말 것
 - visualPrompt는 이미지 생성 모델이 바로 사용할 수 있는 상세한 영어 프롬프트로 작성하세요
-- visualPrompt에는 정사각형 1:1 인스타그램 피드 구도, 조명, 색감, 제품/브랜드 포인트, 인스타그램 광고 느낌을 구체적으로 포함하세요
+- visualPrompt에는 정사각형 1:1 구도, 조명, 색감, 제품/브랜드 포인트, SNS 광고 느낌을 구체적으로 포함하세요
 - visualPrompt에는 반드시 업종, 상품/서비스, 브랜드 톤, 계정 컨셉, 타깃 분위기를 반영하세요
+- visualPrompt 이미지 스타일: ${imageStyle} — ${imageStyleGuide}
 - visualPrompt에는 텍스트 오버레이를 최소화하라고 명확히 지시하세요
 - visualPrompt에는 한국어 문장은 이미지 안에 넣지 말고, 꼭 필요한 경우에도 매우 짧은 한국어 한 줄 또는 두 줄만 허용하라고 적으세요
 - visualPrompt에는 긴 슬로건, 문단, 여러 개의 텍스트 박스, 복잡한 타이포그래피를 피하라고 적으세요
@@ -598,9 +689,9 @@ async function generatePostPlan({
 
 다음 JSON 형식으로만 답변하세요. 설명 없이 JSON만 출력하세요:
 {
-  "title": "게시물 제목",
-  "content": "게시물 본문",
-  "hashtags": "#해시태그1 #해시태그2 #해시태그3 #해시태그4 #해시태그5",
+  "title": "게시물 제목(25자 이내)",
+  "content": "게시물 본문(후킹→핵심/가치→CTA)",
+  "hashtags": ["태그명1", "태그명2", "태그명3"],
   "visualPrompt": "Detailed English prompt for image generation"
 }
 `;
@@ -624,18 +715,28 @@ async function generatePostPlan({
     return { ok: false as const };
   }
 
-  const title = String(parsed.title ?? "").trim();
-  const caption = String(parsed.content ?? "").trim();
-  const hashtags = String(parsed.hashtags ?? "").trim();
+  const title = sanitizeGenerated(String(parsed.title ?? ""));
+  const caption = sanitizeGenerated(String(parsed.content ?? ""));
+
+  const rawHashtags = parsed.hashtags;
+  const hashtagsStr = Array.isArray(rawHashtags)
+    ? rawHashtags
+        .map((t) => String(t ?? "").trim().replace(/^#+/, ""))
+        .filter(Boolean)
+        .map((t) => `#${t}`)
+        .join(" ")
+    : String(rawHashtags ?? "");
+  const hashtags = sanitizeGenerated(hashtagsStr);
+
   const visualPrompt = String(parsed.visualPrompt ?? "").trim();
-  const hasEnoughHashtags = hashtags.split(/\s+/).filter((tag) => tag.startsWith("#")).length >= 5;
+  const hasEnoughHashtags = hashtags.split(/\s+/).filter((tag) => tag.startsWith("#")).length >= minHashtags;
 
   if (!title || !caption || !hashtags || !visualPrompt || !hasEnoughHashtags) {
     console.error("[/api/ai] Invalid post plan response:", parsed);
     return { ok: false as const };
   }
 
-  return { ok: true as const, data: parsed };
+  return { ok: true as const, data: { ...parsed, title, content: caption, hashtags } };
 }
 
 async function callOpenRouter({

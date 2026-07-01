@@ -46,6 +46,7 @@ import {
   type SavedGeneratedPost,
   type SavedSubscription,
 } from "@/lib/supabase/persistence";
+import { stripTrailingPunct } from "@/lib/text/korean";
 
 type ToolStep = "postgen" | "postsub-payment" | "postsub-status";
 
@@ -371,6 +372,7 @@ export default function ToolsPage() {
   const [contextAccountDirection, setContextAccountDirection] = useState("");
   const [contextAccountBio, setContextAccountBio] = useState("");
   const [contextAccountConcept, setContextAccountConcept] = useState("");
+  const [contextMarketingChannel, setContextMarketingChannel] = useState("");
   const [contextApplicationId, setContextApplicationId] = useState("");
   const [testRemainingPosts, setTestRemainingPosts] = useState(
     TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
@@ -440,12 +442,17 @@ export default function ToolsPage() {
   const formattedSubscriptionPrice =
     POST_GENERATOR_MONTHLY_PRICE.toLocaleString();
 
+  const _conceptOrDirection = stripTrailingPunct(
+    contextAccountConcept || contextAccountDirection || ""
+  );
   const suggestedPostPrompts = [
     `${contextIndustry || "브랜드"}의 첫 인사를 전하면서 ${
       contextProductService || "서비스"
     }의 매력을 자연스럽게 소개하는 게시물로 만들어주세요.`,
     `${contextProductService || "서비스"}를 처음 보는 사람이 한눈에 이해하고 관심을 가질 수 있는 홍보 게시물로 만들어주세요.`,
-    `${contextAccountConcept || contextAccountDirection || "브랜드 방향"}을 살려 팔로우를 유도할 수 있는 분위기의 게시물로 만들어주세요.`,
+    _conceptOrDirection
+      ? `${_conceptOrDirection} — 이 방향성을 살려 팔로우를 유도하는 게시물로 만들어주세요.`
+      : `브랜드만의 분위기와 컨셉을 살려 팔로우를 유도하는 게시물로 만들어주세요.`,
   ].map((item) => item.replace(/\s+/g, " ").trim());
 
   function showValidationToast(message: string) {
@@ -637,6 +644,14 @@ export default function ToolsPage() {
     const savedAppState = window.localStorage.getItem(APP_STORAGE_KEY);
     const savedAuthState = window.localStorage.getItem(AUTH_STORAGE_KEY);
 
+    let storedUserId = "";
+    if (savedAuthState) {
+      try {
+        const parsedAuth = JSON.parse(savedAuthState) as { userId?: string };
+        storedUserId = String(parsedAuth.userId ?? "").trim();
+      } catch { /* ignore */ }
+    }
+
     if (savedAppState) {
       try {
         const parsed = JSON.parse(savedAppState) as {
@@ -646,6 +661,7 @@ export default function ToolsPage() {
           finalInstagramId?: string;
           industry?: string;
           productService?: string;
+          marketingChannel?: string;
           aiResult?: StoredAiResult | null;
           applicationId?: string;
           remainingPosts?: number;
@@ -664,75 +680,85 @@ export default function ToolsPage() {
           postSubInvoiceEmail?: string;
           postSubRequestedAt?: string;
           postSubSubmitted?: boolean;
+          ownerUserId?: string;
         };
 
-        if (
-          parsed.step === "postsub-payment" ||
-          parsed.step === "postsub-status" ||
-          parsed.step === "postgen"
-        ) {
-          if (parsed.step === "postsub-status" && parsed.postSubSubmitted) {
-            setStep("postsub-status");
-          } else if (parsed.step === "postsub-payment") {
-            setStep("postsub-payment");
-          } else {
-            setStep("postgen");
+        if (parsed.ownerUserId && storedUserId && parsed.ownerUserId !== storedUserId) {
+          window.localStorage.removeItem(APP_STORAGE_KEY);
+        } else {
+          if (
+            parsed.step === "postsub-payment" ||
+            parsed.step === "postsub-status" ||
+            parsed.step === "postgen"
+          ) {
+            if (parsed.step === "postsub-status" && parsed.postSubSubmitted) {
+              setStep("postsub-status");
+            } else if (parsed.step === "postsub-payment") {
+              setStep("postsub-payment");
+            } else {
+              setStep("postgen");
+            }
           }
+
+          setContextIndustry(parsed.industry ?? "");
+          setContextProductService(parsed.productService ?? "");
+          setContextMarketingChannel(
+            parsed.marketingChannel === "instagram" || parsed.marketingChannel === "youtube"
+              ? parsed.marketingChannel
+              : ""
+          );
+          setContextApplicationId(parsed.applicationId ?? "");
+          setTestRemainingPosts(
+            typeof parsed.remainingPosts === "number" && parsed.remainingPosts >= 0
+              ? parsed.remainingPosts
+              : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
+          );
+
+          const hasAccount = parsed.hasAccount === true;
+          setContextInstagramHandle(
+            hasAccount
+              ? (parsed.instagramId ?? "").trim()
+              : (parsed.finalInstagramId ?? "").trim()
+          );
+
+          setContextAccountDirection(
+            parsed.aiResult?.accountPlan?.direction?.trim() ?? ""
+          );
+          setContextAccountBio(parsed.aiResult?.accountPlan?.bio?.trim() ?? "");
+          setContextAccountConcept(
+            parsed.aiResult?.accountPlan?.concept?.trim() ?? ""
+          );
+
+          setGeneratedPosts(
+            Array.isArray(parsed.generatedPosts)
+              ? parsed.generatedPosts
+                  .filter(
+                    (post) =>
+                      !!post &&
+                      typeof post === "object" &&
+                      typeof post.title === "string" &&
+                      typeof post.content === "string" &&
+                      typeof post.hashtags === "string" &&
+                      typeof post.imagePreview === "string"
+                  )
+                  .slice(0, 2)
+              : []
+          );
+          setFreeTrialUsed(Boolean(parsed.freeTrialUsed));
+          setPostSubManagerName(parsed.postSubManagerName ?? "");
+          setPostSubPhone(parsed.postSubPhone ?? "");
+          setPostSubEmail(parsed.postSubEmail ?? "");
+          setPostSubDepositorName(parsed.postSubDepositorName ?? "");
+          setPostSubTaxInvoiceRequested(Boolean(parsed.postSubTaxInvoiceRequested));
+          setPostSubBusinessNumber(parsed.postSubBusinessNumber ?? "");
+          setPostSubCompanyName(parsed.postSubCompanyName ?? "");
+          setPostSubCeoName(parsed.postSubCeoName ?? "");
+          setPostSubBusinessAddress(parsed.postSubBusinessAddress ?? "");
+          setPostSubBusinessType(parsed.postSubBusinessType ?? "");
+          setPostSubInvoiceEmail(parsed.postSubInvoiceEmail ?? "");
+          setPostSubRequestedAt(parsed.postSubRequestedAt ?? "");
+          setPostSubSubmitted(Boolean(parsed.postSubSubmitted));
         }
-
-        setContextIndustry(parsed.industry ?? "");
-        setContextProductService(parsed.productService ?? "");
-        setContextApplicationId(parsed.applicationId ?? "");
-        setTestRemainingPosts(
-          typeof parsed.remainingPosts === "number" && parsed.remainingPosts >= 0
-            ? parsed.remainingPosts
-            : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS
-        );
-
-        const hasAccount = parsed.hasAccount === true;
-        setContextInstagramHandle(
-          hasAccount
-            ? (parsed.instagramId ?? "").trim()
-            : (parsed.finalInstagramId ?? "").trim()
-        );
-
-        setContextAccountDirection(
-          parsed.aiResult?.accountPlan?.direction?.trim() ?? ""
-        );
-        setContextAccountBio(parsed.aiResult?.accountPlan?.bio?.trim() ?? "");
-        setContextAccountConcept(
-          parsed.aiResult?.accountPlan?.concept?.trim() ?? ""
-        );
-
-        setGeneratedPosts(
-          Array.isArray(parsed.generatedPosts)
-            ? parsed.generatedPosts
-                .filter(
-                  (post) =>
-                    !!post &&
-                    typeof post === "object" &&
-                    typeof post.title === "string" &&
-                    typeof post.content === "string" &&
-                    typeof post.hashtags === "string" &&
-                    typeof post.imagePreview === "string"
-                )
-                .slice(0, 2)
-            : []
-        );
-        setFreeTrialUsed(Boolean(parsed.freeTrialUsed));
-        setPostSubManagerName(parsed.postSubManagerName ?? "");
-        setPostSubPhone(parsed.postSubPhone ?? "");
-        setPostSubEmail(parsed.postSubEmail ?? "");
-        setPostSubDepositorName(parsed.postSubDepositorName ?? "");
-        setPostSubTaxInvoiceRequested(Boolean(parsed.postSubTaxInvoiceRequested));
-        setPostSubBusinessNumber(parsed.postSubBusinessNumber ?? "");
-        setPostSubCompanyName(parsed.postSubCompanyName ?? "");
-        setPostSubCeoName(parsed.postSubCeoName ?? "");
-        setPostSubBusinessAddress(parsed.postSubBusinessAddress ?? "");
-        setPostSubBusinessType(parsed.postSubBusinessType ?? "");
-        setPostSubInvoiceEmail(parsed.postSubInvoiceEmail ?? "");
-        setPostSubRequestedAt(parsed.postSubRequestedAt ?? "");
-        setPostSubSubmitted(Boolean(parsed.postSubSubmitted));
       } catch {
         window.localStorage.removeItem(APP_STORAGE_KEY);
       }
@@ -807,6 +833,7 @@ export default function ToolsPage() {
       remainingPosts: isTestAccountAuthenticated
         ? remainingSubscriptionCredits
         : currentAppState.remainingPosts,
+      ownerUserId: userId,
     };
 
     window.localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appStatePayload));
@@ -1135,6 +1162,7 @@ export default function ToolsPage() {
 
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      window.localStorage.removeItem(APP_STORAGE_KEY);
     }
 
     setIsAuthenticated(false);
@@ -1334,6 +1362,7 @@ export default function ToolsPage() {
           accountDirection: contextAccountDirection,
           accountBio: contextAccountBio,
           accountConcept: contextAccountConcept,
+          marketingChannel: contextMarketingChannel,
           requestId: crypto.randomUUID(),
           previousPost: latestPostContext
             ? {
