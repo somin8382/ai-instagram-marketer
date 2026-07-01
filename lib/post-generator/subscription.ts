@@ -1,7 +1,6 @@
 export const POST_GENERATOR_PLAN_TYPE = "post_generator" as const;
 export const POST_GENERATOR_MONTHLY_PRICE = 20000;
-export const POST_GENERATOR_MONTHLY_CREDITS = 30;
-export const POST_GENERATOR_DAILY_LIMIT = 5;
+export const POST_GENERATOR_MONTHLY_CREDITS = 40;
 
 export type PostGeneratorPlanType = typeof POST_GENERATOR_PLAN_TYPE;
 
@@ -73,16 +72,6 @@ export function getEffectiveDailyUsageCount(
   }
 
   return Math.max(subscription.dailyUsageCount ?? 0, 0);
-}
-
-export function getRemainingDailyGenerationCount(
-  subscription?: PostGeneratorSubscriptionLike | null,
-  today = getKoreaDateString()
-) {
-  return Math.max(
-    POST_GENERATOR_DAILY_LIMIT - getEffectiveDailyUsageCount(subscription, today),
-    0
-  );
 }
 
 export function getRemainingSubscriptionCredits(

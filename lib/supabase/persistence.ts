@@ -16,10 +16,8 @@ import {
   addMonthsToKoreaDateString,
   getEffectiveDailyUsageCount,
   getKoreaDateString,
-  getRemainingDailyGenerationCount,
   getRemainingSubscriptionCredits,
   isPostGeneratorSubscriptionActive,
-  POST_GENERATOR_DAILY_LIMIT,
   POST_GENERATOR_MONTHLY_CREDITS,
   POST_GENERATOR_PLAN_TYPE,
 } from "../post-generator/subscription";
@@ -55,6 +53,7 @@ export type SavedGeneratedPost = {
   imageUrl: string;
   isFreeTrial: boolean;
   createdAt: string;
+  visualPrompt: string | null;
 };
 
 export type SavedApplication = {
@@ -148,6 +147,7 @@ type GeneratedPostPersistenceInput = {
   hashtags: string;
   imageUrl: string;
   isFreeTrial: boolean;
+  visualPrompt?: string | null;
 };
 
 type ApplicationRow = {
@@ -190,6 +190,7 @@ type GeneratedPostRow = {
   image_url?: string | null;
   is_free_trial?: boolean | null;
   created_at?: string | null;
+  visual_prompt?: string | null;
 };
 
 type SubscriptionRow = {
@@ -230,7 +231,9 @@ function buildGeneratedPostPayloads(input: {
   imageUrl: string;
   isFreeTrial: boolean;
   createdAt: string;
+  visualPrompt?: string | null;
 }) {
+  const vp = input.visualPrompt ?? null;
   return [
     {
       user_id: input.userId ?? null,
@@ -241,6 +244,7 @@ function buildGeneratedPostPayloads(input: {
       image_url: input.imageUrl,
       is_free_trial: input.isFreeTrial,
       created_at: input.createdAt,
+      visual_prompt: vp,
     },
     {
       user_id: input.userId ?? null,
@@ -251,6 +255,7 @@ function buildGeneratedPostPayloads(input: {
       image_url: input.imageUrl,
       is_free_trial: input.isFreeTrial,
       created_at: input.createdAt,
+      visual_prompt: vp,
     },
     {
       user_id: input.userId ?? null,
@@ -260,6 +265,7 @@ function buildGeneratedPostPayloads(input: {
       image_url: input.imageUrl,
       is_free_trial: input.isFreeTrial,
       created_at: input.createdAt,
+      visual_prompt: vp,
     },
     {
       application_id: input.applicationId ?? null,
@@ -269,6 +275,7 @@ function buildGeneratedPostPayloads(input: {
       image_url: input.imageUrl,
       is_free_trial: input.isFreeTrial,
       created_at: input.createdAt,
+      visual_prompt: vp,
     },
     {
       title: input.title,
@@ -277,6 +284,7 @@ function buildGeneratedPostPayloads(input: {
       image_url: input.imageUrl,
       is_free_trial: input.isFreeTrial,
       created_at: input.createdAt,
+      visual_prompt: vp,
     },
   ];
 }
@@ -497,7 +505,7 @@ async function fetchGeneratedPostsByColumn(
   const query = client
     .from("generated_posts")
     .select(
-      "id, application_id, title, content, hashtags, image_url, is_free_trial, created_at"
+      "id, application_id, title, content, hashtags, image_url, is_free_trial, created_at, visual_prompt"
     )
     .eq(column, value)
     .order("created_at", { ascending: false })
@@ -523,7 +531,7 @@ async function fetchGeneratedPostsByApplicationIds(
   const query = client
     .from("generated_posts")
     .select(
-      "id, application_id, title, content, hashtags, image_url, is_free_trial, created_at"
+      "id, application_id, title, content, hashtags, image_url, is_free_trial, created_at, visual_prompt"
     )
     .in("application_id", applicationIds)
     .order("created_at", { ascending: false })
@@ -568,6 +576,10 @@ function mapGeneratedPostRow(post: GeneratedPostRow): SavedGeneratedPost {
     imageUrl: String(post.image_url ?? "").trim(),
     isFreeTrial: Boolean(post.is_free_trial),
     createdAt: String(post.created_at ?? ""),
+    visualPrompt:
+      typeof post.visual_prompt === "string" && post.visual_prompt.trim()
+        ? post.visual_prompt.trim()
+        : null,
   };
 }
 
@@ -605,9 +617,6 @@ function createUsageSnapshot({
   const dailyUsageCount = hasActiveSubscription
     ? getEffectiveDailyUsageCount(subscription)
     : 0;
-  const dailyRemainingCount = hasActiveSubscription
-    ? getRemainingDailyGenerationCount(subscription)
-    : 0;
 
   return {
     freeTrialUsed: posts.some((post) => post.isFreeTrial),
@@ -617,8 +626,8 @@ function createUsageSnapshot({
     usedPaidPostCount: hasActiveSubscription
       ? Math.max(totalPostLimit - remainingPostCount, 0)
       : 0,
-    dailyLimit: hasActiveSubscription ? POST_GENERATOR_DAILY_LIMIT : 0,
-    dailyRemainingCount,
+    dailyLimit: 0,
+    dailyRemainingCount: 0,
     dailyUsageCount,
   };
 }
@@ -1134,7 +1143,12 @@ export async function persistGeneratedPost(
       })
     );
 
-    return { saved: false, queued: false, error: firstValidationIssue.message };
+    return {
+      saved: false,
+      queued: false,
+      generatedPostId: null as string | null,
+      error: firstValidationIssue.message,
+    };
   }
 
   if (!hasSupabaseEnv()) {
@@ -1149,7 +1163,12 @@ export async function persistGeneratedPost(
       createdAt,
     });
 
-    return { saved: false, queued: true, error: "Supabase 환경 변수가 설정되지 않았습니다." };
+    return {
+      saved: false,
+      queued: true,
+      generatedPostId: null as string | null,
+      error: "Supabase 환경 변수가 설정되지 않았습니다.",
+    };
   }
 
   const payloads = buildGeneratedPostPayloads({
@@ -1171,10 +1190,20 @@ export async function persistGeneratedPost(
       createdAt,
     });
 
-    return { saved: false, queued: true, error: result.error };
+    return {
+      saved: false,
+      queued: true,
+      generatedPostId: null as string | null,
+      error: result.error,
+    };
   }
 
-  return { saved: true, queued: false, error: null as string | null };
+  return {
+    saved: true,
+    queued: false,
+    generatedPostId: result.data?.id ?? null,
+    error: null as string | null,
+  };
 }
 
 export async function flushPendingGeneratedPosts({
@@ -1442,13 +1471,6 @@ export async function consumePostGeneratorSubscriptionCredit({
     };
   }
 
-  if (getRemainingDailyGenerationCount(subscription) <= 0) {
-    return {
-      subscription,
-      error: "오늘 생성 가능한 횟수를 모두 사용했습니다",
-    };
-  }
-
   const supabase = getSupabaseBrowserClient();
   const today = getKoreaDateString();
   const nextRemainingCredits = getRemainingSubscriptionCredits(subscription) - 1;
@@ -1593,6 +1615,140 @@ export async function fetchSavedGeneratedPosts({
     posts,
     error: errors.length ? errors.join(" / ") : null,
   };
+}
+
+export type SavedAccountProfile = {
+  companyName: string;
+  brandName: string;
+  instagramUrl: string;
+  youtubeUrl: string;
+  marketingChannel: string;
+  industry: string;
+  productService: string;
+  accountOnboardedAt: string | null;
+  prefillInstagramUrl: string;
+  prefillYoutubeUrl: string;
+  prefillIndustry: string;
+  prefillProductService: string;
+};
+
+type ProfileRow = {
+  company_name?: string | null;
+  brand_name?: string | null;
+  instagram_url?: string | null;
+  youtube_url?: string | null;
+  marketing_channel?: string | null;
+  industry?: string | null;
+  product_service?: string | null;
+  account_onboarded_at?: string | null;
+};
+
+function deriveMarketingChannel(instagramUrl: string, youtubeUrl: string): string {
+  if (instagramUrl.trim()) return "instagram";
+  if (youtubeUrl.trim()) return "youtube";
+  return "";
+}
+
+function buildInstagramPrefillUrl(instagramId?: string | null, channelUrl?: string | null, marketingChannel?: string | null): string {
+  if (marketingChannel === "instagram" && channelUrl?.trim()) return channelUrl.trim();
+  const handle = String(instagramId ?? "").trim().replace(/^@/, "");
+  return handle ? `https://instagram.com/${handle}` : "";
+}
+
+export async function fetchAccountProfile({ userId }: { userId: string }) {
+  if (!hasSupabaseEnv() || !userId) {
+    return { profile: null as SavedAccountProfile | null, error: null as string | null };
+  }
+
+  const supabase = getSupabaseBrowserClient();
+
+  const profileResponse = (await ((
+    supabase
+      .from("profiles")
+      .select("company_name, brand_name, instagram_url, youtube_url, marketing_channel, industry, product_service, account_onboarded_at")
+      .eq("id", userId)
+      .maybeSingle() as unknown
+  ) as Promise<{
+    data: ProfileRow | null;
+    error: { message: string } | null;
+  }>)) as {
+    data: ProfileRow | null;
+    error: { message: string } | null;
+  };
+
+  const profileRow = profileResponse.error ? null : profileResponse.data;
+
+  const appResponse = await fetchApplicationsByColumn(
+    getSupabaseBrowserClient(),
+    "user_id",
+    userId
+  );
+  const appRow = appResponse.error ? null : (appResponse.data?.[0] ?? null);
+
+  return {
+    profile: {
+      companyName: String(profileRow?.company_name ?? "").trim(),
+      brandName: String(profileRow?.brand_name ?? "").trim(),
+      instagramUrl: String(profileRow?.instagram_url ?? "").trim(),
+      youtubeUrl: String(profileRow?.youtube_url ?? "").trim(),
+      marketingChannel: String(profileRow?.marketing_channel ?? "").trim(),
+      industry: String(profileRow?.industry ?? "").trim(),
+      productService: String(profileRow?.product_service ?? "").trim(),
+      accountOnboardedAt: profileRow?.account_onboarded_at ?? null,
+      prefillInstagramUrl: buildInstagramPrefillUrl(
+        appRow?.instagram_id,
+        appRow?.channel_url,
+        appRow?.marketing_channel
+      ),
+      prefillYoutubeUrl:
+        appRow?.marketing_channel === "youtube" && appRow?.channel_url?.trim()
+          ? String(appRow.channel_url).trim()
+          : "",
+      prefillIndustry: String(appRow?.industry ?? "").trim(),
+      prefillProductService: String(appRow?.product_service ?? "").trim(),
+    } satisfies SavedAccountProfile,
+    error: profileResponse.error?.message ?? null,
+  };
+}
+
+export async function persistAccountProfile({
+  userId,
+  companyName,
+  brandName,
+  instagramUrl,
+  youtubeUrl,
+  industry,
+  productService,
+}: {
+  userId: string;
+  companyName: string;
+  brandName: string;
+  instagramUrl: string;
+  youtubeUrl: string;
+  industry: string;
+  productService: string;
+}) {
+  if (!hasSupabaseEnv()) {
+    return { error: "Supabase 환경 변수가 설정되지 않았습니다." as string | null };
+  }
+
+  const marketingChannel = deriveMarketingChannel(instagramUrl, youtubeUrl);
+
+  const result = await tryProfileUpsert([
+    {
+      id: userId,
+      company_name: companyName.trim() || null,
+      brand_name: brandName.trim() || null,
+      instagram_url: instagramUrl.trim() || null,
+      youtube_url: youtubeUrl.trim() || null,
+      marketing_channel: marketingChannel || null,
+      industry: industry.trim() || null,
+      product_service: productService.trim() || null,
+      account_onboarded_at: new Date().toISOString(),
+    },
+  ]);
+
+  return { error: result.error };
 }
 
 export async function fetchMyPageSnapshot({

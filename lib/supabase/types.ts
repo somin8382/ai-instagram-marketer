@@ -15,18 +15,42 @@ export type Database = {
           name: string | null;
           email: string | null;
           created_at: string | null;
+          brand_name: string | null;
+          marketing_channel: string | null;
+          industry: string | null;
+          product_service: string | null;
+          account_onboarded_at: string | null;
+          instagram_url: string | null;
+          youtube_url: string | null;
+          company_name: string | null;
         };
         Insert: {
           id: string;
           name?: string | null;
           email?: string | null;
           created_at?: string | null;
+          brand_name?: string | null;
+          marketing_channel?: string | null;
+          industry?: string | null;
+          product_service?: string | null;
+          account_onboarded_at?: string | null;
+          instagram_url?: string | null;
+          youtube_url?: string | null;
+          company_name?: string | null;
         };
         Update: {
           id?: string;
           name?: string | null;
           email?: string | null;
           created_at?: string | null;
+          brand_name?: string | null;
+          marketing_channel?: string | null;
+          industry?: string | null;
+          product_service?: string | null;
+          account_onboarded_at?: string | null;
+          instagram_url?: string | null;
+          youtube_url?: string | null;
+          company_name?: string | null;
         };
       };
       applications: {
@@ -91,6 +115,10 @@ export type Database = {
           image_url: string | null;
           is_free_trial: boolean | null;
           created_at: string | null;
+          overlay_text: string | null;
+          overlay_style: Json | null;
+          overlay_enabled: boolean | null;
+          visual_prompt: string | null;
         };
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;

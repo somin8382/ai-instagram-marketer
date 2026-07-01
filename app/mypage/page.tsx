@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import {
-  POST_GENERATOR_DAILY_LIMIT,
   POST_GENERATOR_MONTHLY_CREDITS,
   POST_GENERATOR_MONTHLY_PRICE,
 } from "@/lib/post-generator/subscription";
@@ -169,8 +168,8 @@ function EmptyState({
 export default function MyPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [refreshSeed, setRefreshSeed] = useState(0);
-  const [startingSubscription, setStartingSubscription] = useState(false);
+  const [refreshSeed] = useState(0);
+  const [startingSubscription] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
@@ -280,10 +279,6 @@ export default function MyPage() {
               parsedApp.remainingPosts >= 0
                 ? parsedApp.remainingPosts
                 : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS;
-            const dailyRemainingCount = Math.min(
-              remainingCredits,
-              POST_GENERATOR_DAILY_LIMIT
-            );
             const now = new Date().toISOString();
 
             setAuthName(
@@ -331,9 +326,9 @@ export default function MyPage() {
                   POST_GENERATOR_MONTHLY_CREDITS - remainingCredits,
                   0
                 ),
-                dailyLimit: POST_GENERATOR_DAILY_LIMIT,
-                dailyRemainingCount,
-                dailyUsageCount: POST_GENERATOR_DAILY_LIMIT - dailyRemainingCount,
+                dailyLimit: 0,
+                dailyRemainingCount: 0,
+                dailyUsageCount: 0,
               },
             });
             setErrorMessage(null);
@@ -694,7 +689,7 @@ export default function MyPage() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
                   <p className="text-xs font-semibold text-gray-400">
                     무료 체험
@@ -724,30 +719,16 @@ export default function MyPage() {
                 </div>
                 <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
                   <p className="text-xs font-semibold text-gray-400">
-                    남은 생성 횟수
+                    이번 달 남은 횟수
                   </p>
                   <p className="mt-2 text-lg font-bold text-gray-900">
-                    {snapshot.usage.remainingPostCount}회
+                    {snapshot.usage.remainingPostCount}/
+                    {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}
                   </p>
                   <p className="mt-1 text-xs text-gray-500 leading-relaxed">
                     사용 {snapshot.usage.usedPaidPostCount}회 / 전체{" "}
                     {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}회
                     기준입니다.
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
-                  <p className="text-xs font-semibold text-gray-400">
-                    오늘 남은 횟수
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {snapshot.usage.hasActiveSubscription
-                      ? `${snapshot.usage.dailyRemainingCount}회`
-                      : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-                    오늘 사용 {snapshot.usage.dailyUsageCount}회 / 일일 한도{" "}
-                    {snapshot.usage.dailyLimit || POST_GENERATOR_DAILY_LIMIT}회
-                    입니다.
                   </p>
                 </div>
               </div>
@@ -772,8 +753,7 @@ export default function MyPage() {
                   <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
                     <p className="text-xs font-semibold text-violet-500">제공량</p>
                     <p className="mt-2 font-bold text-gray-900">
-                      매월 {POST_GENERATOR_MONTHLY_CREDITS}회 · 하루 최대{" "}
-                      {POST_GENERATOR_DAILY_LIMIT}회
+                      매월 40회
                     </p>
                   </div>
                 </div>

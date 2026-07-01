@@ -23,10 +23,8 @@ import { stripTrailingPunct } from "@/lib/text/korean";
 import {
   addMonthsToKoreaDateString,
   getKoreaDateString,
-  getRemainingDailyGenerationCount,
   getRemainingSubscriptionCredits,
   isPostGeneratorSubscriptionActive,
-  POST_GENERATOR_DAILY_LIMIT,
   POST_GENERATOR_MONTHLY_CREDITS,
   POST_GENERATOR_MONTHLY_PRICE,
 } from "@/lib/post-generator/subscription";
@@ -821,20 +819,12 @@ export default function Home() {
   const remainingSubscriptionCredits = hasActivePostGeneratorSubscription
     ? getRemainingSubscriptionCredits(postGeneratorSubscription)
     : 0;
-  const remainingDailyGenerations = hasActivePostGeneratorSubscription
-    ? getRemainingDailyGenerationCount(postGeneratorSubscription)
-    : 0;
   const canUseSubscriptionPostGeneration =
     hasActivePostGeneratorSubscription &&
-    remainingSubscriptionCredits > 0 &&
-    remainingDailyGenerations > 0;
+    remainingSubscriptionCredits > 0;
   const canUseFreeTrial = !hasConsumedFreeTrial;
   const canGeneratePost = canUseSubscriptionPostGeneration || canUseFreeTrial;
   const shouldShowPostLock = !canGeneratePost;
-  const isDailyLimitReached =
-    hasActivePostGeneratorSubscription &&
-    remainingSubscriptionCredits > 0 &&
-    remainingDailyGenerations === 0;
   const isSubscriptionCreditEmpty =
     hasActivePostGeneratorSubscription && remainingSubscriptionCredits === 0;
   const formattedSubscriptionPrice =
@@ -1073,9 +1063,7 @@ export default function Home() {
     return collectValidationIssues<HomeValidationField>([
       {
         field: "postInput",
-        message: isDailyLimitReached
-          ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
-          : isSubscriptionCreditEmpty
+        message: isSubscriptionCreditEmpty
             ? "남은 생성 횟수가 없습니다"
             : "월 구독 후 이용할 수 있습니다",
         isMissing: !canUseSubscriptionPostGeneration && !canUseFreeTrial,
@@ -4877,32 +4865,43 @@ export default function Home() {
               <p className="text-sm text-gray-500">
                 이미지를 업로드하면 AI가 게시물을 자동으로 생성해드립니다.
               </p>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 이용할 수
-                있습니다. 매월 {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
-                {POST_GENERATOR_DAILY_LIMIT}회까지 게시물 생성이 가능합니다.
-              </p>
+              {hasHydrated && (
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 이용할 수
+                  있습니다. 매월 40회까지 게시물
+                  생성, 이미지 재생성, AI 수정을 함께 이용할 수 있습니다.
+                </p>
+              )}
             </div>
 
             <Card className="space-y-4 border-violet-100">
               <SectionLabel>요금 안내</SectionLabel>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
                   <p className="text-xs font-semibold text-violet-500">월 요금</p>
                   <p className="mt-2 text-lg font-bold text-gray-900">
                     {formattedSubscriptionPrice}원
                   </p>
                 </div>
-                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">월 제공량</p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {POST_GENERATOR_MONTHLY_CREDITS}회
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4 space-y-3">
+                  <p className="text-xs font-semibold text-violet-500">
+                    모두의창업 이용자 전용 혜택
                   </p>
-                </div>
-                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">일일 한도</p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {POST_GENERATOR_DAILY_LIMIT}회
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium text-gray-600">
+                      기본 제공 30회
+                    </p>
+                    <p className="text-sm font-medium text-violet-600">
+                      추가 제공 +10회
+                    </p>
+                  </div>
+                  <p className="text-2xl font-extrabold tracking-tight text-gray-900">
+                    총 40회 이용 가능
+                  </p>
+                  <p className="border-t border-violet-100 pt-3 text-xs leading-relaxed text-gray-500">
+                    추가 이용 횟수(토큰) 구매를 원하시는 경우
+                    <br />
+                    1:1 카카오톡으로 문의해주세요.
                   </p>
                 </div>
               </div>
@@ -5166,8 +5165,8 @@ export default function Home() {
                   입금 확인이 완료되면 게시물 AI 생성 기능이 즉시 활성화됩니다.
                 </p>
                 <p className="text-sm text-violet-600 leading-relaxed">
-                  활성화 후 매월 {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
-                  {POST_GENERATOR_DAILY_LIMIT}회까지 이용할 수 있습니다.
+                  활성화 후 매월 40회까지 이미지
+                  생성, 재생성, AI 수정을 함께 이용할 수 있습니다.
                 </p>
                 {postSubRequestedAt && (
                   <p className="text-xs text-violet-500">
@@ -5262,14 +5261,16 @@ export default function Home() {
                 <p className="text-sm font-semibold text-violet-700">
                   게시물 AI 생성은 구독형으로 운영됩니다
                 </p>
-                <p className="text-xs text-violet-600 leading-relaxed">
-                  1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 매월{" "}
-                  {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
-                  {POST_GENERATOR_DAILY_LIMIT}회까지 바로 생성할 수 있습니다.
-                </p>
+                {hasHydrated && (
+                  <p className="text-xs text-violet-600 leading-relaxed">
+                    1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 매월{" "}
+                    40회까지 이미지 생성, 재생성,
+                    AI 수정을 함께 이용할 수 있습니다.
+                  </p>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
                   <p className="text-xs font-semibold text-violet-500">
                     구독 상태
@@ -5284,24 +5285,14 @@ export default function Home() {
                 </div>
                 <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
                   <p className="text-xs font-semibold text-violet-500">
-                    남은 생성 횟수
+                    이번 달 남은 횟수
                   </p>
                   <p className="mt-2 text-lg font-bold text-gray-900">
                     {hasActivePostGeneratorSubscription
-                      ? `${remainingSubscriptionCredits}회`
+                      ? `${remainingSubscriptionCredits}/${POST_GENERATOR_MONTHLY_CREDITS}`
                       : hasConsumedFreeTrial
                         ? "구독 필요"
                         : "무료 1회 가능"}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">
-                    오늘 남은 횟수
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {hasActivePostGeneratorSubscription
-                      ? `${remainingDailyGenerations}회`
-                      : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
                   </p>
                 </div>
               </div>
@@ -5314,9 +5305,7 @@ export default function Home() {
                 </div>
                 <div className="space-y-1">
                   <p className="font-semibold text-gray-700 text-lg">
-                    {isDailyLimitReached
-                      ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
-                      : isSubscriptionCreditEmpty
+                    {isSubscriptionCreditEmpty
                         ? "이번 달 남은 생성 횟수가 없습니다"
                         : hasConsumedFreeTrial
                           ? "무료 체험 1회를 모두 사용하셨습니다"
@@ -5326,15 +5315,13 @@ export default function Home() {
                     새 게시물 생성은 잠겨 있지만, 이전에 생성한 게시물은 계속 확인할 수 있습니다
                   </p>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                    {isDailyLimitReached
-                      ? "하루 제한이 초기화되면 다시 생성할 수 있습니다"
-                      : hasActivePostGeneratorSubscription
+                    {hasActivePostGeneratorSubscription
                         ? "다음 결제 주기에 다시 충전되거나 이후 추가 크레딧 기능으로 확장될 예정입니다"
                         : "계속 이용하려면 로그인 후 월 구독을 시작해주세요"}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {hasActivePostGeneratorSubscription && !isDailyLimitReached ? (
+                  {hasActivePostGeneratorSubscription ? (
                     <button
                       disabled
                       className={`${getPrimaryActionButtonClass({
@@ -5351,15 +5338,13 @@ export default function Home() {
                           ? handleMoveToPostSubscriptionPayment
                           : () => openAuthPage("postgen")
                       }
-                      disabled={startingSubscription || isDailyLimitReached}
+                      disabled={startingSubscription}
                       className={`${getPrimaryActionButtonClass({
                         theme: "violet",
-                        isInactive: startingSubscription || isDailyLimitReached,
+                        isInactive: startingSubscription,
                       })} py-3`}
                     >
-                      {isDailyLimitReached
-                        ? "내일 다시 이용하기"
-                        : startingSubscription
+                      {startingSubscription
                           ? "구독을 준비하고 있습니다..."
                           : isAuthenticated
                             ? `월 구독 시작하기 (${formattedSubscriptionPrice}원)`
@@ -5387,27 +5372,17 @@ export default function Home() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3">
                   <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
                     <p className="text-xs font-semibold text-violet-500">
-                      이번 달 사용 현황
+                      이번 달 남은 횟수
                     </p>
                     <p className="mt-2 text-lg font-bold text-gray-900">
                       {hasActivePostGeneratorSubscription
-                        ? `${POST_GENERATOR_MONTHLY_CREDITS - remainingSubscriptionCredits}회 사용 / ${POST_GENERATOR_MONTHLY_CREDITS}회 제공`
+                        ? `${remainingSubscriptionCredits}/${POST_GENERATOR_MONTHLY_CREDITS}`
                         : hasConsumedFreeTrial
                           ? `월 ${formattedSubscriptionPrice}원 구독으로 ${POST_GENERATOR_MONTHLY_CREDITS}회`
                           : "무료 체험 1회 제공"}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
-                    <p className="text-xs font-semibold text-violet-500">
-                      오늘 남은 횟수
-                    </p>
-                    <p className="mt-2 text-lg font-bold text-gray-900">
-                      {hasActivePostGeneratorSubscription
-                        ? `${remainingDailyGenerations}회`
-                        : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
                     </p>
                   </div>
                 </div>
@@ -5773,15 +5748,13 @@ export default function Home() {
                         ? handleMoveToPostSubscriptionPayment
                         : () => openAuthPage("postgen")
                     }
-                    disabled={startingSubscription || isDailyLimitReached}
+                    disabled={startingSubscription}
                     className={`${getPrimaryActionButtonClass({
                       theme: "violet",
-                      isInactive: startingSubscription || isDailyLimitReached,
+                      isInactive: startingSubscription,
                     })} py-3`}
                   >
-                    {isDailyLimitReached
-                      ? "오늘은 모두 사용했습니다"
-                      : startingSubscription
+                    {startingSubscription
                         ? "구독을 준비하고 있습니다..."
                         : isAuthenticated
                           ? `월 구독 시작하기 (${formattedSubscriptionPrice}원)`

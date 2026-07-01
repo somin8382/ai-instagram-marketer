@@ -15,10 +15,8 @@ import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import {
   addMonthsToKoreaDateString,
   getKoreaDateString,
-  getRemainingDailyGenerationCount,
   getRemainingSubscriptionCredits,
   isPostGeneratorSubscriptionActive,
-  POST_GENERATOR_DAILY_LIMIT,
   POST_GENERATOR_MONTHLY_CREDITS,
   POST_GENERATOR_MONTHLY_PRICE,
 } from "@/lib/post-generator/subscription";
@@ -38,9 +36,12 @@ import {
   ValidationToast,
 } from "@/lib/ui/form-feedback";
 import {
+  fetchAccountProfile,
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
+  persistAccountProfile,
   persistGeneratedPost,
+  consumePostGeneratorSubscriptionCredit,
   startPostGeneratorSubscription,
   syncProfileAndLinkData,
   type SavedGeneratedPost,
@@ -70,10 +71,39 @@ type GeneratedPost = {
   hashtags: string;
   imagePreview: string;
   imageModelText?: string;
+  visualPrompt?: string;
+  imageStyle?: string;
   createdAt?: string;
   isPersisted?: boolean;
   isFreeTrial?: boolean;
 };
+
+type PostEditState = {
+  imageHistory: string[];
+  historyIndex: number;
+  rerollCount: number;
+  editCount: number;
+  editPrompt: string;
+  rerollSuffix: string;
+  rerollLoading: boolean;
+  editLoading: boolean;
+};
+
+const REROLL_FEEL_VARIATIONS = {
+  same: "Subtly refresh the mood while preserving the original image structure.",
+  mood: "Change the mood and atmosphere only, making it feel fresh without changing composition.",
+  colors: "Change only the color palette and tone while keeping layout, subjects, and text exactly the same.",
+  premium: "Make the lighting, color tone, texture, and atmosphere feel more premium and refined only.",
+  realistic: "Make the lighting, texture, and atmosphere feel more realistic only.",
+} as const;
+
+const REROLL_SUFFIX_OPTIONS = [
+  { label: "같은 스타일", value: REROLL_FEEL_VARIATIONS.same },
+  { label: "다른 무드", value: REROLL_FEEL_VARIATIONS.mood },
+  { label: "다른 색감", value: REROLL_FEEL_VARIATIONS.colors },
+  { label: "더 고급스럽게", value: REROLL_FEEL_VARIATIONS.premium },
+  { label: "더 사실적으로", value: REROLL_FEEL_VARIATIONS.realistic },
+];
 
 type StoredAiResult = {
   accountPlan?: {
@@ -85,6 +115,20 @@ type StoredAiResult = {
 
 const APP_STORAGE_KEY = "qmeet-app-state";
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
+
+const ONBOARDING_INDUSTRY_OPTIONS = [
+  "뷰티/패션",
+  "카페/음식(F&B)",
+  "굿즈/캐릭터",
+  "교육/에듀테크",
+  "IT/SaaS/정보통신",
+  "의료/헬스케어",
+  "제조",
+  "로컬/소상공인",
+  "B2B·B2G 서비스",
+] as const;
+
+const ONBOARDING_CUSTOM_INDUSTRY = "__custom__";
 
 const POST_SUBSCRIPTION_BANK_TRANSFER_INFO = {
   bankName: "하나은행",
@@ -152,6 +196,7 @@ function mapSavedPostToGeneratedPost(post: SavedGeneratedPost): GeneratedPost {
     createdAt: post.createdAt,
     isPersisted: true,
     isFreeTrial: post.isFreeTrial,
+    visualPrompt: post.visualPrompt ?? undefined,
   };
 }
 
@@ -408,6 +453,22 @@ export default function ToolsPage() {
   const [submittingPostSubscription, setSubmittingPostSubscription] =
     useState(false);
 
+  const [postEditStates, setPostEditStates] = useState<Record<string, PostEditState>>({});
+  const [contextCompanyName, setContextCompanyName] = useState("");
+
+  const [showOnboardingModal, setShowOnboardingModal] = useState(false);
+  const [showPaymentRequiredModal, setShowPaymentRequiredModal] = useState(false);
+  const [onboardingInstagramUrl, setOnboardingInstagramUrl] = useState("");
+  const [onboardingYoutubeUrl, setOnboardingYoutubeUrl] = useState("");
+  const [onboardingBrandName, setOnboardingBrandName] = useState("");
+  const [onboardingCompanyName, setOnboardingCompanyName] = useState("");
+  const [onboardingIndustry, setOnboardingIndustry] = useState("");
+  const [onboardingIndustrySelection, setOnboardingIndustrySelection] = useState("");
+  const [onboardingProductService, setOnboardingProductService] = useState("");
+  const [onboardingInstagramUrlError, setOnboardingInstagramUrlError] = useState("");
+  const [onboardingYoutubeUrlError, setOnboardingYoutubeUrlError] = useState("");
+  const [savingOnboarding, setSavingOnboarding] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const mergedGeneratedPosts = mergeGeneratedPostHistory(
@@ -423,20 +484,13 @@ export default function ToolsPage() {
   const remainingSubscriptionCredits = hasActivePostGeneratorSubscription
     ? getRemainingSubscriptionCredits(postGeneratorSubscription)
     : 0;
-  const remainingDailyGenerations = hasActivePostGeneratorSubscription
-    ? getRemainingDailyGenerationCount(postGeneratorSubscription)
-    : 0;
   const canUseSubscriptionPostGeneration =
     hasActivePostGeneratorSubscription &&
-    remainingSubscriptionCredits > 0 &&
-    remainingDailyGenerations > 0;
+    remainingSubscriptionCredits > 0;
   const canUseFreeTrial = !hasConsumedFreeTrial;
   const canGeneratePost = canUseSubscriptionPostGeneration || canUseFreeTrial;
   const shouldShowPostLock = !canGeneratePost;
-  const isDailyLimitReached =
-    hasActivePostGeneratorSubscription &&
-    remainingSubscriptionCredits > 0 &&
-    remainingDailyGenerations === 0;
+  const needsAccountInfo = isAuthenticated && (isBlank(contextCompanyName) || isBlank(contextIndustry) || isBlank(contextProductService));
   const isSubscriptionCreditEmpty =
     hasActivePostGeneratorSubscription && remainingSubscriptionCredits === 0;
   const formattedSubscriptionPrice =
@@ -504,12 +558,15 @@ export default function ToolsPage() {
     return collectValidationIssues<ToolValidationField>([
       {
         field: "postInput",
-        message: isDailyLimitReached
-          ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
-          : isSubscriptionCreditEmpty
+        message: isSubscriptionCreditEmpty
             ? "남은 생성 횟수가 없습니다"
             : "월 구독 후 이용할 수 있습니다",
         isMissing: !canUseSubscriptionPostGeneration && !canUseFreeTrial,
+      },
+      {
+        field: "postInput",
+        message: "계정 정보를 먼저 입력해 주세요",
+        isMissing: needsAccountInfo,
       },
       {
         field: "postInput",
@@ -813,6 +870,7 @@ export default function ToolsPage() {
         hashtags: post.hashtags,
         imagePreview: post.imagePreview,
         imageModelText: post.imageModelText,
+        visualPrompt: post.visualPrompt,
         createdAt: post.createdAt,
         isPersisted: post.isPersisted,
         isFreeTrial: post.isFreeTrial,
@@ -1086,6 +1144,51 @@ export default function ToolsPage() {
   }, [isAuthenticated, userId, isTestAccountAuthenticated]);
 
   useEffect(() => {
+    if (!hasHydrated || !isAuthenticated || !userId || isTestAccountAuthenticated) return;
+
+    let active = true;
+
+    void fetchAccountProfile({ userId }).then(({ profile }) => {
+      if (!active || !profile) return;
+
+      const handle = (profile.brandName || profile.companyName).trim();
+      if (handle) setContextInstagramHandle(handle);
+      if (profile.marketingChannel === "instagram" || profile.marketingChannel === "youtube") {
+        setContextMarketingChannel(profile.marketingChannel);
+      }
+      if (profile.industry) setContextIndustry(profile.industry);
+      if (profile.productService) setContextProductService(profile.productService);
+      if (profile.companyName) setContextCompanyName(profile.companyName);
+
+      const needsOnboarding =
+        !profile.accountOnboardedAt ||
+        (!profile.companyName && !profile.industry && !profile.productService);
+
+      if (!needsOnboarding) return;
+
+      const prefillIndustry = profile.industry || profile.prefillIndustry;
+      const prefillProduct = profile.productService || profile.prefillProductService;
+
+      setOnboardingInstagramUrl(profile.instagramUrl || profile.prefillInstagramUrl);
+      setOnboardingYoutubeUrl(profile.youtubeUrl || profile.prefillYoutubeUrl);
+      setOnboardingBrandName(profile.brandName);
+      setOnboardingCompanyName(profile.companyName);
+      setOnboardingIndustry(prefillIndustry);
+      setOnboardingIndustrySelection(
+        prefillIndustry
+          ? (ONBOARDING_INDUSTRY_OPTIONS as readonly string[]).includes(prefillIndustry)
+            ? prefillIndustry
+            : ONBOARDING_CUSTOM_INDUSTRY
+          : ""
+      );
+      setOnboardingProductService(prefillProduct);
+      setShowOnboardingModal(true);
+    });
+
+    return () => { active = false; };
+  }, [hasHydrated, isAuthenticated, userId, isTestAccountAuthenticated]);
+
+  useEffect(() => {
     if (!savedGeneratedPosts.length) {
       return;
     }
@@ -1138,6 +1241,235 @@ export default function ToolsPage() {
     router.push(`/auth?${params.toString()}`);
   }
 
+  function openPaymentRequiredModal() {
+    setShowPaymentRequiredModal(true);
+  }
+
+  function getPostEditState(postKey: string, originalUrl: string): PostEditState {
+    return postEditStates[postKey] ?? {
+      imageHistory: [originalUrl],
+      historyIndex: 0,
+      rerollCount: 0,
+      editCount: 0,
+      editPrompt: "",
+      rerollSuffix: "",
+      rerollLoading: false,
+      editLoading: false,
+    };
+  }
+
+  function getCurrentImageUrl(postKey: string, originalUrl: string): string {
+    const s = getPostEditState(postKey, originalUrl);
+    return s.imageHistory[s.historyIndex] ?? originalUrl;
+  }
+
+  async function loadImageAsDataUrl(imageUrl: string) {
+    if (imageUrl.startsWith("data:")) {
+      return imageUrl;
+    }
+
+    const proxyRes = await fetch(`/api/image-proxy?url=${encodeURIComponent(imageUrl)}`);
+    if (!proxyRes.ok) throw new Error("이미지를 불러오지 못했습니다.");
+    const blob = await proxyRes.blob();
+
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function consumeMonthlyImageCredit() {
+    if (isTestAccountAuthenticated) {
+      const today = getKoreaDateString();
+      setPostGeneratorSubscription((current) => {
+        const baseSubscription =
+          current ?? buildTestAccountSubscription(POST_GENERATOR_MONTHLY_CREDITS);
+        const dailyUsageCount =
+          baseSubscription.lastUsageDate === today
+            ? baseSubscription.dailyUsageCount
+            : 0;
+
+        return {
+          ...baseSubscription,
+          remainingCredits: Math.max(baseSubscription.remainingCredits - 1, 0),
+          dailyUsageCount: dailyUsageCount + 1,
+          lastUsageDate: today,
+        };
+      });
+      return;
+    }
+
+    const result = await consumePostGeneratorSubscriptionCredit({ userId });
+
+    if (result.error || !result.subscription) {
+      throw new Error(result.error ?? "이미지 횟수 차감에 실패했습니다.");
+    }
+
+    setPostGeneratorSubscription(result.subscription);
+  }
+
+  function updatePostEditState(postKey: string, originalUrl: string, patch: Partial<PostEditState>) {
+    setPostEditStates((prev) => ({
+      ...prev,
+      [postKey]: { ...getPostEditState(postKey, originalUrl), ...patch },
+    }));
+  }
+
+  function pushImageToHistory(postKey: string, originalUrl: string, newUrl: string) {
+    setPostEditStates((prev) => {
+      const s = prev[postKey] ?? getPostEditState(postKey, originalUrl);
+      const truncated = s.imageHistory.slice(0, s.historyIndex + 1);
+      return {
+        ...prev,
+        [postKey]: {
+          ...s,
+          imageHistory: [...truncated, newUrl],
+          historyIndex: truncated.length,
+        },
+      };
+    });
+  }
+
+  async function downloadPostImage(imageUrl: string, filename: string) {
+    try {
+      let blob: Blob;
+      if (imageUrl.startsWith("data:")) {
+        const commaIdx = imageUrl.indexOf(",");
+        const header = commaIdx !== -1 ? imageUrl.slice(5, commaIdx) : "";
+        const mimeMatch = header.match(/^(image\/[\w.+-]+);base64$/);
+        if (!mimeMatch) { showValidationToast("이미지 다운로드에 실패했습니다."); return; }
+        const binary = atob(imageUrl.slice(commaIdx + 1));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        blob = new Blob([bytes], { type: mimeMatch[1] });
+      } else {
+        const res = await fetch(`/api/image-proxy?url=${encodeURIComponent(imageUrl)}`);
+        if (!res.ok) { showValidationToast("이미지 다운로드에 실패했습니다."); return; }
+        blob = await res.blob();
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      showValidationToast("이미지 다운로드에 실패했습니다.");
+    }
+  }
+
+  async function handleReroll(postKey: string, post: GeneratedPost) {
+    const s = getPostEditState(postKey, post.imagePreview);
+    if (s.rerollLoading) return;
+    if (!canUseSubscriptionPostGeneration) {
+      openPaymentRequiredModal();
+      return;
+    }
+    if (!post.visualPrompt?.trim()) {
+      showValidationToast("이 게시물은 재생성 정보가 없습니다.");
+      return;
+    }
+
+    const suffix = s.rerollSuffix;
+    const currentUrl = getCurrentImageUrl(postKey, post.imagePreview);
+    updatePostEditState(postKey, post.imagePreview, { rerollLoading: true });
+
+    try {
+      const base64 = await loadImageAsDataUrl(currentUrl);
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "image_only",
+          imageEditBase64: base64,
+          visualPrompt: post.visualPrompt,
+          rerollSuffix: suffix,
+          instagramHandle: contextInstagramHandle,
+          industry: contextIndustry,
+          productService: contextProductService,
+          marketingChannel: contextMarketingChannel,
+        }),
+      });
+      const data = await res.json() as { generatedImageUrl?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "재생성 실패");
+      if (!data.generatedImageUrl) throw new Error("이미지 결과 없음");
+
+      await consumeMonthlyImageCredit();
+      pushImageToHistory(postKey, post.imagePreview, data.generatedImageUrl);
+      setPostEditStates((prev) => ({
+        ...prev,
+        [postKey]: {
+          ...(prev[postKey] ?? getPostEditState(postKey, post.imagePreview)),
+          rerollCount: (prev[postKey]?.rerollCount ?? 0) + 1,
+          rerollLoading: false,
+        },
+      }));
+    } catch (err) {
+      const msg =
+        err instanceof TypeError
+          ? "생성이 오래 걸려 실패했어요. 다시 시도해 주세요."
+          : err instanceof Error
+          ? err.message
+          : "재생성에 실패했습니다.";
+      showValidationToast(msg);
+      updatePostEditState(postKey, post.imagePreview, { rerollLoading: false });
+    }
+  }
+
+  async function handleAiEdit(postKey: string, post: GeneratedPost) {
+    const s = getPostEditState(postKey, post.imagePreview);
+    if (s.editLoading || !s.editPrompt.trim()) return;
+    if (!canUseSubscriptionPostGeneration) {
+      openPaymentRequiredModal();
+      return;
+    }
+
+    const currentUrl = getCurrentImageUrl(postKey, post.imagePreview);
+    updatePostEditState(postKey, post.imagePreview, { editLoading: true });
+
+    try {
+      const base64 = await loadImageAsDataUrl(currentUrl);
+
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "image_edit",
+          imageEditBase64: base64,
+          editPrompt: s.editPrompt,
+          industry: contextIndustry,
+          productService: contextProductService,
+        }),
+      });
+      const data = await res.json() as { generatedImageUrl?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "수정 실패");
+      if (!data.generatedImageUrl) throw new Error("이미지 결과 없음");
+
+      await consumeMonthlyImageCredit();
+      pushImageToHistory(postKey, post.imagePreview, data.generatedImageUrl);
+      setPostEditStates((prev) => ({
+        ...prev,
+        [postKey]: {
+          ...(prev[postKey] ?? getPostEditState(postKey, post.imagePreview)),
+          editCount: (prev[postKey]?.editCount ?? 0) + 1,
+          editPrompt: "",
+          editLoading: false,
+        },
+      }));
+    } catch (err) {
+      const msg =
+        err instanceof TypeError
+          ? "생성이 오래 걸려 실패했어요. 다시 시도해 주세요."
+          : err instanceof Error
+          ? err.message
+          : "수정에 실패했어요. 다시 시도해주세요.";
+      showValidationToast(msg);
+      updatePostEditState(postKey, post.imagePreview, { editLoading: false });
+    }
+  }
+
   function navigateBack() {
     if (step === "postsub-status") {
       setStep("postsub-payment");
@@ -1172,6 +1504,67 @@ export default function ToolsPage() {
     setIsRequestLinked(false);
     setHasTestAccess(false);
     setPostGeneratorSubscription(null);
+  }
+
+  async function handleOnboardingSave() {
+    if (savingOnboarding || !userId) return;
+
+    const urlPattern = /^https?:\/\//i;
+    let hasUrlError = false;
+
+    if (onboardingInstagramUrl.trim() && !urlPattern.test(onboardingInstagramUrl.trim())) {
+      setOnboardingInstagramUrlError("http:// 또는 https://로 시작하는 URL을 입력해주세요");
+      hasUrlError = true;
+    } else {
+      setOnboardingInstagramUrlError("");
+    }
+
+    if (onboardingYoutubeUrl.trim() && !urlPattern.test(onboardingYoutubeUrl.trim())) {
+      setOnboardingYoutubeUrlError("http:// 또는 https://로 시작하는 URL을 입력해주세요");
+      hasUrlError = true;
+    } else {
+      setOnboardingYoutubeUrlError("");
+    }
+
+    if (hasUrlError) return;
+
+    if (isBlank(onboardingCompanyName) || isBlank(onboardingIndustry) || isBlank(onboardingProductService)) {
+      showValidationToast("회사명, 업종, 판매 상품·서비스는 필수 항목입니다.");
+      return;
+    }
+
+    setSavingOnboarding(true);
+    try {
+      const result = await persistAccountProfile({
+        userId,
+        companyName: onboardingCompanyName,
+        brandName: onboardingBrandName,
+        instagramUrl: onboardingInstagramUrl,
+        youtubeUrl: onboardingYoutubeUrl,
+        industry: onboardingIndustry,
+        productService: onboardingProductService,
+      });
+
+      if (result.error) {
+        showValidationToast("저장에 실패했습니다. 다시 시도해주세요.");
+        return;
+      }
+
+      const derivedChannel = onboardingInstagramUrl.trim()
+        ? "instagram"
+        : onboardingYoutubeUrl.trim()
+          ? "youtube"
+          : "";
+
+      setContextInstagramHandle((onboardingBrandName || onboardingCompanyName).trim());
+      setContextMarketingChannel(derivedChannel);
+      setContextCompanyName(onboardingCompanyName.trim());
+      setContextIndustry(onboardingIndustry.trim());
+      setContextProductService(onboardingProductService.trim());
+      setShowOnboardingModal(false);
+    } finally {
+      setSavingOnboarding(false);
+    }
   }
 
   function handleMoveToPostSubscriptionPayment() {
@@ -1309,6 +1702,9 @@ export default function ToolsPage() {
     }
 
     if (!surfaceValidationIssues(postGenerationValidationIssues)) {
+      if (needsAccountInfo) {
+        setShowOnboardingModal(true);
+      }
       return;
     }
 
@@ -1383,13 +1779,14 @@ export default function ToolsPage() {
         throw new Error("실제 OpenRouter API 응답이 아닙니다.");
       }
 
-      const nextPost = {
+      let nextPost: GeneratedPost = {
         id: crypto.randomUUID(),
         title: data.title,
         content: data.content,
         hashtags: data.hashtags,
         imagePreview: data.generatedImageUrl,
         imageModelText: data.imageModelText,
+        visualPrompt: typeof data.visualPrompt === "string" ? data.visualPrompt : undefined,
         createdAt: new Date().toISOString(),
         isPersisted: false,
         isFreeTrial: isFreeTrialGeneration,
@@ -1435,6 +1832,7 @@ export default function ToolsPage() {
           hashtags: nextPost.hashtags,
           imageUrl: nextPost.imagePreview,
           isFreeTrial: isFreeTrialGeneration,
+          visualPrompt: nextPost.visualPrompt ?? null,
         });
 
         if (
@@ -1443,6 +1841,14 @@ export default function ToolsPage() {
           !persistenceResult.queued
         ) {
           throw new Error(persistenceResult.error);
+        }
+
+        if (persistenceResult.generatedPostId) {
+          nextPost = {
+            ...nextPost,
+            id: persistenceResult.generatedPostId,
+            isPersisted: true,
+          };
         }
       }
 
@@ -1453,7 +1859,9 @@ export default function ToolsPage() {
       }
     } catch (err) {
       const message =
-        err instanceof Error
+        err instanceof TypeError
+          ? "생성이 오래 걸려 실패했어요. 다시 시도해 주세요."
+          : err instanceof Error
           ? err.message
           : "AI 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
       setPostError(message);
@@ -1501,32 +1909,43 @@ export default function ToolsPage() {
               <p className="text-sm text-gray-500">
                 이미지를 업로드하면 AI가 게시물을 자동으로 생성해드립니다.
               </p>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 이용할 수
-                있습니다. 매월 {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
-                {POST_GENERATOR_DAILY_LIMIT}회까지 게시물 생성이 가능합니다.
-              </p>
+              {hasHydrated && (
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 이용할 수
+                  있습니다. 매월 40회까지 게시물
+                  생성, 이미지 재생성, AI 수정을 함께 이용할 수 있습니다.
+                </p>
+              )}
             </div>
 
             <Card className="space-y-4 border-violet-100">
               <SectionLabel>요금 안내</SectionLabel>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
                   <p className="text-xs font-semibold text-violet-500">월 요금</p>
                   <p className="mt-2 text-lg font-bold text-gray-900">
                     {formattedSubscriptionPrice}원
                   </p>
                 </div>
-                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">월 제공량</p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {POST_GENERATOR_MONTHLY_CREDITS}회
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4 space-y-3">
+                  <p className="text-xs font-semibold text-violet-500">
+                    모두의창업 이용자 전용 혜택
                   </p>
-                </div>
-                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">일일 한도</p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {POST_GENERATOR_DAILY_LIMIT}회
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium text-gray-600">
+                      기본 제공 30회
+                    </p>
+                    <p className="text-sm font-medium text-violet-600">
+                      추가 제공 +10회
+                    </p>
+                  </div>
+                  <p className="text-2xl font-extrabold tracking-tight text-gray-900">
+                    총 40회 이용 가능
+                  </p>
+                  <p className="border-t border-violet-100 pt-3 text-xs leading-relaxed text-gray-500">
+                    추가 이용 횟수(토큰) 구매를 원하시는 경우
+                    <br />
+                    1:1 카카오톡으로 문의해주세요.
                   </p>
                 </div>
               </div>
@@ -1786,8 +2205,8 @@ export default function ToolsPage() {
                   입금 확인이 완료되면 게시물 AI 생성 기능이 즉시 활성화됩니다.
                 </p>
                 <p className="text-sm text-violet-600 leading-relaxed">
-                  활성화 후 매월 {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
-                  {POST_GENERATOR_DAILY_LIMIT}회까지 이용할 수 있습니다.
+                  활성화 후 매월 40회까지 이미지
+                  생성, 재생성, AI 수정을 함께 이용할 수 있습니다.
                 </p>
                 {postSubRequestedAt && (
                   <p className="text-xs text-violet-500">
@@ -1916,49 +2335,111 @@ export default function ToolsPage() {
           </div>
 
           <div className="space-y-4">
-            <Card className="bg-violet-50/60 border-violet-100 space-y-4">
-              <div className="space-y-1">
-                <p className="text-sm font-semibold text-violet-700">
-                  게시물 AI 생성은 구독형으로 운영됩니다
-                </p>
-                <p className="text-xs text-violet-600 leading-relaxed">
-                  1회 무료 체험 후 월 {formattedSubscriptionPrice}원 구독으로 매월{" "}
-                  {POST_GENERATOR_MONTHLY_CREDITS}회, 하루 최대{" "}
-                  {POST_GENERATOR_DAILY_LIMIT}회까지 바로 생성할 수 있습니다.
-                </p>
+            <Card className="border-gray-200 p-5 space-y-4">
+              <div>
+                <div className="mb-4 flex items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-5 w-5"
+                    >
+                      <path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z" />
+                    </svg>
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-gray-900">
+                      게시물 AI 생성 구독
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      이미지 생성·재생성·AI 수정을 한 번에
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mt-0.5 h-[18px] w-[18px] shrink-0 text-gray-400"
+                    >
+                      <rect x="2" y="5" width="20" height="14" rx="2" />
+                      <line x1="2" y1="10" x2="22" y2="10" />
+                    </svg>
+                    <p className="text-sm leading-relaxed text-gray-800">
+                      게시물 AI 생성은 구독형으로 운영됩니다.{" "}
+                      <span className="font-semibold">월 20,000원</span> 구독으로
+                      이미지 생성, 재생성, AI 수정 기능을 이용하실 수 있습니다.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-[18px] w-[18px] shrink-0 text-emerald-600"
+                    >
+                      <polyline points="20 12 20 22 4 22 4 12" />
+                      <rect x="2" y="7" width="20" height="5" />
+                      <line x1="12" y1="22" x2="12" y2="7" />
+                      <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+                      <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+                    </svg>
+                    <p className="text-sm font-semibold text-emerald-800">
+                      모두의창업 이용자 전용 혜택
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-lg bg-white/70 px-3 py-2.5">
+                      <p className="text-xs text-emerald-700">기본 제공</p>
+                      <p className="text-lg font-semibold text-emerald-900">30회</p>
+                    </div>
+                    <div className="rounded-lg bg-white/70 px-3 py-2.5">
+                      <p className="text-xs text-emerald-700">추가 제공</p>
+                      <p className="text-lg font-semibold text-emerald-900">+10회</p>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">구독 상태</p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {loadingSubscription
-                      ? "확인 중"
-                      : hasActivePostGeneratorSubscription
-                        ? "월 구독 이용중"
-                        : "무료 체험 또는 미구독"}
-                  </p>
+              {hasHydrated && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
+                    <p className="text-xs font-semibold text-violet-500">구독 상태</p>
+                    <p className="mt-2 text-lg font-bold text-gray-900">
+                      {loadingSubscription
+                        ? "확인 중"
+                        : hasActivePostGeneratorSubscription
+                          ? "월 구독 이용중"
+                          : "무료 체험 또는 미구독"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
+                    <p className="text-xs font-semibold text-violet-500">
+                      이번 달 남은 횟수
+                    </p>
+                    <p className="mt-2 text-lg font-bold text-gray-900">
+                      {hasActivePostGeneratorSubscription
+                        ? `${remainingSubscriptionCredits}/${POST_GENERATOR_MONTHLY_CREDITS}`
+                        : hasConsumedFreeTrial
+                          ? "구독 필요"
+                          : "무료 1회 가능"}
+                    </p>
+                  </div>
                 </div>
-                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">
-                    남은 생성 횟수
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {hasActivePostGeneratorSubscription
-                      ? `${remainingSubscriptionCredits}회`
-                      : hasConsumedFreeTrial
-                        ? "구독 필요"
-                        : "무료 1회 가능"}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-violet-100 bg-white/80 px-4 py-4">
-                  <p className="text-xs font-semibold text-violet-500">오늘 남은 횟수</p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {hasActivePostGeneratorSubscription
-                      ? `${remainingDailyGenerations}회`
-                      : `하루 최대 ${POST_GENERATOR_DAILY_LIMIT}회`}
-                  </p>
-                </div>
-              </div>
+              )}
             </Card>
 
             {shouldShowPostLock ? (
@@ -1968,9 +2449,7 @@ export default function ToolsPage() {
                 </div>
                 <div className="space-y-1">
                   <p className="font-semibold text-gray-700 text-lg">
-                    {isDailyLimitReached
-                      ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
-                      : isSubscriptionCreditEmpty
+                    {isSubscriptionCreditEmpty
                         ? "이번 달 남은 생성 횟수가 없습니다"
                         : hasConsumedFreeTrial
                           ? "무료 체험 1회를 모두 사용하셨습니다"
@@ -1980,15 +2459,13 @@ export default function ToolsPage() {
                     새 게시물 생성은 잠겨 있지만, 이전에 생성한 게시물은 계속 확인할 수 있습니다
                   </p>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                    {isDailyLimitReached
-                      ? "하루 제한이 초기화되면 다시 생성할 수 있습니다"
-                      : hasActivePostGeneratorSubscription
+                    {hasActivePostGeneratorSubscription
                         ? "다음 결제 주기에 다시 충전되거나 이후 추가 크레딧 기능으로 확장될 예정입니다"
                         : "계속 이용하려면 로그인 후 월 구독을 시작해주세요"}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {hasActivePostGeneratorSubscription && !isDailyLimitReached ? (
+                  {hasActivePostGeneratorSubscription ? (
                     <button
                       disabled
                       className={`${getPrimaryActionButtonClass({
@@ -2005,15 +2482,13 @@ export default function ToolsPage() {
                           ? handleMoveToPostSubscriptionPayment
                           : () => openAuthPage("login")
                       }
-                      disabled={startingSubscription || isDailyLimitReached}
+                      disabled={startingSubscription}
                       className={`${getPrimaryActionButtonClass({
                         theme: "violet",
-                        isInactive: startingSubscription || isDailyLimitReached,
+                        isInactive: startingSubscription,
                       })} py-3`}
                     >
-                      {isDailyLimitReached
-                        ? "내일 다시 이용하기"
-                        : startingSubscription
+                      {startingSubscription
                           ? "구독을 준비하고 있습니다..."
                           : isAuthenticated
                             ? `월 구독 시작하기 (${formattedSubscriptionPrice}원)`
@@ -2034,7 +2509,7 @@ export default function ToolsPage() {
                   <SectionLabel>게시물 제작</SectionLabel>
                   <span className="text-xs font-semibold text-violet-600 bg-violet-50 px-3 py-1 rounded-full">
                     {canUseSubscriptionPostGeneration
-                      ? `남은 횟수: ${remainingSubscriptionCredits}개`
+                      ? `이번 달 남은 횟수 ${remainingSubscriptionCredits}/${POST_GENERATOR_MONTHLY_CREDITS}`
                       : hasConsumedFreeTrial
                         ? "무료 체험 완료"
                         : "무료 체험 가능"}
@@ -2263,34 +2738,122 @@ export default function ToolsPage() {
                   <SectionLabel>
                     생성된 게시물 #{mergedGeneratedPosts.length - i}
                   </SectionLabel>
+                  {(() => {
+                    const s = getPostEditState(postKey, post.imagePreview);
+                    const currentImg = getCurrentImageUrl(postKey, post.imagePreview);
+                    const canUndo = s.historyIndex > 0;
+                    const canRedo = s.historyIndex < s.imageHistory.length - 1;
+                    const isMonthlyCreditEmpty =
+                      hasActivePostGeneratorSubscription &&
+                      remainingSubscriptionCredits <= 0;
+                    return (
                   <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-4 items-start">
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-gray-900">
-                            정사각형 피드 이미지
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            깔끔한 피드용 이미지 미리보기
-                          </p>
-                        </div>
-                        <a
-                          href={post.imagePreview}
-                          download={`인스타그램-게시물-${mergedGeneratedPosts.length - i}.png`}
-                          className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors"
+                      {/* header row */}
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-gray-900">피드 이미지</p>
+                        <button
+                          onClick={() => downloadPostImage(
+                            currentImg,
+                            `인스타그램-게시물-${mergedGeneratedPosts.length - i}.png`
+                          )}
+                          className="inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors"
                         >
-                          이미지 다운로드
-                        </a>
+                          다운로드
+                        </button>
                       </div>
+
+                      {/* image */}
                       <div className="relative max-w-[260px] w-full rounded-xl overflow-hidden border border-gray-100 aspect-square bg-gray-50 mx-auto md:mx-0 shadow-sm">
                         <Image
-                          src={post.imagePreview}
+                          src={currentImg}
                           alt="게시물 이미지"
                           fill
                           unoptimized
                           sizes="260px"
                           className="object-cover"
                         />
+                      </div>
+
+                      {/* history nav */}
+                      {s.imageHistory.length > 1 && (
+                        <div className="flex items-center gap-2 justify-center">
+                          <button
+                            disabled={!canUndo}
+                            onClick={() => updatePostEditState(postKey, post.imagePreview, { historyIndex: s.historyIndex - 1 })}
+                            className="px-2 py-1 text-xs rounded-md bg-gray-100 text-gray-600 disabled:opacity-30 hover:bg-gray-200 transition-colors"
+                          >
+                            ← 이전
+                          </button>
+                          <span className="text-xs text-gray-400">{s.historyIndex + 1} / {s.imageHistory.length}</span>
+                          <button
+                            disabled={!canRedo}
+                            onClick={() => updatePostEditState(postKey, post.imagePreview, { historyIndex: s.historyIndex + 1 })}
+                            className="px-2 py-1 text-xs rounded-md bg-gray-100 text-gray-600 disabled:opacity-30 hover:bg-gray-200 transition-colors"
+                          >
+                            다음 →
+                          </button>
+                        </div>
+                      )}
+
+                      {isMonthlyCreditEmpty && (
+                        <p className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">
+                          이번 달 이미지 횟수를 모두 사용했어요.
+                        </p>
+                      )}
+
+                      {/* re-roll */}
+                      <div className="space-y-2 border border-gray-100 rounded-xl p-3 bg-gray-50">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-gray-700">이미지 재생성</span>
+                          <span className="text-xs text-gray-400">공유 횟수 차감</span>
+                        </div>
+                        <select
+                          value={s.rerollSuffix}
+                          onChange={(e) => updatePostEditState(postKey, post.imagePreview, { rerollSuffix: e.target.value })}
+                          className="w-full text-xs rounded-lg border border-gray-200 px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
+                        >
+                          {REROLL_SUFFIX_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                        <button
+                          disabled={s.rerollLoading || isMonthlyCreditEmpty}
+                          onClick={() => handleReroll(postKey, post)}
+                          className="w-full text-xs py-1.5 rounded-lg font-semibold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors"
+                        >
+                          {isMonthlyCreditEmpty
+                            ? "이번 달 횟수 없음"
+                            : s.rerollLoading
+                              ? "생성 중…"
+                              : "다시 생성"}
+                        </button>
+                      </div>
+
+                      {/* AI edit */}
+                      <div className="space-y-2 border border-gray-100 rounded-xl p-3 bg-gray-50">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-gray-700">AI로 이미지 수정</span>
+                          <span className="text-xs text-gray-400">공유 횟수 차감</span>
+                        </div>
+                        <textarea
+                          value={s.editPrompt}
+                          onChange={(e) => updatePostEditState(postKey, post.imagePreview, { editPrompt: e.target.value })}
+                          placeholder="예: 배경을 하늘색으로, 더 밝게 수정해줘"
+                          rows={2}
+                          className="w-full text-xs rounded-lg border border-gray-200 px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-violet-400"
+                        />
+                        <button
+                          disabled={s.editLoading || isMonthlyCreditEmpty || !s.editPrompt.trim()}
+                          onClick={() => handleAiEdit(postKey, post)}
+                          className="w-full text-xs py-1.5 rounded-lg font-semibold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors"
+                        >
+                          {isMonthlyCreditEmpty
+                            ? "이번 달 횟수 없음"
+                            : s.editLoading
+                              ? "수정 중…"
+                              : "AI 수정 적용"}
+                        </button>
                       </div>
                     </div>
                     <div className="p-3 bg-gray-50 rounded-xl space-y-3">
@@ -2347,23 +2910,46 @@ export default function ToolsPage() {
                       </div>
                     </div>
                   </div>
+                    );
+                  })()}
                 </Card>
               );
             })}
 
             {mergedGeneratedPosts.length > 0 && !canUseSubscriptionPostGeneration && (
-              <Card className="space-y-4 border-violet-100 bg-violet-50/50">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-violet-700">
-                    {hasActivePostGeneratorSubscription
-                      ? "오늘 생성 가능한 횟수를 모두 사용했습니다"
-                      : "무료 체험이 완료되었습니다"}
-                  </p>
-                  <p className="text-sm text-violet-600">
-                    {hasActivePostGeneratorSubscription
-                      ? "내일 다시 이용하거나 다음 결제 주기에 맞춰 계속 사용해보세요"
-                      : `월 ${formattedSubscriptionPrice}원 구독으로 매월 ${POST_GENERATOR_MONTHLY_CREDITS}회 생성할 수 있습니다`}
-                  </p>
+              <Card className="border-gray-200 bg-white p-5 space-y-4">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-50 text-violet-600">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-5 w-5"
+                    >
+                      <path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z" />
+                    </svg>
+                  </span>
+                  <div className="space-y-1">
+                    <p className="text-base font-semibold text-gray-900">
+                      {hasActivePostGeneratorSubscription
+                        ? "이번 달 이미지 횟수를 모두 사용했어요."
+                        : "무료 체험이 완료되었습니다."}
+                    </p>
+                    <p className="text-sm leading-relaxed text-gray-500">
+                      {hasActivePostGeneratorSubscription
+                        ? "다음 결제 주기에 맞춰 다시 이용하실 수 있습니다."
+                        : (
+                            <>
+                              회원가입 또는 로그인하여
+                              <br />
+                              AI 이미지 생성을 계속 이용해보세요.
+                            </>
+                          )}
+                    </p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
@@ -2372,15 +2958,13 @@ export default function ToolsPage() {
                         ? handleMoveToPostSubscriptionPayment
                         : () => openAuthPage("login")
                     }
-                    disabled={startingSubscription || isDailyLimitReached}
+                    disabled={startingSubscription}
                     className={`${getPrimaryActionButtonClass({
                       theme: "violet",
-                      isInactive: startingSubscription || isDailyLimitReached,
+                      isInactive: startingSubscription,
                     })} py-3`}
                   >
-                    {isDailyLimitReached
-                      ? "오늘은 모두 사용했습니다"
-                      : startingSubscription
+                    {startingSubscription
                         ? "구독을 준비하고 있습니다..."
                         : isAuthenticated
                           ? `월 구독 시작하기 (${formattedSubscriptionPrice}원)`
@@ -2398,6 +2982,199 @@ export default function ToolsPage() {
           </div>
         </div>
       </main>
+      {showPaymentRequiredModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 space-y-5 shadow-xl">
+            <div className="space-y-2">
+              <h2 className="text-lg font-bold text-gray-900">결제가 필요해요</h2>
+              <p className="text-sm leading-relaxed text-gray-500">
+                다시 생성과 AI 수정은 결제 후 이용할 수 있어요.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                onClick={() => {
+                  setShowPaymentRequiredModal(false);
+                  if (isAuthenticated) {
+                    handleMoveToPostSubscriptionPayment();
+                    return;
+                  }
+                  openAuthPage("login");
+                }}
+                className={`${getPrimaryActionButtonClass({ theme: "violet" })} py-3`}
+              >
+                {isAuthenticated ? "결제하러 가기" : "로그인하고 결제하기"}
+              </button>
+              <button
+                onClick={() => setShowPaymentRequiredModal(false)}
+                className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showOnboardingModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90dvh] overflow-y-auto p-6 space-y-5 shadow-xl">
+            <div className="flex items-start justify-between">
+              <div className="space-y-0.5">
+                <h2 className="text-lg font-bold text-gray-900">계정 정보를 알려주세요</h2>
+                <p className="text-sm text-gray-500">
+                  입력하신 정보로 더 딱 맞는 게시물을 만들어드려요.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowOnboardingModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors text-xl leading-none ml-3 mt-0.5"
+                aria-label="닫기"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700">
+                인스타그램 URL
+                <span className="ml-1.5 text-xs font-normal text-gray-400">선택</span>
+              </label>
+              <input
+                type="url"
+                value={onboardingInstagramUrl}
+                onChange={(e) => {
+                  setOnboardingInstagramUrl(e.target.value);
+                  if (onboardingInstagramUrlError) setOnboardingInstagramUrlError("");
+                }}
+                placeholder="https://instagram.com/..."
+                className={getTextFieldClass({ theme: "violet", hasError: !!onboardingInstagramUrlError })}
+              />
+              {onboardingInstagramUrlError && (
+                <p className={getHelperTextClass("violet")}>
+                  {onboardingInstagramUrlError}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700">
+                유튜브 URL
+                <span className="ml-1.5 text-xs font-normal text-gray-400">선택</span>
+              </label>
+              <input
+                type="url"
+                value={onboardingYoutubeUrl}
+                onChange={(e) => {
+                  setOnboardingYoutubeUrl(e.target.value);
+                  if (onboardingYoutubeUrlError) setOnboardingYoutubeUrlError("");
+                }}
+                placeholder="https://youtube.com/@..."
+                className={getTextFieldClass({ theme: "violet", hasError: !!onboardingYoutubeUrlError })}
+              />
+              {onboardingYoutubeUrlError && (
+                <p className={getHelperTextClass("violet")}>
+                  {onboardingYoutubeUrlError}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700">
+                브랜드 / 아이템명
+                <span className="ml-1.5 text-xs font-normal text-gray-400">선택</span>
+              </label>
+              <input
+                type="text"
+                value={onboardingBrandName}
+                onChange={(e) => setOnboardingBrandName(e.target.value)}
+                placeholder="예: AI 게시물 생성기, 뷰티구독"
+                className={getTextFieldClass({ theme: "violet", hasError: false })}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700">
+                회사명 <span className="text-rose-500 ml-0.5">*</span>
+              </label>
+              <input
+                type="text"
+                value={onboardingCompanyName}
+                onChange={(e) => setOnboardingCompanyName(e.target.value)}
+                placeholder="예: 큐밋, 뷰티캐슬"
+                className={getTextFieldClass({ theme: "violet", hasError: false })}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700">
+                업종 <span className="text-rose-500 ml-0.5">*</span>
+              </label>
+              <select
+                value={onboardingIndustrySelection}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setOnboardingIndustrySelection(next);
+                  if (next !== ONBOARDING_CUSTOM_INDUSTRY) {
+                    setOnboardingIndustry(next);
+                  } else {
+                    setOnboardingIndustry("");
+                  }
+                }}
+                className={getTextFieldClass({ theme: "violet", hasError: false })}
+              >
+                <option value="">업종을 선택해주세요</option>
+                {ONBOARDING_INDUSTRY_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+                <option value={ONBOARDING_CUSTOM_INDUSTRY}>기타(직접 입력)</option>
+              </select>
+              {onboardingIndustrySelection === ONBOARDING_CUSTOM_INDUSTRY && (
+                <input
+                  type="text"
+                  value={onboardingIndustry}
+                  onChange={(e) => setOnboardingIndustry(e.target.value)}
+                  placeholder="예: 반려동물 용품"
+                  className={getTextFieldClass({ theme: "violet", hasError: false })}
+                />
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-gray-700">
+                판매 상품 · 서비스 한줄 소개 <span className="text-rose-500 ml-0.5">*</span>
+              </label>
+              <input
+                type="text"
+                value={onboardingProductService}
+                onChange={(e) => setOnboardingProductService(e.target.value)}
+                placeholder="예: 소상공인을 위한 SNS 게시물 자동 생성 서비스"
+                className={getTextFieldClass({ theme: "violet", hasError: false })}
+              />
+            </div>
+
+            <button
+              onClick={() => void handleOnboardingSave()}
+              disabled={
+                savingOnboarding ||
+                isBlank(onboardingCompanyName) ||
+                isBlank(onboardingIndustry) ||
+                isBlank(onboardingProductService)
+              }
+              className={`${getPrimaryActionButtonClass({
+                theme: "violet",
+                isInactive:
+                  savingOnboarding ||
+                  isBlank(onboardingCompanyName) ||
+                  isBlank(onboardingIndustry) ||
+                  isBlank(onboardingProductService),
+              })} py-3`}
+            >
+              {savingOnboarding ? "저장 중..." : "저장하고 시작하기"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}

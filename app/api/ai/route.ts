@@ -2,7 +2,6 @@ import { createClient } from "@supabase/supabase-js";
 import {
   getEffectiveDailyUsageCount,
   getKoreaDateString,
-  getRemainingDailyGenerationCount,
   getRemainingSubscriptionCredits,
   isPostGeneratorSubscriptionActive,
   POST_GENERATOR_PLAN_TYPE,
@@ -14,7 +13,11 @@ import {
   verifyInternalTestSessionToken,
 } from "@/lib/server/internal-test-session";
 
+export const maxDuration = 60;
+
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_TIMEOUT_MS = 55_000;
+const IMAGE_STORAGE_BUCKET = "post-images";
 const TEXT_MODEL = "openai/gpt-4o-mini";
 const IMAGE_MODEL = "google/gemini-3-pro-image-preview";
 
@@ -39,13 +42,14 @@ type PostImageResult = {
   content: string;
   hashtags: string;
   generatedImageUrl: string;
+  visualPrompt?: string;
   imageModelText?: string;
   planningModel: string;
   imageModel: string;
 };
 
 type AiRequestBody = {
-  type?: "planning" | "post_image";
+  type?: "planning" | "post_image" | "image_only" | "image_edit";
   usageMode?: "free_trial" | "premium";
   accessToken?: string | null;
   isInternalTestAccount?: boolean;
@@ -69,6 +73,12 @@ type AiRequestBody = {
   contentTone?: string;
   emojiUsage?: string;
   imageStyle?: string;
+  // image_only (re-roll)
+  visualPrompt?: string;
+  rerollSuffix?: string;
+  // image_edit (AI edit)
+  imageEditBase64?: string;
+  editPrompt?: string;
 };
 
 type OpenRouterMessage =
@@ -105,6 +115,14 @@ export async function POST(request: Request) {
 
   if (body.type === "post_image") {
     return handlePostImageGeneration(body, apiKey, request);
+  }
+
+  if (body.type === "image_only") {
+    return handleImageOnly(body, apiKey);
+  }
+
+  if (body.type === "image_edit") {
+    return handleImageEdit(body, apiKey);
   }
 
   return handlePlanning(body, apiKey);
@@ -341,11 +359,24 @@ Requirements:
     );
   }
 
+  const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
+  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(
+    premiumAccess
+  );
+
+  if (!premiumUsageResult.ok) {
+    return Response.json(
+      { error: premiumUsageResult.error },
+      { status: premiumUsageResult.statusCode }
+    );
+  }
+
   const result: PostImageResult = {
     title: postPlan.data.title,
     content: postPlan.data.content,
     hashtags: postPlan.data.hashtags,
-    generatedImageUrl: imageOutputs[0],
+    generatedImageUrl,
+    visualPrompt: postPlan.data.visualPrompt,
     planningModel: TEXT_MODEL,
     imageModel: IMAGE_MODEL,
   };
@@ -376,13 +407,13 @@ async function verifyPremiumGenerationAccess(input: {
   request: Request;
 }) {
   if (input.usageMode !== "premium") {
-    return { ok: true as const };
+    return { ok: true as const, shouldConsumeCredit: false as const };
   }
 
   // Local development fallback for the hardcoded internal test account.
   // Keep this bypass disabled in production.
   if (input.allowInternalTestBypass && process.env.NODE_ENV !== "production") {
-    return { ok: true as const };
+    return { ok: true as const, shouldConsumeCredit: false as const };
   }
 
   const cookieHeader = input.request.headers.get("cookie") ?? "";
@@ -390,7 +421,7 @@ async function verifyPremiumGenerationAccess(input: {
   const internalSession = verifyInternalTestSessionToken(internalSessionToken);
 
   if (internalSession.valid) {
-    return { ok: true as const };
+    return { ok: true as const, shouldConsumeCredit: false as const };
   }
 
   if (!input.accessToken) {
@@ -500,10 +531,81 @@ async function verifyPremiumGenerationAccess(input: {
     };
   }
 
-  if (getRemainingDailyGenerationCount(subscriptionForValidation, today) <= 0) {
+  return {
+    ok: true as const,
+    shouldConsumeCredit: true as const,
+    accessToken: input.accessToken,
+    subscriptionId: subscription.id,
+  };
+}
+
+async function consumeVerifiedPremiumGenerationCredit(
+  access: Awaited<ReturnType<typeof verifyPremiumGenerationAccess>>
+) {
+  if (!access.ok || !access.shouldConsumeCredit) {
+    return { ok: true as const };
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
     return {
       ok: false as const,
-      error: "오늘 생성 가능한 횟수를 모두 사용했습니다",
+      error: "서비스 설정을 확인해주세요. 잠시 후 다시 시도해주세요.",
+      statusCode: 500,
+    };
+  }
+
+  const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${access.accessToken}`,
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  const subscriptionResponse = (await ((
+    supabase
+      .from("subscriptions")
+      .select(
+        "id, plan_type, start_date, end_date, remaining_credits, daily_usage_count, last_usage_date"
+      )
+      .eq("id", access.subscriptionId)
+      .eq("plan_type", POST_GENERATOR_PLAN_TYPE)
+      .maybeSingle() as unknown
+  ) as Promise<{
+    data: SubscriptionGuardRow | null;
+    error: { message: string } | null;
+  }>)) as {
+    data: SubscriptionGuardRow | null;
+    error: { message: string } | null;
+  };
+
+  const subscription = subscriptionResponse.data;
+  const today = getKoreaDateString();
+  const subscriptionForValidation = {
+    startDate: subscription?.start_date,
+    endDate: subscription?.end_date,
+    remainingCredits: subscription?.remaining_credits,
+    dailyUsageCount: subscription?.daily_usage_count,
+    lastUsageDate: subscription?.last_usage_date,
+  };
+
+  if (
+    subscriptionResponse.error ||
+    !subscription ||
+    !isPostGeneratorSubscriptionActive(subscriptionForValidation, today) ||
+    getRemainingSubscriptionCredits(subscriptionForValidation) <= 0
+  ) {
+    return {
+      ok: false as const,
+      error: "남은 생성 횟수가 없습니다",
       statusCode: 403,
     };
   }
@@ -523,7 +625,7 @@ async function verifyPremiumGenerationAccess(input: {
           last_usage_date: today,
         } as never
       )
-      .eq("id", subscription.id)
+      .eq("id", access.subscriptionId)
       .select("id")
       .single() as unknown
   ) as Promise<{
@@ -627,8 +729,11 @@ async function generatePostPlan({
     "3d": "3D rendering style, volumetric lighting, metallic and glossy materials, sharp shadows.",
   };
   const imageStyleGuide = imageStyleGuideMap[imageStyle] ?? imageStyleGuideMap.photoreal;
+  const hashtagExample = isYoutube
+    ? `["태그명1", "태그명2", "태그명3"]`
+    : `["태그명1", "태그명2", "태그명3", "태그명4", "태그명5"]`;
 
-  const userInput = `
+  const buildUserInput = (retryReason = "") => `
 당신은 한국의 SNS 마케팅 전문가입니다.
 아래 계정 정보를 바탕으로 게시물 기획을 작성해 주세요.
 
@@ -686,57 +791,132 @@ ${channelTone}
 - 제목: ${String(previousPost?.title ?? "없음")}
 - 본문: ${String(previousPost?.content ?? "없음")}
 - 해시태그: ${String(previousPost?.hashtags ?? "없음")}
+${retryReason ? `
+직전 응답 문제:
+- ${retryReason}
+- 위 문제를 반드시 수정하고, 필수 필드와 해시태그 개수를 정확히 맞춰 JSON만 다시 출력하세요.
+` : ""}
 
 다음 JSON 형식으로만 답변하세요. 설명 없이 JSON만 출력하세요:
 {
   "title": "게시물 제목(25자 이내)",
   "content": "게시물 본문(후킹→핵심/가치→CTA)",
-  "hashtags": ["태그명1", "태그명2", "태그명3"],
+  "hashtags": ${hashtagExample},
   "visualPrompt": "Detailed English prompt for image generation"
 }
 `;
 
-  const response = await callOpenRouter({
-    apiKey,
-    model: TEXT_MODEL,
-    requestType: "post_plan",
-    messages: [{ role: "user", content: userInput }],
-  });
+  let retryReason = "";
 
-  if (!response.ok) {
-    return { ok: false as const };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await callOpenRouter({
+      apiKey,
+      model: TEXT_MODEL,
+      requestType: attempt === 0 ? "post_plan" : "post_plan_retry",
+      messages: [{ role: "user", content: buildUserInput(retryReason) }],
+    });
+
+    if (!response.ok) {
+      return { ok: false as const };
+    }
+
+    const content = extractMessageContent(response.data?.choices?.[0]?.message?.content);
+    const parsed = extractJson<PostPlanResult>(content);
+
+    if (!parsed) {
+      retryReason = "response was not valid JSON";
+      console.error("[/api/ai] Failed to parse post plan response:", retryReason);
+      continue;
+    }
+
+    const title = sanitizeGenerated(String(parsed.title ?? ""));
+    const caption = sanitizeGenerated(String(parsed.content ?? ""));
+
+    const rawHashtags = parsed.hashtags;
+    const hashtagsStr = Array.isArray(rawHashtags)
+      ? rawHashtags
+          .map((t) => String(t ?? "").trim().replace(/^#+/, ""))
+          .filter(Boolean)
+          .map((t) => `#${t}`)
+          .join(" ")
+      : String(rawHashtags ?? "");
+    const hashtags = sanitizeGenerated(hashtagsStr);
+
+    const visualPrompt = String(parsed.visualPrompt ?? "").trim();
+    const hashtagCount = hashtags
+      .split(/\s+/)
+      .filter((tag) => tag.startsWith("#")).length;
+    const validationIssues = [
+      !title ? "missing title" : "",
+      !caption ? "missing content" : "",
+      !hashtags ? "missing hashtags" : "",
+      !visualPrompt ? "missing visualPrompt" : "",
+      hashtagCount < minHashtags
+        ? `hashtags count ${hashtagCount} < ${minHashtags}`
+        : "",
+    ].filter(Boolean);
+
+    if (validationIssues.length > 0) {
+      retryReason = validationIssues.join(", ");
+      console.error("[/api/ai] Invalid post plan response:", retryReason, parsed);
+      continue;
+    }
+
+    return { ok: true as const, data: { ...parsed, title, content: caption, hashtags } };
   }
 
-  const content = extractMessageContent(response.data?.choices?.[0]?.message?.content);
-  const parsed = extractJson<PostPlanResult>(content);
+  return { ok: false as const };
+}
 
-  if (!parsed) {
-    console.error("[/api/ai] Failed to parse post plan response");
-    return { ok: false as const };
+async function uploadGeneratedImage(imageUrl: string): Promise<string> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) return imageUrl;
+
+  try {
+    let buffer: ArrayBuffer;
+    let mimeType = "image/png";
+
+    if (imageUrl.startsWith("data:")) {
+      const commaIdx = imageUrl.indexOf(",");
+      if (commaIdx === -1) return imageUrl;
+      const header = imageUrl.slice(5, commaIdx);
+      const mimeMatch = header.match(/^(image\/[\w.+-]+);base64$/);
+      if (!mimeMatch) return imageUrl;
+      mimeType = mimeMatch[1];
+      const b64 = imageUrl.slice(commaIdx + 1).trim();
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      buffer = bytes.buffer;
+    } else {
+      const fetchRes = await fetch(imageUrl);
+      if (!fetchRes.ok) return imageUrl;
+      buffer = await fetchRes.arrayBuffer();
+      mimeType = fetchRes.headers.get("content-type") ?? "image/png";
+    }
+
+    const ext =
+      mimeType === "image/jpeg" ? "jpg"
+      : mimeType === "image/webp" ? "webp"
+      : "png";
+    const filename = `${crypto.randomUUID()}.${ext}`;
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { error } = await supabase.storage
+      .from(IMAGE_STORAGE_BUCKET)
+      .upload(filename, buffer, { contentType: mimeType, upsert: false });
+
+    if (error) {
+      console.error("[/api/ai] Storage upload error:", error.message);
+      return imageUrl;
+    }
+
+    return supabase.storage.from(IMAGE_STORAGE_BUCKET).getPublicUrl(filename).data.publicUrl;
+  } catch (err) {
+    console.error("[/api/ai] uploadGeneratedImage failed:", err);
+    return imageUrl;
   }
-
-  const title = sanitizeGenerated(String(parsed.title ?? ""));
-  const caption = sanitizeGenerated(String(parsed.content ?? ""));
-
-  const rawHashtags = parsed.hashtags;
-  const hashtagsStr = Array.isArray(rawHashtags)
-    ? rawHashtags
-        .map((t) => String(t ?? "").trim().replace(/^#+/, ""))
-        .filter(Boolean)
-        .map((t) => `#${t}`)
-        .join(" ")
-    : String(rawHashtags ?? "");
-  const hashtags = sanitizeGenerated(hashtagsStr);
-
-  const visualPrompt = String(parsed.visualPrompt ?? "").trim();
-  const hasEnoughHashtags = hashtags.split(/\s+/).filter((tag) => tag.startsWith("#")).length >= minHashtags;
-
-  if (!title || !caption || !hashtags || !visualPrompt || !hasEnoughHashtags) {
-    console.error("[/api/ai] Invalid post plan response:", parsed);
-    return { ok: false as const };
-  }
-
-  return { ok: true as const, data: { ...parsed, title, content: caption, hashtags } };
 }
 
 async function callOpenRouter({
@@ -772,6 +952,8 @@ async function callOpenRouter({
     payload.image_config = imageConfig;
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
   try {
     const res = await fetch(OPENROUTER_API_URL, {
       method: "POST",
@@ -780,7 +962,9 @@ async function callOpenRouter({
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     const rawBody = await res.text();
 
@@ -796,6 +980,7 @@ async function callOpenRouter({
     const data = JSON.parse(rawBody);
     return { ok: true as const, data };
   } catch (error) {
+    clearTimeout(timeoutId);
     console.error("[/api/ai] OpenRouter request failed");
     console.error("[/api/ai] request type:", requestType);
     console.error("[/api/ai] model:", model);
@@ -1230,4 +1415,148 @@ function getPlanningValidationIssues(result: AccountPlanResult) {
   }
 
   return issues;
+}
+
+async function handleImageOnly(body: AiRequestBody, apiKey: string) {
+  const imageBase64 = String(body.imageEditBase64 ?? "").trim();
+  const visualPromptRaw = String(body.visualPrompt ?? "").trim();
+
+  if (!imageBase64 || !visualPromptRaw) {
+    return Response.json(
+      { error: "이미지와 visual prompt가 필요합니다." },
+      { status: 400 }
+    );
+  }
+
+  if (!/^data:image\/[\w.+-]+;base64,/.test(imageBase64)) {
+    return Response.json(
+      { error: "이미지 형식이 올바르지 않습니다." },
+      { status: 400 }
+    );
+  }
+
+  const preserveStructureInstruction = `Keep the overall composition, layout, and ANY text in the image exactly the same.
+Change ONLY the feel/mood: lighting, color tone, texture, atmosphere.
+Do NOT move, add, or remove the main subjects or any text.`;
+
+  const suffix = body.rerollSuffix?.trim() || "Subtly refresh the mood while preserving the original image structure.";
+
+  const imagePrompt = `You are editing this marketing image as an image-to-image variation.
+
+Preserve-structure rules:
+${preserveStructureInstruction}
+
+Feel-only variation:
+${suffix}
+
+Original visual direction for context only:
+${visualPromptRaw}
+
+Output a polished square 1:1 Instagram feed post image.`;
+
+  const imageResponse = await callOpenRouter({
+    apiKey,
+    model: IMAGE_MODEL,
+    requestType: "post_image",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: imagePrompt },
+          { type: "image_url", image_url: { url: imageBase64 } },
+        ],
+      },
+    ],
+    modalities: ["image", "text"],
+    imageConfig: { aspect_ratio: "1:1", image_size: "1K" },
+  });
+
+  if (!imageResponse.ok) {
+    return Response.json(
+      { error: "이미지 재생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
+      { status: 502 }
+    );
+  }
+
+  const imageOutputs = extractImageOutputs(imageResponse.data);
+
+  if (!imageOutputs.length) {
+    return Response.json(
+      { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
+      { status: 502 }
+    );
+  }
+
+  const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
+  return Response.json({ generatedImageUrl, source: "api" });
+}
+
+async function handleImageEdit(body: AiRequestBody, apiKey: string) {
+  const imageBase64 = String(body.imageEditBase64 ?? "").trim();
+  const editPromptRaw = String(body.editPrompt ?? "").trim();
+
+  if (!imageBase64 || !editPromptRaw) {
+    return Response.json(
+      { error: "이미지와 수정 내용이 필요합니다." },
+      { status: 400 }
+    );
+  }
+
+  if (!/^data:image\/[\w.+-]+;base64,/.test(imageBase64)) {
+    return Response.json(
+      { error: "이미지 형식이 올바르지 않습니다." },
+      { status: 400 }
+    );
+  }
+
+  const normalizedIndustry = String(body.industry ?? "").trim();
+  const normalizedProduct = String(body.productService ?? "").trim();
+
+  const editPrompt = `You are editing this marketing image. Apply the following change:
+
+"${editPromptRaw}"
+
+${normalizedIndustry ? `Industry context: ${normalizedIndustry}` : ""}
+${normalizedProduct ? `Product/service: ${normalizedProduct}` : ""}
+
+Rules:
+- Keep the overall composition and brand feel intact.
+- Output a square 1:1 image.
+- Prefer no baked-in text unless absolutely necessary.`;
+
+  const imageResponse = await callOpenRouter({
+    apiKey,
+    model: IMAGE_MODEL,
+    requestType: "post_image",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: editPrompt },
+          { type: "image_url", image_url: { url: imageBase64 } },
+        ],
+      },
+    ],
+    modalities: ["image", "text"],
+    imageConfig: { aspect_ratio: "1:1", image_size: "1K" },
+  });
+
+  if (!imageResponse.ok) {
+    return Response.json(
+      { error: "이미지 수정에 실패했습니다. 잠시 후 다시 시도해주세요." },
+      { status: 502 }
+    );
+  }
+
+  const imageOutputs = extractImageOutputs(imageResponse.data);
+
+  if (!imageOutputs.length) {
+    return Response.json(
+      { error: "수정된 이미지를 불러오지 못했습니다. 다시 시도해주세요." },
+      { status: 502 }
+    );
+  }
+
+  const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
+  return Response.json({ generatedImageUrl, source: "api" });
 }
