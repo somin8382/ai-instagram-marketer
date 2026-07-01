@@ -139,6 +139,28 @@ export type Database = {
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;
       };
+      service_grants: {
+        Row: {
+          id: string;
+          email: string;
+          applicant_name: string | null;
+          phone: string | null;
+          host_org: string | null;
+          mentor_org: string | null;
+          ai_marketer: boolean;
+          ai_generator: boolean;
+          marketer_quantity: number | null;
+          marketer_months: string | null;
+          generator_months: string | null;
+          generator_credits: number;
+          status: string;
+          applied_user_id: string | null;
+          created_at: string;
+          applied_at: string | null;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
     };
   };
 };

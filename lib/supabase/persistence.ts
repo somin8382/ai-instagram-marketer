@@ -206,6 +206,18 @@ type SubscriptionRow = {
   updated_at?: string | null;
 };
 
+type ServiceGrantRow = {
+  id: string;
+  email: string;
+  ai_generator: boolean;
+  ai_marketer: boolean;
+  generator_months: string | null;
+  marketer_months: string | null;
+  generator_credits: number;
+  applied_user_id: string | null;
+  status: string;
+};
+
 function normalizeEmail(email?: string | null) {
   return email?.trim().toLowerCase() ?? "";
 }
@@ -811,6 +823,113 @@ async function linkExistingRecordsToUser({
   };
 }
 
+function parseMonthsList(months: string | null | undefined): number[] {
+  if (!months) return [];
+  return months
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+export async function redeemServiceGrants({
+  userId,
+  emails,
+}: {
+  userId: string;
+  emails: string[];
+}) {
+  if (!hasSupabaseEnv() || !emails.length) {
+    return { error: null as string | null };
+  }
+
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const errors: string[] = [];
+    // getKoreaDateString() returns "YYYY-MM-DD"; index 1 after split is the zero-padded month
+    const currentMonth = Number(getKoreaDateString().split("-")[1]);
+
+    const grantsResponse = (await ((
+      supabase
+        .from("service_grants")
+        .select(
+          "id, email, ai_generator, ai_marketer, generator_months, marketer_months, generator_credits, applied_user_id, status"
+        ) as unknown
+    ) as Promise<{
+      data: ServiceGrantRow[] | null;
+      error: { message: string } | null;
+    }>)) as {
+      data: ServiceGrantRow[] | null;
+      error: { message: string } | null;
+    };
+
+    if (grantsResponse.error) {
+      return { error: `service_grants:${grantsResponse.error.message}` };
+    }
+
+    for (const grant of grantsResponse.data ?? []) {
+      let activationFailed = false;
+
+      if (grant.ai_generator) {
+        const months = parseMonthsList(grant.generator_months);
+        if (months.includes(currentMonth)) {
+          const subResult = await startPostGeneratorSubscription({
+            userId,
+            bypassPaymentRequirement: true,
+            credits: grant.generator_credits,
+          });
+          // Real failure: no subscription was issued and an error is present.
+          // Benign no-op: subscription already active (subResult.subscription is non-null).
+          if (!subResult.subscription && subResult.error) {
+            errors.push(`subscription:${subResult.error}`);
+            activationFailed = true;
+          }
+        }
+      }
+
+      // Mark the grant as applied on first successful pass (not month-gated).
+      // Skip if activation failed this login — leave status unchanged so next login retries.
+      if (!activationFailed && grant.applied_user_id === null) {
+        const updateResponse = (await ((
+          supabase
+            .from("service_grants")
+            .update({
+              applied_user_id: userId,
+              applied_at: new Date().toISOString(),
+              status: "applied",
+            } as never)
+            .eq("id", grant.id) as unknown
+        ) as Promise<{
+          error: { message: string } | null;
+        }>)) as {
+          error: { message: string } | null;
+        };
+
+        if (updateResponse.error) {
+          errors.push(`service_grants_update:${updateResponse.error.message}`);
+        }
+      }
+    }
+
+    console.info(
+      "[ServiceGrants] redeem 결과:",
+      JSON.stringify({
+        userId,
+        emails,
+        grantCount: grantsResponse.data?.length ?? 0,
+        hasError: errors.length > 0,
+      })
+    );
+
+    return { error: errors.length ? errors.join(" / ") : null };
+  } catch (err) {
+    return {
+      error: err instanceof Error
+        ? `service_grants:${err.message}`
+        : "service_grants: unknown error",
+    };
+  }
+}
+
 export async function syncProfileAndLinkData({
   user,
   requestEmail,
@@ -846,6 +965,11 @@ export async function syncProfileAndLinkData({
     emails: emailCandidates,
   });
 
+  const redeemResult = await redeemServiceGrants({
+    userId: user.id,
+    emails: emailCandidates,
+  });
+
   await flushPendingGeneratedPosts({
     userId: user.id,
     email: snapshot.authEmail || emailCandidates[0] || null,
@@ -853,7 +977,7 @@ export async function syncProfileAndLinkData({
 
   saveAuthSnapshot(snapshot);
 
-  const combinedErrors = [profileResult.error, linkResult.error].filter(Boolean);
+  const combinedErrors = [profileResult.error, linkResult.error, redeemResult.error].filter(Boolean);
 
   return {
     snapshot,
@@ -1299,9 +1423,11 @@ export async function fetchPostGeneratorSubscription({
 export async function startPostGeneratorSubscription({
   userId,
   bypassPaymentRequirement = false,
+  credits,
 }: {
   userId?: string | null;
   bypassPaymentRequirement?: boolean;
+  credits?: number;
 }) {
   if (!hasSupabaseEnv()) {
     return {
@@ -1396,7 +1522,7 @@ export async function startPostGeneratorSubscription({
           plan_type: POST_GENERATOR_PLAN_TYPE,
           start_date: startDate,
           end_date: endDate,
-          remaining_credits: POST_GENERATOR_MONTHLY_CREDITS,
+          remaining_credits: credits ?? POST_GENERATOR_MONTHLY_CREDITS,
           daily_usage_count: 0,
           last_usage_date: null,
         } as never,

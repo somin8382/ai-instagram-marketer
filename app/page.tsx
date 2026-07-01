@@ -2830,13 +2830,19 @@ export default function Home() {
                 어떤 채널로 마케팅할까요?
               </h2>
               <p className="text-sm text-gray-500">
-                제품과 고객에게 맞는 운영 채널을 선택해주세요
+                운영 중인 계정이 있다면 마케팅을 진행할 계정을 선택해 주세요.
+                <br />
+                <br />
+                아직 계정이 없다면 계정명 추천부터 도와드리며,
+                <br />
+                동일한 목표 기준으로 운영해드립니다.
               </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {MARKETING_CHANNEL_OPTIONS.map((option) => {
                 const isSelected = marketingChannel === option.value;
+                const isYoutube = option.value === "youtube";
 
                 return (
                   <button
@@ -2865,12 +2871,30 @@ export default function Home() {
                         {option.icon}
                       </div>
                       <div className="space-y-2">
-                        <p className="font-bold text-gray-900 text-lg">
-                          {option.label}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-bold text-gray-900 text-lg">
+                            {option.label}
+                          </p>
+                          {isYoutube && (
+                            <span className="rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                              추천
+                            </span>
+                          )}
+                        </div>
                         <p className="text-sm text-gray-500 leading-relaxed">
                           {option.description}
                         </p>
+                        {isYoutube ? (
+                          <p className="text-xs leading-relaxed text-blue-600">
+                            검색 노출과 누적 조회 효과가 높고 장기적인 AI 운영 효율이
+                            우수하여 기본 추천 채널입니다.
+                          </p>
+                        ) : (
+                          <p className="text-xs leading-relaxed text-rose-600">
+                            브랜드 인지도, 릴스 바이럴, 팔로워 확보, 감성 중심 제품에
+                            특히 적합합니다.
+                          </p>
+                        )}
                       </div>
                     </div>
                   </button>
@@ -2883,25 +2907,271 @@ export default function Home() {
               </p>
             )}
 
-            <Card className="space-y-4">
-              <SectionLabel>채널 추천 기준</SectionLabel>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-2xl bg-rose-50 px-4 py-3">
-                  <p className="font-semibold text-rose-600">인스타그램 추천</p>
+            <Card className="space-y-4 border-emerald-100">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-5 w-5"
+                  >
+                    <path d="M3 3v18h18" />
+                    <path d="m7 15 4-4 3 3 5-6" />
+                    <path d="M18 8h1v1" />
+                  </svg>
+                </span>
+                <div>
+                  <p className="text-base font-semibold text-gray-900">
+                    예상 성과 범위
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    AI 마케터 1명 · 1개월 운영 기준
+                  </p>
                 </div>
-                <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                  <p className="font-semibold text-gray-800">유튜브 추천</p>
-                </div>
-                {CHANNEL_COMPARISON_ROWS.map(([instagramText, youtubeText]) => (
-                  <div key={instagramText} className="contents">
-                    <div className="rounded-xl border border-rose-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
-                      {instagramText}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-emerald-100 bg-white p-4 space-y-4">
+                  <p className="text-sm font-semibold text-gray-900">
+                    인스타그램 예상 성과
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-xl bg-emerald-50 px-3 py-3 text-center">
+                      <p className="text-2xl font-extrabold text-emerald-700">
+                        +500
+                      </p>
+                      <p className="text-xs font-medium text-emerald-800">팔로워</p>
                     </div>
-                    <div className="rounded-xl border border-gray-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
-                      {youtubeText}
+                    <div className="rounded-xl bg-emerald-50 px-3 py-3 text-center">
+                      <p className="text-2xl font-extrabold text-emerald-700">
+                        +100
+                      </p>
+                      <p className="text-xs font-medium text-emerald-800">좋아요</p>
+                    </div>
+                    <div className="rounded-xl bg-emerald-50 px-3 py-3 text-center">
+                      <p className="text-2xl font-extrabold text-emerald-700">
+                        +30
+                      </p>
+                      <p className="text-xs font-medium text-emerald-800">댓글</p>
                     </div>
                   </div>
-                ))}
+                  <div className="flex flex-col gap-2.5">
+                    {["팔로워 +500명", "좋아요 100개 이상", "댓글 30개 이상"].map(
+                      (item) => (
+                        <div key={item} className="flex items-start gap-2.5">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="mt-0.5 h-[18px] w-[18px] shrink-0 text-emerald-600"
+                          >
+                            <path d="m20 6-11 11-5-5" />
+                          </svg>
+                          <p className="text-sm leading-relaxed text-gray-800">
+                            {item}
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-amber-100 bg-amber-50 p-3">
+                    <div className="flex items-start gap-2.5">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="mt-0.5 h-[18px] w-[18px] shrink-0 text-amber-600"
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      <p className="text-sm leading-relaxed text-amber-800">
+                        ※ 좋아요와 댓글은 플랫폼 특성상 보장되지 않습니다.
+                        <br />
+                        목표에 도달하지 못할 경우, 대신 팔로워를 약 50명을 추가 확보하여
+                        총 팔로워 550명 이상 달성을 목표로 운영합니다.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-100 bg-white p-4 space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-gray-900">
+                      유튜브 예상 성과
+                    </p>
+                    <span className="rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                      추천
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-xl bg-emerald-50 px-3 py-3 text-center">
+                      <p className="text-2xl font-extrabold text-emerald-700">
+                        +200
+                      </p>
+                      <p className="text-xs font-medium text-emerald-800">구독자</p>
+                    </div>
+                    <div className="rounded-xl bg-emerald-50 px-3 py-3 text-center">
+                      <p className="text-2xl font-extrabold text-emerald-700">
+                        +1,000
+                      </p>
+                      <p className="text-xs font-medium text-emerald-800">조회수</p>
+                    </div>
+                    <div className="rounded-xl bg-emerald-50 px-3 py-3 text-center">
+                      <p className="text-2xl font-extrabold text-emerald-700">
+                        +10
+                      </p>
+                      <p className="text-xs font-medium text-emerald-800">댓글</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2.5">
+                    {["구독자 +200명", "조회수 1,000회 이상", "댓글 10개 이상"].map(
+                      (item) => (
+                        <div key={item} className="flex items-start gap-2.5">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="mt-0.5 h-[18px] w-[18px] shrink-0 text-emerald-600"
+                          >
+                            <path d="m20 6-11 11-5-5" />
+                          </svg>
+                          <p className="text-sm leading-relaxed text-gray-800">
+                            {item}
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                    <div className="flex items-start gap-2.5">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="16" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12.01" y2="8" />
+                      </svg>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          💡 왜 추천인가요?
+                        </p>
+                        <p className="mt-1 text-sm leading-relaxed text-gray-700">
+                          유튜브는 구독자 증가 속도는 인스타그램보다 느리지만,
+                          검색과 추천을 통해 콘텐츠가 장기간 노출됩니다. 초기
+                          수치보다 장기적인 조회수, 신뢰 형성, 문의 전환에 강점이
+                          있어 대부분의 업종에 추천드립니다.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
+                <div className="flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 text-blue-600"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">성과 안내</p>
+                    <p className="mt-1 text-sm leading-relaxed text-gray-700">
+                      ※ 위 성과는 AI 마케터 1명 · 1개월 운영 기준입니다.
+                      <br />
+                      AI 마케터 인원 또는 운영 기간이 늘어나면 추가 혜택을 드립니다.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="space-y-4">
+              <div>
+                <SectionLabel>내 사업에 적합한 채널 비교</SectionLabel>
+                <p className="mt-2 text-sm leading-relaxed text-gray-500">
+                  아래 특징을 참고하여 내 사업에 더 적합한 채널을 선택해 주세요.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-2xl bg-rose-50 px-4 py-3">
+                  <p className="font-semibold text-rose-600">
+                    인스타그램에 적합한 경우
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-blue-50 px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-blue-700">
+                      유튜브에 적합한 경우
+                    </p>
+                    <span className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-blue-700">
+                      추천
+                    </span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-rose-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                  <p className="mb-1 text-xs font-semibold text-rose-500">주요 타겟</p>
+                  10~30대 비중이 높은 소비재
+                </div>
+                <div className="rounded-xl border border-blue-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                  <p className="mb-1 text-xs font-semibold text-blue-600">주요 타겟</p>
+                  전 연령 대상 서비스
+                </div>
+                <div className="rounded-xl border border-rose-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                  <p className="mb-1 text-xs font-semibold text-rose-500">대표 업종</p>
+                  굿즈, 캐릭터, 뷰티, 패션, 카페, 음식
+                </div>
+                <div className="rounded-xl border border-blue-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                  <p className="mb-1 text-xs font-semibold text-blue-600">대표 업종</p>
+                  B2B, B2G, SaaS, 교육, 의료, 제조
+                </div>
+                {CHANNEL_COMPARISON_ROWS.slice(2).map(
+                  ([instagramText, youtubeText]) => (
+                    <div key={instagramText} className="contents">
+                      <div className="rounded-xl border border-rose-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                        <p className="mb-1 text-xs font-semibold text-rose-500">
+                          추천 상황
+                        </p>
+                        {instagramText}
+                      </div>
+                      <div className="rounded-xl border border-blue-100 bg-white px-4 py-3 text-gray-700 leading-relaxed">
+                        <p className="mb-1 text-xs font-semibold text-blue-600">
+                          추천 상황
+                        </p>
+                        {youtubeText}
+                      </div>
+                    </div>
+                  )
+                )}
               </div>
             </Card>
 
@@ -2931,6 +3201,15 @@ export default function Home() {
   /* ═══════════════ ACCOUNT CHECK ═══════════════ */
 
   if (activeStep === "account-check") {
+    const selectedChannelIcon = isYoutubeChannel ? "▶" : "📱";
+    const selectedChannelLabel = isYoutubeChannel ? "유튜브" : "인스타그램";
+    const accountCheckTitle = isYoutubeChannel
+      ? "유튜브 채널이 있으신가요?"
+      : "인스타그램 계정이 있으신가요?";
+    const accountCheckSubtitle = isYoutubeChannel
+      ? "유튜브 채널 보유 여부에 따라"
+      : "인스타그램 계정 보유 여부에 따라";
+
     return (
       <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
         <div className="max-w-xl w-full text-center space-y-8">
@@ -2942,14 +3221,19 @@ export default function Home() {
           />
 
           <div className="space-y-3">
-            <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
-              <span className="text-white text-2xl">📱</span>
+            <div className="inline-flex items-center gap-2 rounded-full border border-rose-100 bg-white px-3 py-1.5 text-xs font-medium text-rose-600">
+              <span className="text-gray-400">현재 선택</span>
+              <span>
+                {selectedChannelIcon} {selectedChannelLabel}
+              </span>
             </div>
             <h2 className="text-2xl font-bold text-gray-900">
-              계정이 있으신가요?
+              {accountCheckTitle}
             </h2>
             <p className="text-sm text-gray-500">
-              인스타그램 계정 유무에 따라 맞춤 기획을 진행합니다
+              {accountCheckSubtitle}
+              <br />
+              맞춤 설정을 진행합니다.
             </p>
           </div>
 
@@ -2961,7 +3245,7 @@ export default function Home() {
               }}
               className="p-6 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all space-y-1"
             >
-              <div className="text-2xl">📱</div>
+              <div className="text-2xl">✅</div>
               <div className="font-semibold">계정이 있어요</div>
               <div className="text-sm text-white/80">기존 계정으로 시작</div>
             </button>
@@ -2972,7 +3256,7 @@ export default function Home() {
               }}
               className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-gray-700 font-semibold hover:border-gray-300 hover:shadow-md active:scale-[0.98] transition-all space-y-1"
             >
-              <div className="text-2xl">✨</div>
+              <div className="text-2xl">🪄</div>
               <div className="font-semibold">계정이 없어요</div>
               <div className="text-sm text-gray-500">새 계정으로 시작</div>
             </button>
