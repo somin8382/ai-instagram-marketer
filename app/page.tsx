@@ -1920,7 +1920,7 @@ export default function Home() {
 
       const { snapshot } = await syncProfileAndLinkData({
         user,
-        requestEmail: email,
+        requestEmail: user.email ?? "",
       });
 
       if (!active) return;

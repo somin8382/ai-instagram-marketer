@@ -571,9 +571,6 @@ function AuthPageInner() {
       const submittedEmail = signupEmail.trim();
       // eslint-disable-next-line react-hooks/purity
       const signupRequestedAt = Date.now();
-      // [TEMP DEBUG] log the email going into signUp
-      console.log("[SIGNUP DEBUG] submittedEmail=", submittedEmail);
-
       const { data, error } = await supabase.auth.signUp({
         email: submittedEmail,
         password: signupPassword,
@@ -583,19 +580,6 @@ function AuthPageInner() {
           },
         },
       });
-
-      // [TEMP DEBUG] log the full signUp result
-      console.log("[SIGNUP DEBUG] data=", data, "error=", error);
-      if (error) {
-        console.error(
-          "[SIGNUP ERROR]",
-          "\n  name   =", (error as any).name,
-          "\n  message=", error.message,
-          "\n  status =", (error as any).status,
-          "\n  code   =", (error as any).code,
-          "\n  full   =", error
-        );
-      }
 
       if (error) {
         if (isDuplicateSignupError(error.message)) {
@@ -641,9 +625,10 @@ function AuthPageInner() {
       router.replace("/mypage");
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      // [TEMP DEBUG] show raw error on screen instead of generic Korean fallback
-      console.error("[SIGNUP CATCH]", error);
-      setAuthError(`[DEBUG] ${(error as any)?.name ?? "Error"}: ${message} (status=${(error as any)?.status ?? "?"} code=${(error as any)?.code ?? "?"})`);
+      if (isSignupRateLimitError(message)) {
+        setSignupCooldownSeconds(60);
+      }
+      setAuthError(toKoreanAuthError(message));
     } finally {
       setSubmitting(false);
     }

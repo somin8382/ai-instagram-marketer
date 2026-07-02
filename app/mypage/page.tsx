@@ -601,33 +601,57 @@ export default function MyPage() {
         return;
       }
 
-      const { data: rawAppRow } = await supabase
-        .from("applications")
-        .select("user_id, email, main_content_url, marketing_channel, channel_url, instagram_id")
-        .eq("user_id", authUserId)
-        .not("main_content_url", "is", null)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const rawTyped = rawAppRow as {
+      type GrantAppRow = {
         user_id: string | null;
         email: string | null;
         main_content_url: string | null;
         marketing_channel: string | null;
         channel_url: string | null;
         instagram_id: string | null;
-      } | null;
-      // Guard: mirrors Part A — discard row unless user_id AND email both match the
-      // authenticated user. This stops poisoned rows (e.g. user_id=somin, email=wfr112).
+        created_at: string | null;
+      };
+
       const normStr = (s?: string | null) => s?.trim().toLowerCase() ?? "";
       const ownEmail = normStr(authEmail);
-      const rowEmail = normStr(rawTyped?.email);
-      const appRow =
-        rawTyped !== null &&
-        rawTyped.user_id === authUserId &&
-        (!ownEmail || !rowEmail || rowEmail === ownEmail)
-          ? rawTyped
-          : null;
+
+      // Prefer newest row with main_content_url populated; otherwise newest by created_at.
+      const pickGrantRow = (rows: GrantAppRow[]): GrantAppRow | null => {
+        if (!rows.length) return null;
+        const withContent = rows.filter((r) => !!r.main_content_url?.trim());
+        return withContent[0] ?? rows[0];
+      };
+
+      // Primary: user_id === authUserId is authoritative — display the row regardless
+      // of what the email column contains (email may differ if the form had stale
+      // localStorage content at submission time; user_id is the correct ownership signal).
+      const { data: rawByUserId } = await supabase
+        .from("applications")
+        .select("user_id, email, main_content_url, marketing_channel, channel_url, instagram_id, created_at")
+        .eq("user_id", authUserId)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      const primaryCandidates = (rawByUserId as GrantAppRow[] ?? []).filter(
+        (row) => row.user_id === authUserId
+      );
+      let appRow: GrantAppRow | null = pickGrantRow(primaryCandidates);
+
+      // Fallback: row was saved with user_id = NULL because the form email differed
+      // from the session email at submission time (safeGrantUserId guard in persistence).
+      // Safety: ownEmail must be non-empty AND must exactly match the row email after
+      // trim+lowercase — this can never surface another user's row.
+      if (!appRow && ownEmail) {
+        const { data: rawByEmail } = await supabase
+          .from("applications")
+          .select("user_id, email, main_content_url, marketing_channel, channel_url, instagram_id, created_at")
+          .is("user_id", null)
+          .ilike("email", ownEmail)
+          .order("created_at", { ascending: false })
+          .limit(5);
+        const emailCandidates = (rawByEmail as GrantAppRow[] ?? []).filter(
+          (row) => row.user_id === null && normStr(row.email) === ownEmail
+        );
+        appRow = pickGrantRow(emailCandidates);
+      }
 
       if (!active) return;
 

@@ -2080,9 +2080,12 @@ export async function persistGrantedApplicationSubmission(input: {
     };
   }
 
-  const normalizedEmail = normalizeEmail(input.email);
+  const normalizedEmail = normalizeEmail(input.sessionEmail);
   if (!normalizedEmail) {
     return { applicationId: null, error: "이메일 정보가 없습니다." };
+  }
+  if (!input.userId) {
+    return { applicationId: null, error: "로그인 정보가 없습니다." };
   }
 
   const normalizedMarketingChannel = input.marketingChannel.trim();
@@ -2212,17 +2215,12 @@ export async function persistGrantedApplicationSubmission(input: {
   }
 
   // ── INSERT ───────────────────────────────────────────────────────────────
-  // Re-poisoning prevention: mirror persistApplicationSubmission — only bind
-  // user_id when the session email matches the form email.
-  const safeGrantUserId =
-    input.userId &&
-    normalizeEmail(input.email) === normalizeEmail(input.sessionEmail)
-      ? input.userId
-      : null;
+  // email and user_id both come from the authenticated session (sessionEmail /
+  // userId), never from the form field — they are guaranteed consistent above.
 
   const createdAt = new Date().toISOString();
   let insertPayload: Record<string, unknown> = {
-    user_id: safeGrantUserId,
+    user_id: input.userId,
     email: normalizedEmail,
     status: "in_progress",
     created_at: createdAt,
