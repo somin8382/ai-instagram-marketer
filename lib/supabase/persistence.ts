@@ -107,6 +107,7 @@ export type MyPageSnapshot = {
 
 type ApplicationPersistenceInput = {
   userId?: string | null;
+  sessionEmail?: string | null;
   email: string;
   instagramId: string;
   hasAccount: boolean;
@@ -721,11 +722,12 @@ function isCompleteApplicationRow(row: ApplicationRow) {
 }
 
 async function linkExistingRecordsToUser({
-  userId,
   emails,
+  accessToken,
 }: {
   userId: string;
   emails: string[];
+  accessToken: string;
 }) {
   if (!emails.length) {
     return {
@@ -735,92 +737,42 @@ async function linkExistingRecordsToUser({
     };
   }
 
-  const publicClient = getSupabasePublicClient();
-  const errors: string[] = [];
-  const linkedApplicationIds = new Set<string>();
-  let linkedApplicationCount = 0;
-  let linkedGeneratedPostCount = 0;
-
-  for (const email of emails) {
-    const applicationUpdate = (await ((publicClient
-      .from("applications")
-      .update({ user_id: userId } as never)
-      .eq("email", email)
-      .is("user_id", null)
-      .select("id") as unknown) as Promise<{
-      data: Array<{ id?: string | null }> | null;
-      error: { message: string } | null;
-    }>)) as {
-      data: Array<{ id?: string | null }> | null;
-      error: { message: string } | null;
+  if (!accessToken) {
+    return {
+      linkedApplicationCount: 0,
+      linkedGeneratedPostCount: 0,
+      error: "세션 토큰 없음 — 연결 건너뜀",
     };
-
-    if (applicationUpdate.error) {
-      errors.push(`applications:${applicationUpdate.error.message}`);
-    } else {
-      linkedApplicationCount += applicationUpdate.data?.length ?? 0;
-
-      for (const row of applicationUpdate.data ?? []) {
-        if (row.id) {
-          linkedApplicationIds.add(String(row.id));
-        }
-      }
-    }
-
-    const applicationsByEmail = await fetchApplicationsByColumn(
-      publicClient,
-      "email",
-      email
-    );
-
-    if (applicationsByEmail.error) {
-      errors.push(`applications_lookup:${applicationsByEmail.error.message}`);
-    } else {
-      for (const row of applicationsByEmail.data ?? []) {
-        if (row.id) {
-          linkedApplicationIds.add(String(row.id));
-        }
-      }
-    }
   }
 
-  if (linkedApplicationIds.size > 0) {
-    const generatedPostUpdate = (await ((publicClient
-      .from("generated_posts")
-      .update({ user_id: userId } as never)
-      .in("application_id", [...linkedApplicationIds])
-      .is("user_id", null)
-      .select("id") as unknown) as Promise<{
-      data: Array<{ id?: string | null }> | null;
-      error: { message: string } | null;
-    }>)) as {
-      data: Array<{ id?: string | null }> | null;
-      error: { message: string } | null;
+  try {
+    const response = await fetch("/api/user/link-applications", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ emails }),
+    });
+
+    const data = (await response.json()) as {
+      linkedApplicationCount?: number;
+      linkedGeneratedPostCount?: number;
+      error?: string | null;
     };
 
-    if (generatedPostUpdate.error) {
-      errors.push(`generated_posts:${generatedPostUpdate.error.message}`);
-    } else {
-      linkedGeneratedPostCount += generatedPostUpdate.data?.length ?? 0;
-    }
+    return {
+      linkedApplicationCount: data.linkedApplicationCount ?? 0,
+      linkedGeneratedPostCount: data.linkedGeneratedPostCount ?? 0,
+      error: data.error ?? null,
+    };
+  } catch (e) {
+    return {
+      linkedApplicationCount: 0,
+      linkedGeneratedPostCount: 0,
+      error: e instanceof Error ? e.message : "연결 요청 실패",
+    };
   }
-
-  console.info(
-    "[Supabase Link] 아이디(이메일) 기준 연결 결과:",
-    JSON.stringify({
-      userId,
-      emails,
-      linkedApplicationCount,
-      linkedGeneratedPostCount,
-      hasError: errors.length > 0,
-    })
-  );
-
-  return {
-    linkedApplicationCount,
-    linkedGeneratedPostCount,
-    error: errors.length ? errors.join(" / ") : null,
-  };
 }
 
 function parseMonthsList(months: string | null | undefined): number[] {
@@ -960,9 +912,16 @@ export async function syncProfileAndLinkData({
   ]);
 
   const emailCandidates = getEmailCandidates(snapshot.authEmail, requestEmail);
+
+  // Obtain session token so the server-side link route can verify identity.
+  // getSession() reads from the stored session — it does not make a network call.
+  const { data: { session } } = await getSupabaseBrowserClient().auth.getSession();
+  const accessToken = session?.access_token ?? "";
+
   const linkResult = await linkExistingRecordsToUser({
     userId: user.id,
     emails: emailCandidates,
+    accessToken,
   });
 
   const redeemResult = await redeemServiceGrants({
@@ -1054,8 +1013,18 @@ export async function persistApplicationSubmission(
 
   const createdAt = new Date().toISOString();
 
+  // Re-poisoning prevention: only bind user_id when the session email matches
+  // the form email. A mismatch means the form was submitted under a different
+  // user's session — store unlinked (user_id = null) so linkExisting re-links
+  // correctly at the owner's next login.
+  const safeUserId =
+    input.userId &&
+    normalizeEmail(input.email) === normalizeEmail(input.sessionEmail)
+      ? input.userId
+      : null;
+
   const baseApplicationPayload: Record<string, unknown> = {
-    user_id: input.userId ?? null,
+    user_id: safeUserId,
     email: normalizedEmail,
     instagram_id: persistedInstagramId,
     has_account: input.hasAccount,
@@ -1695,7 +1664,7 @@ export async function fetchSavedGeneratedPosts({
 
   if (normalizedEmail) {
     const emailApplicationsResponse = await fetchApplicationsByColumn(
-      publicClient,
+      supabase,
       "email",
       normalizedEmail
     );
@@ -1909,7 +1878,6 @@ export async function fetchMyPageSnapshot({
   }
 
   const supabase = getSupabaseBrowserClient();
-  const publicClient = getSupabasePublicClient();
   const emailCandidates = getEmailCandidates(email);
   const errors: string[] = [];
   let subscription: SavedSubscription | null = null;
@@ -1951,7 +1919,7 @@ export async function fetchMyPageSnapshot({
 
   for (const candidateEmail of emailCandidates) {
     const emailApplicationResponse = await fetchApplicationsByColumn(
-      publicClient,
+      supabase,
       "email",
       candidateEmail
     );
@@ -1963,10 +1931,21 @@ export async function fetchMyPageSnapshot({
     }
   }
 
+  // Guard: discard any row whose email doesn't match the authenticated user's
+  // email, or whose user_id is set to a different user. This stops poisoned
+  // rows (e.g. a row created under another user's session) from leaking.
+  const currentNormEmail = normalizeEmail(email);
+  const safeApplicationRows = applicationRows.filter((row) => {
+    const rowNormEmail = normalizeEmail(row.email);
+    if (currentNormEmail && rowNormEmail && rowNormEmail !== currentNormEmail) return false;
+    if (row.user_id && userId && row.user_id !== userId) return false;
+    return true;
+  });
+
   const applicationRow =
     (() => {
       const uniqueRows = [...new Map(
-        applicationRows.map((row) => [String(row.id ?? ""), row])
+        safeApplicationRows.map((row) => [String(row.id ?? ""), row])
       ).values()]
         .filter((row) => !!row.id)
         .sort(
@@ -2002,7 +1981,7 @@ export async function fetchMyPageSnapshot({
 
   if (application?.id) {
     const paymentResponse = await fetchPaymentsByApplicationId(
-      publicClient,
+      supabase,
       application.id
     );
 
@@ -2068,4 +2047,230 @@ export async function fetchMyPageSnapshot({
     },
     error: errors.length ? errors.join(" / ") : null,
   };
+}
+
+// ─── Institution-granted marketer application ─────────────────────────────────
+// Used when the user has an ai_marketer service_grant row — no payment row,
+// no amount check. Status "in_progress" is the only existing DB value that
+// represents "service active, no payment pending" and is already recognised by
+// mypage (stage 2 = 진행중) and admin (제출완료 comes from main_content_url).
+
+export async function persistGrantedApplicationSubmission(input: {
+  userId: string | null;
+  sessionEmail?: string | null;
+  email: string;
+  instagramId: string;
+  industry: string;
+  productService: string;
+  marketingChannel: string;
+  channelUrl: string;
+  mainContentUrl: string;
+  accountDirection?: string;
+  accountBio?: string;
+  accountConcept?: string;
+  managerName: string;
+  phone: string;
+  marketerQuantity: number | null;
+  marketerDuration: number | null;
+}): Promise<{ applicationId: string | null; error: string | null }> {
+  if (!hasSupabaseEnv()) {
+    return {
+      applicationId: null,
+      error: "Supabase 환경 변수가 설정되지 않았습니다.",
+    };
+  }
+
+  const normalizedEmail = normalizeEmail(input.email);
+  if (!normalizedEmail) {
+    return { applicationId: null, error: "이메일 정보가 없습니다." };
+  }
+
+  const normalizedMarketingChannel = input.marketingChannel.trim();
+  const isYoutube = normalizedMarketingChannel === "youtube";
+  const supabase = getSupabaseBrowserClient();
+
+  // ── Duplicate detection ──────────────────────────────────────────────────
+  // Prefer exact user_id match; fall back to normalised email.
+  // Before using an email-matched row, verify ownership so we never overwrite
+  // a different user's application.
+  let existingId: string | null = null;
+  let existingStatus: string | null = null;
+
+  if (input.userId) {
+    const { data: byUser } = await (
+      supabase
+        .from("applications")
+        .select("id, user_id, status")
+        .eq("user_id", input.userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle() as unknown as Promise<{
+          data: { id: string; user_id: string | null; status: string | null } | null;
+        }>
+    );
+    if (byUser) {
+      existingId = byUser.id;
+      existingStatus = byUser.status;
+    }
+  }
+
+  if (!existingId) {
+    const { data: byEmail } = await (
+      supabase
+        .from("applications")
+        .select("id, user_id, status")
+        .ilike("email", normalizedEmail)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle() as unknown as Promise<{
+          data: { id: string; user_id: string | null; status: string | null } | null;
+        }>
+    );
+    if (byEmail) {
+      if (byEmail.user_id && byEmail.user_id !== input.userId) {
+        // Row belongs to a different authenticated user — INSERT instead.
+        console.warn(
+          "[GrantedApplication] 이메일 일치 행이 다른 user_id 소유 → INSERT로 대체",
+          JSON.stringify({ email: normalizedEmail })
+        );
+      } else {
+        existingId = byEmail.id;
+        existingStatus = byEmail.status;
+      }
+    }
+  }
+
+  // ── Submission fields (user-editable content only) ───────────────────────
+  const submissionFields: Record<string, unknown> = {
+    marketing_channel: normalizedMarketingChannel || null,
+    channel_url: input.channelUrl.trim() || null,
+    main_content_url: input.mainContentUrl.trim() || null,
+    instagram_id: isYoutube ? null : (input.instagramId.trim() || null),
+    industry: input.industry.trim() || null,
+    product_service: input.productService.trim() || null,
+    manager_name: input.managerName.trim() || null,
+    phone: input.phone.trim() || null,
+  };
+
+  const accountDirection = input.accountDirection?.trim();
+  const accountBio = input.accountBio?.trim();
+  const accountConcept = input.accountConcept?.trim();
+  if (accountDirection) submissionFields.account_direction = accountDirection;
+  if (accountBio) submissionFields.account_bio = accountBio;
+  if (accountConcept) submissionFields.account_concept = accountConcept;
+
+  // ── UPDATE ───────────────────────────────────────────────────────────────
+  if (existingId) {
+    // Only upgrade status when still in an early/pending state.
+    // Never downgrade an already-active or completed application.
+    const earlyStatuses = new Set([
+      "waiting_for_payment",
+      "payment_pending",
+      "received",
+      "submitted",
+      "pending",
+    ]);
+    const shouldUpgradeStatus =
+      !existingStatus || earlyStatuses.has(String(existingStatus).trim());
+
+    const updatePayload: Record<string, unknown> = { ...submissionFields };
+    if (shouldUpgradeStatus) {
+      updatePayload.status = "in_progress";
+    }
+
+    const { data: updated, error: updateError } = await (
+      supabase
+        .from("applications")
+        .update(updatePayload as never)
+        .eq("id", existingId)
+        .select("id")
+        .single() as unknown as Promise<{
+          data: { id: string } | null;
+          error: { message: string } | null;
+        }>
+    );
+
+    if (updateError) {
+      console.warn(
+        "[GrantedApplication] UPDATE 실패:",
+        JSON.stringify({ id: existingId, error: updateError.message })
+      );
+      return { applicationId: null, error: updateError.message };
+    }
+
+    const applicationId = updated?.id ?? existingId;
+    console.info(
+      "[GrantedApplication] UPDATE 완료:",
+      JSON.stringify({
+        applicationId,
+        email: normalizedEmail,
+        userId: input.userId ?? null,
+        statusUpgraded: shouldUpgradeStatus,
+      })
+    );
+    return { applicationId, error: null };
+  }
+
+  // ── INSERT ───────────────────────────────────────────────────────────────
+  // Re-poisoning prevention: mirror persistApplicationSubmission — only bind
+  // user_id when the session email matches the form email.
+  const safeGrantUserId =
+    input.userId &&
+    normalizeEmail(input.email) === normalizeEmail(input.sessionEmail)
+      ? input.userId
+      : null;
+
+  const createdAt = new Date().toISOString();
+  let insertPayload: Record<string, unknown> = {
+    user_id: safeGrantUserId,
+    email: normalizedEmail,
+    status: "in_progress",
+    created_at: createdAt,
+    selected_plan: input.marketerQuantity ?? null,
+    selected_duration: input.marketerDuration ?? null,
+    is_express: false,
+    ...submissionFields,
+  };
+
+  let insertResult = await tryInsert("applications", [insertPayload]);
+
+  // Retry dropping unknown optional columns (schema-cache mismatch resilience).
+  while (insertResult.error) {
+    const missingColumn = getMissingApplicationColumnName(insertResult.error);
+    if (
+      !missingColumn ||
+      !OPTIONAL_APPLICATION_COLUMNS.has(missingColumn) ||
+      !(missingColumn in insertPayload)
+    ) {
+      break;
+    }
+    const next = { ...insertPayload };
+    delete next[missingColumn];
+    insertPayload = next;
+    insertResult = await tryInsert("applications", [insertPayload]);
+  }
+
+  if (insertResult.error || !insertResult.data) {
+    console.warn(
+      "[GrantedApplication] INSERT 실패:",
+      JSON.stringify({ email: normalizedEmail, error: insertResult.error })
+    );
+    return {
+      applicationId: null,
+      error: insertResult.error ?? "신청 정보를 저장하지 못했습니다.",
+    };
+  }
+
+  const applicationId = String(
+    (insertResult.data as { id?: string })?.id ?? ""
+  );
+  console.info(
+    "[GrantedApplication] INSERT 완료:",
+    JSON.stringify({
+      applicationId: applicationId || null,
+      email: normalizedEmail,
+      userId: input.userId ?? null,
+    })
+  );
+  return { applicationId: applicationId || null, error: null };
 }

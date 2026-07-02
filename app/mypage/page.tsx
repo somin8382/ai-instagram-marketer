@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import {
+  getKoreaDateString,
   POST_GENERATOR_MONTHLY_CREDITS,
   POST_GENERATOR_MONTHLY_PRICE,
 } from "@/lib/post-generator/subscription";
@@ -30,6 +31,19 @@ import {
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
 const APP_STORAGE_KEY = "qmeet-app-state";
 const APPLICATION_STAGES = ["접수됨", "입금 확인중", "진행중", "완료"] as const;
+type OutcomeMetricKey = "followers" | "likes" | "comments";
+type ExpectedOutcome = Record<OutcomeMetricKey, number>;
+
+const EXPECTED_OUTCOME_DATA: Record<1 | 2, Record<1 | 2, ExpectedOutcome>> = {
+  1: {
+    1: { followers: 500, likes: 100, comments: 30 },
+    2: { followers: 1000, likes: 200, comments: 60 },
+  },
+  2: {
+    1: { followers: 1000, likes: 200, comments: 60 },
+    2: { followers: 2000, likes: 400, comments: 120 },
+  },
+};
 
 const EMPTY_SNAPSHOT: MyPageSnapshot = {
   application: null,
@@ -165,6 +179,76 @@ function EmptyState({
   );
 }
 
+type ServiceGrantData = {
+  ai_marketer: boolean;
+  ai_generator: boolean;
+  marketer_months: string | null;
+  generator_months: string | null;
+};
+
+function parseMonthsList(months: string | null | undefined): number[] {
+  if (!months) return [];
+  return months
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 12);
+}
+
+function getEarliestFutureMonth(months: number[], currentMonth: number) {
+  return months
+    .filter((month) => month > currentMonth)
+    .sort((a, b) => a - b)[0];
+}
+
+// ── 마케터 카드 헬퍼 ──────────────────────────────────────────────────────────
+
+function getExpectedOutcome(plan: number | null, duration: number | null) {
+  const safePlan: 1 | 2 = plan === 2 ? 2 : 1;
+  const safeDuration: 1 | 2 = duration === 2 ? 2 : 1;
+  return EXPECTED_OUTCOME_DATA[safePlan][safeDuration];
+}
+
+function formatOutcomeValue(metric: OutcomeMetricKey, value: number): string {
+  if (metric === "followers") {
+    return `${value.toLocaleString()}명`;
+  }
+
+  return `${value.toLocaleString()}개 이상`;
+}
+
+function buildAccountUrl(
+  channel: string | null,
+  channelUrl: string | null,
+  instagramId: string | null
+): string | null {
+  if (channelUrl?.trim()) return channelUrl.trim();
+  if (channel !== "youtube" && instagramId?.trim()) {
+    return `https://www.instagram.com/${instagramId.trim().replace(/^@/, "")}`;
+  }
+  return null;
+}
+
+function buildDisplayUrl(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
+function getCompletionDateText(
+  completionDate: string | null | undefined,
+  currentMonth: number,
+  lastDay: number
+): string {
+  if (completionDate) {
+    const d = new Date(completionDate);
+    if (!Number.isNaN(d.getTime())) {
+      return `${d.getMonth() + 1}월 ${d.getDate()}일 완료된 성과를 공유드립니다.`;
+    }
+  }
+  if (currentMonth && lastDay) {
+    return `${currentMonth}월 ${lastDay}일 완료된 성과를 공유드립니다.`;
+  }
+  return "운영 완료 후 성과를 공유드립니다.";
+}
+
 export default function MyPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -177,6 +261,19 @@ export default function MyPage() {
   const [hasTestAccess, setHasTestAccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<MyPageSnapshot>(EMPTY_SNAPSHOT);
+  const [serviceGrantState, setServiceGrantState] = useState<
+    | { status: "idle" }
+    | { status: "none" }
+    | {
+        status: "ready";
+        grant: ServiceGrantData;
+        mainContentUrl: string | null;
+        marketingChannel: string | null;
+        channelUrl: string | null;
+        instagramId: string | null;
+        currentMonth: number;
+      }
+  >({ status: "idle" });
   const isTestAccountAuthenticated =
     hasTestAccess && isTestAccountUser(authUserId, authEmail);
 
@@ -221,6 +318,53 @@ export default function MyPage() {
     }
 
     router.push("/tools?screen=postsub-payment");
+  }
+
+  function handleStartMarketerSetup() {
+    if (typeof window !== "undefined") {
+      try {
+        const rawAppState = window.localStorage.getItem(APP_STORAGE_KEY);
+        const parsedAppState = rawAppState
+          ? (JSON.parse(rawAppState) as Record<string, unknown>)
+          : {};
+
+        window.localStorage.setItem(
+          APP_STORAGE_KEY,
+          JSON.stringify({
+            ...parsedAppState,
+            step: "channel",
+          })
+        );
+      } catch {
+        window.localStorage.setItem(
+          APP_STORAGE_KEY,
+          JSON.stringify({ step: "channel" })
+        );
+      }
+    }
+
+    router.push("/");
+  }
+
+  function handleGoHome() {
+    if (typeof window !== "undefined") {
+      try {
+        const rawAppState = window.localStorage.getItem(APP_STORAGE_KEY);
+        const parsedAppState = rawAppState
+          ? (JSON.parse(rawAppState) as Record<string, unknown>)
+          : {};
+        window.localStorage.setItem(
+          APP_STORAGE_KEY,
+          JSON.stringify({ ...parsedAppState, step: "landing" })
+        );
+      } catch {
+        window.localStorage.setItem(
+          APP_STORAGE_KEY,
+          JSON.stringify({ step: "landing" })
+        );
+      }
+    }
+    router.push("/");
   }
 
   useEffect(() => {
@@ -432,6 +576,88 @@ export default function MyPage() {
     };
   }, [router, refreshSeed]);
 
+  useEffect(() => {
+    if (!authEmail) return;
+
+    const supabase = getSupabaseBrowserClientOrNull();
+    if (!supabase) return;
+
+    let active = true;
+
+    const fetchGrant = async () => {
+      // RLS restricts to own row: lower(email) = lower(auth.email())
+      const { data: rawGrant } = await supabase
+        .from("service_grants")
+        .select("ai_marketer, ai_generator, marketer_months, generator_months")
+        .maybeSingle();
+      // Supabase Insert/Update typed as Record<string,Json> causes select inference
+      // to collapse to never — cast explicitly to the fields we need.
+      const grant = rawGrant as ServiceGrantData | null;
+
+      if (!active) return;
+
+      if (!grant) {
+        setServiceGrantState({ status: "none" });
+        return;
+      }
+
+      const { data: rawAppRow } = await supabase
+        .from("applications")
+        .select("user_id, email, main_content_url, marketing_channel, channel_url, instagram_id")
+        .eq("user_id", authUserId)
+        .not("main_content_url", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const rawTyped = rawAppRow as {
+        user_id: string | null;
+        email: string | null;
+        main_content_url: string | null;
+        marketing_channel: string | null;
+        channel_url: string | null;
+        instagram_id: string | null;
+      } | null;
+      // Guard: mirrors Part A — discard row unless user_id AND email both match the
+      // authenticated user. This stops poisoned rows (e.g. user_id=somin, email=wfr112).
+      const normStr = (s?: string | null) => s?.trim().toLowerCase() ?? "";
+      const ownEmail = normStr(authEmail);
+      const rowEmail = normStr(rawTyped?.email);
+      const appRow =
+        rawTyped !== null &&
+        rawTyped.user_id === authUserId &&
+        (!ownEmail || !rowEmail || rowEmail === ownEmail)
+          ? rawTyped
+          : null;
+
+      if (!active) return;
+
+      const koreaDate = getKoreaDateString();
+      const [, mo] = koreaDate.split("-").map(Number);
+      const currentMonth = mo ?? 7;
+
+      setServiceGrantState({
+        status: "ready",
+        grant: {
+          ai_marketer: grant.ai_marketer,
+          ai_generator: grant.ai_generator,
+          marketer_months: grant.marketer_months,
+          generator_months: grant.generator_months,
+        },
+        mainContentUrl: appRow?.main_content_url ?? null,
+        marketingChannel: appRow?.marketing_channel ?? null,
+        channelUrl: appRow?.channel_url ?? null,
+        instagramId: appRow?.instagram_id ?? null,
+        currentMonth,
+      });
+    };
+
+    void fetchGrant();
+
+    return () => {
+      active = false;
+    };
+  }, [authEmail, authUserId]);
+
   const currentStage = getApplicationStageIndex(snapshot.application?.status);
 
   return (
@@ -439,7 +665,7 @@ export default function MyPage() {
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between gap-3">
           <button
-            onClick={() => router.push("/")}
+            onClick={handleGoHome}
             className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
           >
             ← 홈으로
@@ -484,7 +710,8 @@ export default function MyPage() {
           )}
         </div>
 
-        {loading ? (
+        {/* Show spinner while the main snapshot OR the grant check is still loading */}
+        {loading || serviceGrantState.status === "idle" ? (
           <Card className="text-center py-12">
             <div className="w-10 h-10 border-4 border-rose-200 border-t-rose-500 rounded-full animate-spin mx-auto" />
             <p className="mt-4 text-sm text-gray-500">
@@ -499,440 +726,910 @@ export default function MyPage() {
               </Card>
             )}
 
-            <Card className="space-y-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <SectionLabel>진행 상태</SectionLabel>
-                  <h2 className="text-xl font-bold text-gray-900">
-                    현재 진행 흐름
-                  </h2>
-                  <p className="text-sm text-gray-500">
-                    신청 이후 어디까지 진행됐는지 바로 확인할 수 있습니다.
-                  </p>
-                </div>
-                {snapshot.application && (
-                  <span className="text-xs font-semibold bg-rose-50 text-rose-600 px-3 py-1.5 rounded-full border border-rose-100">
-                    {APPLICATION_STAGES[currentStage]}
-                  </span>
-                )}
-              </div>
+            {serviceGrantState.status === "ready" ? (
+              // ─── GRANTED-USER LAYOUT ───────────────────────────────────────
+              (() => {
+                const { grant, mainContentUrl, marketingChannel, channelUrl, instagramId, currentMonth } = serviceGrantState;
 
-              {snapshot.application ? (
-                <>
-                  <div className="grid grid-cols-4 gap-3 items-start">
-                    {APPLICATION_STAGES.map((label, index) => (
-                      <div
-                        key={label}
-                        className="relative flex flex-col items-center gap-1.5"
-                      >
-                        {index < APPLICATION_STAGES.length - 1 && (
-                          <div
-                            className={`absolute top-4 left-1/2 w-full h-px ${
-                              index < currentStage ? "bg-rose-500" : "bg-gray-200"
-                            }`}
-                          />
-                        )}
-                        <div className="relative z-10 flex flex-col items-center gap-1.5 bg-white px-1">
-                          <div
-                            className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
-                              index === currentStage
-                                ? "bg-gradient-to-r from-rose-500 to-pink-500 text-white ring-4 ring-rose-100"
-                                : index < currentStage
-                                  ? "bg-rose-500 text-white"
-                                  : "bg-gray-100 text-gray-400"
-                            }`}
-                          >
-                            {index < currentStage ? "✓" : index + 1}
-                          </div>
+                const channelLabel =
+                  marketingChannel === "instagram" ? "인스타그램"
+                  : marketingChannel === "youtube" ? "유튜브"
+                  : marketingChannel ?? "-";
+
+                const marketerMonths = parseMonthsList(grant.marketer_months);
+                const generatorMonths = parseMonthsList(grant.generator_months);
+
+                const marketerFutureMonth = getEarliestFutureMonth(marketerMonths, currentMonth);
+                const generatorFutureMonth = getEarliestFutureMonth(generatorMonths, currentMonth);
+
+                const marketerActive = grant.ai_marketer && marketerMonths.includes(currentMonth);
+                const marketerFuture = grant.ai_marketer && Boolean(marketerFutureMonth);
+
+                // Last day of the active service month for the "진행중" message
+                const [currentYear] = getKoreaDateString().split("-").map(Number);
+                const marketerMonthLastDay = new Date(
+                  currentYear ?? new Date().getFullYear(),
+                  currentMonth,
+                  0
+                ).getDate();
+
+                const generatorActive = snapshot.usage.hasActiveSubscription;
+                const generatorFuture =
+                  !generatorActive && grant.ai_generator && Boolean(generatorFutureMonth);
+
+                const marketerBadge = marketerFuture
+                  ? { label: `${marketerFutureMonth}월 예정`, cls: "bg-amber-50 text-amber-700" }
+                  : mainContentUrl
+                    ? { label: "진행중", cls: "bg-emerald-50 text-emerald-700" }
+                    : marketerActive
+                      ? { label: "할 일", cls: "bg-orange-50 text-orange-700" }
+                      : { label: "신청하지 않음", cls: "bg-gray-100 text-gray-500" };
+
+                const generatorBadge = generatorActive
+                  ? { label: "이용 가능", cls: "bg-emerald-50 text-emerald-700" }
+                  : generatorFuture
+                    ? { label: `${generatorFutureMonth}월 예정`, cls: "bg-amber-50 text-amber-700" }
+                    : { label: "신청하지 않음", cls: "bg-gray-100 text-gray-500" };
+
+                const creditsTotal = snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS;
+
+                return (
+                  <>
+                    {/* 신청 서비스 요약 */}
+                    <Card className="py-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                        신청 서비스
+                      </p>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
                           <span
-                            className={`text-[10px] text-center leading-tight ${
-                              index <= currentStage
-                                ? "text-gray-800 font-medium"
-                                : "text-gray-400"
-                            }`}
+                            className={`text-sm font-semibold ${grant.ai_marketer ? "text-emerald-600" : "text-gray-300"}`}
                           >
-                            {label}
+                            {grant.ai_marketer ? "✓" : "○"}
+                          </span>
+                          <span
+                            className={`text-sm font-medium ${grant.ai_marketer ? "text-gray-800" : "text-gray-400"}`}
+                          >
+                            AI 마케터
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-sm font-semibold ${grant.ai_generator ? "text-emerald-600" : "text-gray-300"}`}
+                          >
+                            {grant.ai_generator ? "✓" : "○"}
+                          </span>
+                          <span
+                            className={`text-sm font-medium ${grant.ai_generator ? "text-gray-800" : "text-gray-400"}`}
+                          >
+                            AI 생성기
                           </span>
                         </div>
                       </div>
-                    ))}
+                    </Card>
+
+                    {/* 결제 상태 shared block */}
+                    <Card className="space-y-2">
+                      <span className="inline-block text-xs font-semibold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full">
+                        기관 결제 완료
+                      </span>
+                      <p className="text-sm text-gray-500 leading-relaxed">
+                        지원기관을 통해 이용 중입니다. 추가 이용 또는 연장이
+                        필요하시면 카카오톡으로 문의해 주세요.
+                      </p>
+                    </Card>
+
+                    {/* AI 마케터 card */}
+                    {grant.ai_marketer && mainContentUrl && !marketerFuture ? (
+                      // ── 진행중 rich card ──────────────────────────────────
+                      (() => {
+                        const isYoutube = marketingChannel === "youtube";
+                        const accountUrl = buildAccountUrl(marketingChannel, channelUrl, instagramId);
+                        const accountLabel = isYoutube ? "채널 주소" : "계정 주소";
+                        const contentLabel = isYoutube ? "메인 영상" : "메인 게시물";
+                        const channelBadgeCls = isYoutube
+                          ? "bg-red-50 text-red-600"
+                          : "bg-rose-50 text-rose-600";
+                        const outcomes = getExpectedOutcome(
+                          snapshot.application?.selectedPlan ?? null,
+                          snapshot.application?.selectedDuration ?? null
+                        );
+                        return (
+                          <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-white p-6">
+                            <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-emerald-50" />
+                            <div className="pointer-events-none absolute -bottom-24 right-16 h-44 w-44 rounded-full bg-emerald-50/70" />
+
+                            <div className="relative">
+                              {/* 헤더 */}
+                              <div className="mb-5 flex items-center justify-between">
+                                <p className="text-sm font-semibold text-gray-700">AI 마케터</p>
+                                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">진행중</span>
+                              </div>
+
+                              {/* 헤드라인 + 일러스트 */}
+                              <div className="flex items-center gap-4">
+                                <div className="min-w-0 flex-1">
+                                  <h3 className="text-2xl font-bold leading-snug text-gray-900">
+                                    AI 마케터가<br />
+                                    <span className="text-emerald-500">마케팅 진행중</span>입니다.
+                                  </h3>
+                                  <p className="mt-3 text-sm text-gray-600">
+                                    {getCompletionDateText(
+                                      snapshot.application?.completionDate,
+                                      currentMonth,
+                                      marketerMonthLastDay
+                                    )}
+                                  </p>
+                                </div>
+                                <div className="hidden shrink-0 sm:block">
+                                  <svg width="150" height="128" viewBox="0 0 150 128" fill="none" aria-hidden="true">
+                                    <rect x="40" y="16" width="100" height="74" rx="10" fill="#EEF2FF" stroke="#C7D2FE" strokeWidth="2" />
+                                    <rect x="81" y="90" width="18" height="11" fill="#C7D2FE" />
+                                    <rect x="66" y="101" width="48" height="6" rx="3" fill="#C7D2FE" />
+                                    <rect x="52" y="60" width="11" height="20" rx="2" fill="#A78BFA" />
+                                    <rect x="67" y="50" width="11" height="30" rx="2" fill="#C4B5FD" />
+                                    <rect x="82" y="42" width="11" height="38" rx="2" fill="#A78BFA" />
+                                    <polyline points="50,76 70,58 88,66 118,34" stroke="#34D399" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                    <polyline points="108,34 118,34 118,44" stroke="#34D399" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                                    <circle cx="120" cy="74" r="12" fill="#FDBA74" />
+                                    <path d="M120 74 L120 62 A12 12 0 0 1 132 74 Z" fill="#FB923C" />
+                                    <path d="M28 38 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 z" fill="#FCD34D" />
+                                    <path d="M132 18 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6 z" fill="#FCD34D" />
+                                    <circle cx="33" cy="72" r="3" fill="#FBBF24" />
+                                  </svg>
+                                </div>
+                              </div>
+
+                              {/* 예상 성과 */}
+                              <div className="mt-6">
+                                <p className="mb-2 text-xs font-medium text-gray-400">예상 성과</p>
+                                <div className="grid grid-cols-3 gap-2">
+                                  <div className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center">
+                                    <p className="text-[11px] text-emerald-700">예상 팔로워</p>
+                                    <p className="text-base font-bold text-emerald-900">{formatOutcomeValue("followers", outcomes.followers)}</p>
+                                  </div>
+                                  <div className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center">
+                                    <p className="text-[11px] text-emerald-700">예상 좋아요</p>
+                                    <p className="text-base font-bold text-emerald-900">{formatOutcomeValue("likes", outcomes.likes)}</p>
+                                  </div>
+                                  <div className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center">
+                                    <p className="text-[11px] text-emerald-700">예상 댓글</p>
+                                    <p className="text-base font-bold text-emerald-900">{formatOutcomeValue("comments", outcomes.comments)}</p>
+                                  </div>
+                                </div>
+                                {!isYoutube && (
+                                  <p className="mt-2.5 text-[11px] leading-relaxed text-gray-400">
+                                    ※ 좋아요와 댓글은 플랫폼 특성상 보장되지 않습니다. 목표에 도달하지 못할 경우, 대신 팔로워를 약 50명
+                                    추가 확보하여 총 팔로워 550명 이상 달성을 목표로 운영합니다.
+                                  </p>
+                                )}
+                              </div>
+
+                              {/* 진행 스텝퍼 */}
+                              <div className="mt-7 flex items-center">
+                                {APPLICATION_STAGES.flatMap((stageLabel, index) => {
+                                  const isDone = index < currentStage;
+                                  const isCurrent = index === currentStage;
+                                  const checkIcon = (
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  );
+                                  const stepEl = (
+                                    <div key={`step-${index}`} className="flex flex-col items-center gap-1.5">
+                                      <span className={`flex h-7 w-7 items-center justify-center rounded-full ${
+                                        isCurrent
+                                          ? "bg-emerald-500 text-white ring-4 ring-emerald-100"
+                                          : isDone
+                                            ? "bg-emerald-400 text-white"
+                                            : "bg-gray-100"
+                                      }`}>
+                                        {isDone || isCurrent
+                                          ? checkIcon
+                                          : <span className="text-xs font-semibold text-gray-400">{index + 1}</span>
+                                        }
+                                      </span>
+                                      <span className={`text-[11px] ${
+                                        isCurrent
+                                          ? "font-semibold text-emerald-600"
+                                          : isDone
+                                            ? "text-gray-500"
+                                            : "text-gray-400"
+                                      }`}>
+                                        {stageLabel}
+                                      </span>
+                                    </div>
+                                  );
+                                  return index < APPLICATION_STAGES.length - 1
+                                    ? [stepEl, <div key={`line-${index}`} className={`mb-5 h-0.5 flex-1 ${isDone ? "bg-emerald-200" : "bg-gray-200"}`} />]
+                                    : [stepEl];
+                                })}
+                              </div>
+
+                              {/* 제출 정보 */}
+                              <div className="mt-7">
+                                <p className="mb-3 text-xs font-medium text-gray-400">제출 정보</p>
+                                <div className="divide-y divide-gray-100 overflow-hidden rounded-2xl border border-gray-100">
+                                  <div className="flex items-center gap-3 px-4 py-3.5">
+                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500">
+                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                                        <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" />
+                                      </svg>
+                                    </span>
+                                    <span className="w-20 shrink-0 text-sm text-gray-500">선택한 채널</span>
+                                    <span className={`ml-auto rounded-full px-3 py-1 text-xs font-medium ${channelBadgeCls}`}>
+                                      {channelLabel}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3 px-4 py-3.5">
+                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500">
+                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                                        <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" /><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+                                      </svg>
+                                    </span>
+                                    <span className="w-20 shrink-0 text-sm text-gray-500">{accountLabel}</span>
+                                    {accountUrl ? (
+                                      <a href={accountUrl} target="_blank" rel="noopener noreferrer" title={accountUrl} className="min-w-0 flex-1 truncate text-right text-sm font-medium text-blue-600 hover:underline">
+                                        {buildDisplayUrl(accountUrl)}
+                                      </a>
+                                    ) : (
+                                      <span className="ml-auto text-sm text-gray-400">-</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-3 px-4 py-3.5">
+                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500">
+                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                                        <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" />
+                                      </svg>
+                                    </span>
+                                    <span className="w-20 shrink-0 text-sm text-gray-500">{contentLabel}</span>
+                                    <a href={mainContentUrl} target="_blank" rel="noopener noreferrer" title={mainContentUrl} className="min-w-0 flex-1 truncate text-right text-sm font-medium text-blue-600 hover:underline">
+                                      {buildDisplayUrl(mainContentUrl)}
+                                    </a>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 변경 불가 안내 */}
+                              <div className="mt-4 flex gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3.5">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                  </svg>
+                                </span>
+                                <div className="space-y-1">
+                                  <p className="text-sm font-semibold text-amber-900">제출한 정보는 직접 변경할 수 없습니다.</p>
+                                  <p className="text-sm leading-relaxed text-amber-700">변경이 필요하신 경우 1:1 문의로 요청해 주세요. 신청 후 24시간이 지나면 변경이 어렵습니다.</p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      // ── 기타 상태 card (기존 유지) ────────────────────────
+                      <Card className="overflow-hidden space-y-4">
+                        {/* Gradient banner with illustration */}
+                        <div className="-mx-6 -mt-6 mb-0 bg-gradient-to-br from-emerald-50 via-sky-50 to-blue-50 px-6 pt-5 pb-5 flex items-center justify-between gap-4">
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-600">
+                              AI 마케터
+                            </p>
+                            <h2 className="text-xl font-bold text-gray-900">
+                              AI 마케터
+                            </h2>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span
+                              className={`text-xs font-semibold px-3 py-1.5 rounded-full ${marketerBadge.cls}`}
+                            >
+                              {marketerBadge.label}
+                            </span>
+                            <svg width="44" height="36" viewBox="0 0 44 36" fill="none" aria-hidden="true">
+                              <rect x="1" y="24" width="7" height="11" rx="2" fill="#a7f3d0" />
+                              <rect x="12" y="16" width="7" height="19" rx="2" fill="#6ee7b7" />
+                              <rect x="23" y="9" width="7" height="26" rx="2" fill="#34d399" />
+                              <rect x="34" y="3" width="7" height="32" rx="2" fill="#10b981" />
+                              <polyline points="4.5,24 15.5,16 26.5,9 37.5,3" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                              <circle cx="37.5" cy="3" r="2.5" fill="#059669" />
+                            </svg>
+                          </div>
+                        </div>
+
+                        {grant.ai_marketer && snapshot.application && (
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                              현재 진행 단계
+                            </p>
+                            <div className="grid grid-cols-4 gap-3 items-start">
+                              {APPLICATION_STAGES.map((label, index) => (
+                                <div
+                                  key={label}
+                                  className="relative flex flex-col items-center gap-1.5"
+                                >
+                                  {index < APPLICATION_STAGES.length - 1 && (
+                                    <div
+                                      className={`absolute top-4 left-1/2 w-full h-px ${
+                                        index < currentStage ? "bg-rose-500" : "bg-gray-200"
+                                      }`}
+                                    />
+                                  )}
+                                  <div className="relative z-10 flex flex-col items-center gap-1.5 bg-white px-1">
+                                    <div
+                                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
+                                        index === currentStage
+                                          ? "bg-gradient-to-r from-rose-500 to-pink-500 text-white ring-4 ring-rose-100"
+                                          : index < currentStage
+                                            ? "bg-rose-500 text-white"
+                                            : "bg-gray-100 text-gray-400"
+                                      }`}
+                                    >
+                                      {index < currentStage ? "✓" : index + 1}
+                                    </div>
+                                    <span
+                                      className={`text-[10px] text-center leading-tight ${
+                                        index <= currentStage ? "text-gray-800 font-medium" : "text-gray-400"
+                                      }`}
+                                    >
+                                      {label}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {grant.ai_marketer && marketerActive && !mainContentUrl && (
+                          <div className="rounded-xl bg-orange-50 border border-orange-100 px-4 py-4 space-y-3">
+                            <p className="text-sm text-orange-700 leading-relaxed">
+                              AI 마케터를 시작하려면 먼저 기본 정보를 설정해 주세요.
+                            </p>
+                            <button
+                              onClick={handleStartMarketerSetup}
+                              className="py-2.5 px-5 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
+                            >
+                              세팅하러 가기
+                            </button>
+                          </div>
+                        )}
+
+                        {grant.ai_marketer && marketerFuture && (
+                          <p className="text-sm text-gray-500 leading-relaxed">
+                            서비스 시작 전입니다. 시작 월이 되면 진행됩니다.
+                          </p>
+                        )}
+                      </Card>
+                    )}
+
+                    {/* AI 생성기 card */}
+                    <div className="relative overflow-hidden rounded-2xl border border-violet-100 bg-white p-6">
+                      <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-violet-50" />
+                      <div className="pointer-events-none absolute -bottom-24 right-16 h-44 w-44 rounded-full bg-violet-50/70" />
+
+                      <div className="relative">
+                        {/* 헤더 */}
+                        <div className="mb-5 flex items-center justify-between">
+                          <p className="text-sm font-semibold text-gray-700">AI 생성기</p>
+                          <span className={`rounded-full px-3 py-1 text-xs font-medium ${generatorBadge.cls}`}>
+                            {generatorBadge.label}
+                          </span>
+                        </div>
+
+                        {/* 헤드라인 + 일러스트 */}
+                        <div className="flex items-center gap-4">
+                          <div className="min-w-0 flex-1">
+                            <h3 className="text-2xl font-bold leading-snug text-gray-900">
+                              지금 바로<br />
+                              <span className="text-violet-500">게시물을 생성</span>해보세요.
+                            </h3>
+                            <p className="mt-3 text-sm text-gray-600">
+                              이미지 생성·재생성·AI 수정을 자유롭게 이용할 수 있어요.
+                            </p>
+                          </div>
+                          <div className="hidden shrink-0 sm:block">
+                            <svg width="150" height="128" viewBox="0 0 150 128" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                              <rect x="34" y="30" width="70" height="70" rx="12" fill="#F5F3FF" stroke="#DDD6FE" strokeWidth="2" />
+                              <circle cx="54" cy="52" r="6" fill="#C4B5FD" />
+                              <path d="M39 90 L58 66 L70 80 L85 60 L99 90 Z" fill="#A78BFA" />
+                              <line x1="95" y1="42" x2="120" y2="20" stroke="#7C3AED" strokeWidth="5" strokeLinecap="round" />
+                              <path d="M123 15 l2.5 6 6 2.5 -6 2.5 -2.5 6 -2.5 -6 -6 -2.5 6 -2.5 z" fill="#8B5CF6" />
+                              <path d="M108 56 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6 z" fill="#C4B5FD" />
+                              <circle cx="120" cy="72" r="3" fill="#DDD6FE" />
+                              <path d="M30 22 l1.4 3.6 3.6 1.4 -3.6 1.4 -1.4 3.6 -1.4 -3.6 -3.6 -1.4 3.6 -1.4 z" fill="#DDD6FE" />
+                            </svg>
+                          </div>
+                        </div>
+
+                        {/* Active: 이용 현황 + 바로가기 */}
+                        {grant.ai_generator && generatorActive && (
+                          <>
+                            <div className="mt-6">
+                              <p className="mb-2 text-xs font-medium text-gray-400">이용 현황</p>
+                              <div className="grid grid-cols-3 gap-2">
+                                <div className="rounded-xl bg-violet-50/70 px-3 py-2.5 text-center">
+                                  <p className="text-[11px] text-violet-700">남은 횟수</p>
+                                  <p className="text-base font-bold text-violet-900">
+                                    {snapshot.usage.remainingPostCount}/{creditsTotal}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl bg-violet-50/70 px-3 py-2.5 text-center">
+                                  <p className="text-[11px] text-violet-700">구독 요금</p>
+                                  <p className="text-base font-bold text-violet-900">
+                                    월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원
+                                  </p>
+                                </div>
+                                <div className="rounded-xl bg-violet-50/70 px-3 py-2.5 text-center">
+                                  <p className="text-[11px] text-violet-700">갱신</p>
+                                  <p className="text-base font-bold text-violet-900">
+                                    매월 {POST_GENERATOR_MONTHLY_CREDITS}회
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                            <p className="mt-5 text-sm text-gray-500">
+                              생성한 게시물은 AI 생성기에서 확인·복사·다운로드할 수 있어요.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => router.push("/tools")}
+                              className="mt-3 w-full rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-violet-700 active:scale-[0.99]"
+                            >
+                              AI 생성기 바로가기
+                            </button>
+                          </>
+                        )}
+
+                        {/* Future: 시작 예정 안내 */}
+                        {grant.ai_generator && generatorFuture && (
+                          <p className="mt-5 text-sm text-gray-500 leading-relaxed">
+                            서비스 시작 전입니다. {generatorFutureMonth}월이 되면 이용할 수 있습니다.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()
+            ) : (
+              // ─── NON-GRANT LEGACY LAYOUT (unchanged) ──────────────────────
+              <>
+                <Card className="space-y-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <SectionLabel>진행 상태</SectionLabel>
+                      <h2 className="text-xl font-bold text-gray-900">
+                        현재 진행 흐름
+                      </h2>
+                      <p className="text-sm text-gray-500">
+                        신청 이후 어디까지 진행됐는지 바로 확인할 수 있습니다.
+                      </p>
+                    </div>
+                    {snapshot.application && (
+                      <span className="text-xs font-semibold bg-rose-50 text-rose-600 px-3 py-1.5 rounded-full border border-rose-100">
+                        {APPLICATION_STAGES[currentStage]}
+                      </span>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                    {[
-                      {
-                        label: "선택 플랜",
-                        value: getPlanLabel(snapshot.application.selectedPlan),
-                      },
-                      {
-                        label: "운영 기간",
-                        value: getDurationLabel(snapshot.application.selectedDuration),
-                      },
-                      {
-                        label: "급행 여부",
-                        value: getExpressLabel(snapshot.application.isExpress),
-                      },
-                      {
-                        label: "신청일",
-                        value: formatDateKorean(snapshot.application.createdAt),
-                      },
-                      {
-                        label: "완료 예정일",
-                        value: formatDateKorean(snapshot.application.completionDate),
-                      },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4"
-                      >
-                        <p className="text-xs font-semibold text-gray-400">
-                          {item.label}
-                        </p>
-                        <p className="mt-2 text-sm font-semibold text-gray-900 leading-relaxed">
-                          {item.value}
+                  {snapshot.application ? (
+                    <>
+                      <div className="grid grid-cols-4 gap-3 items-start">
+                        {APPLICATION_STAGES.map((label, index) => (
+                          <div
+                            key={label}
+                            className="relative flex flex-col items-center gap-1.5"
+                          >
+                            {index < APPLICATION_STAGES.length - 1 && (
+                              <div
+                                className={`absolute top-4 left-1/2 w-full h-px ${
+                                  index < currentStage ? "bg-rose-500" : "bg-gray-200"
+                                }`}
+                              />
+                            )}
+                            <div className="relative z-10 flex flex-col items-center gap-1.5 bg-white px-1">
+                              <div
+                                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
+                                  index === currentStage
+                                    ? "bg-gradient-to-r from-rose-500 to-pink-500 text-white ring-4 ring-rose-100"
+                                    : index < currentStage
+                                      ? "bg-rose-500 text-white"
+                                      : "bg-gray-100 text-gray-400"
+                                }`}
+                              >
+                                {index < currentStage ? "✓" : index + 1}
+                              </div>
+                              <span
+                                className={`text-[10px] text-center leading-tight ${
+                                  index <= currentStage
+                                    ? "text-gray-800 font-medium"
+                                    : "text-gray-400"
+                                }`}
+                              >
+                                {label}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        {[
+                          {
+                            label: "선택 플랜",
+                            value: getPlanLabel(snapshot.application.selectedPlan),
+                          },
+                          {
+                            label: "운영 기간",
+                            value: getDurationLabel(snapshot.application.selectedDuration),
+                          },
+                          {
+                            label: "급행 여부",
+                            value: getExpressLabel(snapshot.application.isExpress),
+                          },
+                          {
+                            label: "신청일",
+                            value: formatDateKorean(snapshot.application.createdAt),
+                          },
+                          {
+                            label: "완료 예정일",
+                            value: formatDateKorean(snapshot.application.completionDate),
+                          },
+                        ].map((item) => (
+                          <div
+                            key={item.label}
+                            className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4"
+                          >
+                            <p className="text-xs font-semibold text-gray-400">
+                              {item.label}
+                            </p>
+                            <p className="mt-2 text-sm font-semibold text-gray-900 leading-relaxed">
+                              {item.value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <EmptyState
+                      title="아직 신청 내역이 없습니다"
+                      description="서비스를 신청하면 이곳에서 진행 상태와 운영 정보를 확인할 수 있습니다."
+                      actions={
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <button
+                            onClick={() => router.push("/?screen=account-check")}
+                            className="w-full py-2.5 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
+                          >
+                            AI 마케터 신청하기
+                          </button>
+                          <button
+                            onClick={() => router.push("/tools")}
+                            className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
+                          >
+                            게시물 AI 생성하기
+                          </button>
+                        </div>
+                      }
+                    />
+                  )}
+                </Card>
+
+                <Card className="space-y-5">
+                  <div className="space-y-1">
+                    <SectionLabel>결제 상태</SectionLabel>
+                    <h2 className="text-xl font-bold text-gray-900">
+                      입금 확인 현황
+                    </h2>
+                    <p className="text-sm text-gray-500">
+                      결제 금액과 입금 확인 상태를 확인할 수 있습니다.
+                    </p>
+                  </div>
+
+                  {snapshot.payment ? (
+                    <>
+                      <div className="rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white px-5 py-5">
+                        <p className="text-xs font-semibold text-white/80">결제 금액</p>
+                        <p className="mt-2 text-3xl font-extrabold tracking-tight">
+                          {formatPrice(snapshot.payment.expectedAmount)}
                         </p>
                       </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <EmptyState
-                  title="아직 신청 내역이 없습니다"
-                  description="서비스를 신청하면 이곳에서 진행 상태와 운영 정보를 확인할 수 있습니다."
-                  actions={
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        onClick={() => router.push("/?screen=account-check")}
-                        className="w-full py-2.5 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
-                      >
-                        AI 마케터 신청하기
-                      </button>
-                      <button
-                        onClick={() => router.push("/tools")}
-                        className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
-                      >
-                        게시물 AI 생성하기
-                      </button>
-                    </div>
-                  }
-                />
-              )}
-            </Card>
 
-            <Card className="space-y-5">
-              <div className="space-y-1">
-                <SectionLabel>결제 상태</SectionLabel>
-                <h2 className="text-xl font-bold text-gray-900">
-                  입금 확인 현황
-                </h2>
-                <p className="text-sm text-gray-500">
-                  결제 금액과 입금 확인 상태를 확인할 수 있습니다.
-                </p>
-              </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {[
+                          {
+                            label: "입금자명",
+                            value: snapshot.payment.depositorName || "미입력",
+                          },
+                          {
+                            label: "현재 상태",
+                            value: getPaymentStatusLabel(snapshot.payment.paymentStatus),
+                          },
+                          {
+                            label: "확인 시점",
+                            value: snapshot.payment.confirmedAt
+                              ? formatDateKorean(snapshot.payment.confirmedAt)
+                              : "확인 대기중",
+                          },
+                        ].map((item) => (
+                          <div
+                            key={item.label}
+                            className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4"
+                          >
+                            <p className="text-xs font-semibold text-gray-400">
+                              {item.label}
+                            </p>
+                            <p className="mt-2 text-sm font-semibold text-gray-900 leading-relaxed">
+                              {item.value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <EmptyState
+                      title="아직 결제 정보가 없습니다"
+                      description="신청이 접수되면 결제 금액과 입금 확인 상태가 이곳에 표시됩니다."
+                    />
+                  )}
+                </Card>
 
-              {snapshot.payment ? (
-                <>
-                  <div className="rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white px-5 py-5">
-                    <p className="text-xs font-semibold text-white/80">결제 금액</p>
-                    <p className="mt-2 text-3xl font-extrabold tracking-tight">
-                      {formatPrice(snapshot.payment.expectedAmount)}
+                <Card className="space-y-5">
+                  <div className="space-y-1">
+                    <SectionLabel>이용 현황</SectionLabel>
+                    <h2 className="text-xl font-bold text-gray-900">
+                      현재 사용 가능 상태
+                    </h2>
+                    <p className="text-sm text-gray-500">
+                      무료 체험, 구독 상태, 남은 생성 횟수를 바로 확인할 수 있습니다.
                     </p>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {[
-                      {
-                        label: "입금자명",
-                        value: snapshot.payment.depositorName || "미입력",
-                      },
-                      {
-                        label: "현재 상태",
-                        value: getPaymentStatusLabel(snapshot.payment.paymentStatus),
-                      },
-                      {
-                        label: "확인 시점",
-                        value: snapshot.payment.confirmedAt
-                          ? formatDateKorean(snapshot.payment.confirmedAt)
-                          : "확인 대기중",
-                      },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4"
-                      >
-                        <p className="text-xs font-semibold text-gray-400">
-                          {item.label}
-                        </p>
-                        <p className="mt-2 text-sm font-semibold text-gray-900 leading-relaxed">
-                          {item.value}
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                      <p className="text-xs font-semibold text-gray-400">
+                        무료 체험
+                      </p>
+                      <p className="mt-2 text-lg font-bold text-gray-900">
+                        {snapshot.usage.freeTrialUsed
+                          ? "무료 체험 사용 완료"
+                          : "무료 체험 미사용"}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+                        무료 체험 게시물 생성 여부를 기준으로 표시됩니다.
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                      <p className="text-xs font-semibold text-gray-400">
+                        월 구독 상태
+                      </p>
+                      <p className="mt-2 text-lg font-bold text-gray-900">
+                        {snapshot.usage.hasActiveSubscription
+                          ? "구독 이용중"
+                          : "미구독"}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+                        월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원, 매월{" "}
+                        {POST_GENERATOR_MONTHLY_CREDITS}회 기준입니다.
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                      <p className="text-xs font-semibold text-gray-400">
+                        이번 달 남은 횟수
+                      </p>
+                      <p className="mt-2 text-lg font-bold text-gray-900">
+                        {snapshot.usage.remainingPostCount}/
+                        {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+                        사용 {snapshot.usage.usedPaidPostCount}회 / 전체{" "}
+                        {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}회
+                        기준입니다.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-5 py-5 space-y-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-violet-700">
+                        게시물 AI 생성 구독형
+                      </p>
+                      <p className="text-sm text-violet-600 leading-relaxed">
+                        무료 체험 뒤 바로 시작할 수 있는 경량 구독형 도구이며, 이후
+                        AI 인스타그램 마케터 서비스로 자연스럽게 확장할 수 있습니다.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
+                        <p className="text-xs font-semibold text-violet-500">구독 요금</p>
+                        <p className="mt-2 font-bold text-gray-900">
+                          월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원
                         </p>
                       </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <EmptyState
-                  title="아직 결제 정보가 없습니다"
-                  description="신청이 접수되면 결제 금액과 입금 확인 상태가 이곳에 표시됩니다."
-                />
-              )}
-            </Card>
-
-            <Card className="space-y-5">
-              <div className="space-y-1">
-                <SectionLabel>이용 현황</SectionLabel>
-                <h2 className="text-xl font-bold text-gray-900">
-                  현재 사용 가능 상태
-                </h2>
-                <p className="text-sm text-gray-500">
-                  무료 체험, 구독 상태, 남은 생성 횟수를 바로 확인할 수 있습니다.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
-                  <p className="text-xs font-semibold text-gray-400">
-                    무료 체험
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {snapshot.usage.freeTrialUsed
-                      ? "무료 체험 사용 완료"
-                      : "무료 체험 미사용"}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-                    무료 체험 게시물 생성 여부를 기준으로 표시됩니다.
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
-                  <p className="text-xs font-semibold text-gray-400">
-                    월 구독 상태
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {snapshot.usage.hasActiveSubscription
-                      ? "구독 이용중"
-                      : "미구독"}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-                    월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원, 매월{" "}
-                    {POST_GENERATOR_MONTHLY_CREDITS}회 기준입니다.
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
-                  <p className="text-xs font-semibold text-gray-400">
-                    이번 달 남은 횟수
-                  </p>
-                  <p className="mt-2 text-lg font-bold text-gray-900">
-                    {snapshot.usage.remainingPostCount}/
-                    {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-                    사용 {snapshot.usage.usedPaidPostCount}회 / 전체{" "}
-                    {snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS}회
-                    기준입니다.
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-5 py-5 space-y-3">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-violet-700">
-                    게시물 AI 생성 구독형
-                  </p>
-                  <p className="text-sm text-violet-600 leading-relaxed">
-                    무료 체험 뒤 바로 시작할 수 있는 경량 구독형 도구이며, 이후
-                    AI 인스타그램 마케터 서비스로 자연스럽게 확장할 수 있습니다.
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
-                    <p className="text-xs font-semibold text-violet-500">구독 요금</p>
-                    <p className="mt-2 font-bold text-gray-900">
-                      월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원
-                    </p>
-                  </div>
-                  <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
-                    <p className="text-xs font-semibold text-violet-500">제공량</p>
-                    <p className="mt-2 font-bold text-gray-900">
-                      매월 40회
-                    </p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    onClick={
-                      snapshot.usage.hasActiveSubscription
-                        ? () => router.push("/tools")
-                        : handleStartSubscription
-                    }
-                    disabled={startingSubscription}
-                    className={`w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md transition-all ${
-                      startingSubscription
-                        ? "opacity-50 cursor-not-allowed"
-                        : "hover:shadow-lg active:scale-[0.98]"
-                    }`}
-                  >
-                    {startingSubscription
-                      ? "구독을 준비하고 있습니다..."
-                      : snapshot.usage.hasActiveSubscription
-                        ? "게시물 AI 생성으로 이동"
-                        : `월 구독 시작하기 (${POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원)`}
-                  </button>
-                  <button
-                    onClick={() => router.push("/")}
-                    className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    AI 마케팅 서비스 보기
-                  </button>
-                </div>
-              </div>
-            </Card>
-
-            <Card className="space-y-5">
-              <div className="space-y-1">
-                <SectionLabel>생성된 게시물</SectionLabel>
-                <h2 className="text-xl font-bold text-gray-900">
-                  내가 만든 결과
-                </h2>
-                <p className="text-sm text-gray-500">
-                  생성한 게시물을 다시 확인하고 복사하거나 다운로드할 수 있습니다.
-                </p>
-              </div>
-
-              {snapshot.posts.length === 0 ? (
-                <EmptyState
-                  title="아직 생성된 게시물이 없습니다"
-                  description="게시물을 생성하면 이미지, 제목, 내용, 해시태그가 이곳에 저장됩니다."
-                  actions={
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="rounded-2xl bg-white/80 border border-violet-100 px-4 py-4">
+                        <p className="text-xs font-semibold text-violet-500">제공량</p>
+                        <p className="mt-2 font-bold text-gray-900">
+                          매월 40회
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <button
-                        onClick={() => router.push("/tools")}
-                        className="w-full py-2.5 bg-gradient-to-r from-violet-500 to-purple-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
+                        onClick={
+                          snapshot.usage.hasActiveSubscription
+                            ? () => router.push("/tools")
+                            : handleStartSubscription
+                        }
+                        disabled={startingSubscription}
+                        className={`w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md transition-all ${
+                          startingSubscription
+                            ? "opacity-50 cursor-not-allowed"
+                            : "hover:shadow-lg active:scale-[0.98]"
+                        }`}
                       >
-                        게시물 AI 생성하기
+                        {startingSubscription
+                          ? "구독을 준비하고 있습니다..."
+                          : snapshot.usage.hasActiveSubscription
+                            ? "게시물 AI 생성으로 이동"
+                            : `월 구독 시작하기 (${POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원)`}
                       </button>
                       <button
-                        onClick={() => router.push("/?screen=account-check")}
-                        className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
+                        onClick={handleGoHome}
+                        className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                       >
-                        AI 마케터 신청하기
+                        AI 마케팅 서비스 보기
                       </button>
                     </div>
-                  }
-                />
-              ) : (
-                <div className="space-y-4">
-                  {snapshot.posts.map((post, index) => {
-                    const postKey = buildGeneratedPostSignature(post);
+                  </div>
+                </Card>
 
-                    return (
-                      <Card key={postKey} className="space-y-3 border-gray-100">
-                        <SectionLabel>
-                          생성된 게시물 #{snapshot.posts.length - index}
-                        </SectionLabel>
-                        <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-4 items-start">
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-gray-900">
-                                  정사각형 피드 이미지
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  저장된 게시물 이미지 미리보기
-                                </p>
-                              </div>
-                              <a
-                                href={post.imageUrl}
-                                download={`인스타그램-게시물-${snapshot.posts.length - index}.png`}
-                                className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors"
-                              >
-                                이미지 다운로드
-                              </a>
-                            </div>
-                            <div className="relative max-w-[260px] w-full rounded-xl overflow-hidden border border-gray-100 aspect-square bg-gray-50 mx-auto md:mx-0 shadow-sm">
-                              <Image
-                                src={post.imageUrl}
-                                alt="생성된 게시물 이미지"
-                                fill
-                                unoptimized
-                                sizes="260px"
-                                className="object-cover"
-                              />
-                            </div>
-                          </div>
-                          <div className="p-3 bg-gray-50 rounded-xl space-y-3">
-                            <div className="space-y-1.5">
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-xs text-gray-400">제목</span>
-                                <button
-                                  onClick={() =>
-                                    handleCopy(`title-${postKey}`, post.title)
-                                  }
-                                  className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors"
-                                >
-                                  {copiedField === `title-${postKey}`
-                                    ? "복사됨"
-                                    : "제목 복사"}
-                                </button>
-                              </div>
-                              <p className="text-sm font-medium text-gray-800">
-                                {post.title}
-                              </p>
-                            </div>
+                <Card className="space-y-5">
+                  <div className="space-y-1">
+                    <SectionLabel>생성된 게시물</SectionLabel>
+                    <h2 className="text-xl font-bold text-gray-900">
+                      내가 만든 결과
+                    </h2>
+                    <p className="text-sm text-gray-500">
+                      생성한 게시물을 다시 확인하고 복사하거나 다운로드할 수 있습니다.
+                    </p>
+                  </div>
 
-                            <div className="space-y-1.5">
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-xs text-gray-400">내용</span>
-                                <button
-                                  onClick={() =>
-                                    handleCopy(`content-${postKey}`, post.content)
-                                  }
-                                  className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors"
-                                >
-                                  {copiedField === `content-${postKey}`
-                                    ? "복사됨"
-                                    : "내용 복사"}
-                                </button>
-                              </div>
-                              <p className="text-sm text-gray-700 leading-relaxed">
-                                {post.content}
-                              </p>
-                            </div>
-
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-xs text-gray-400">
-                                  해시태그
-                                </span>
-                                <button
-                                  onClick={() =>
-                                    handleCopy(`hashtags-${postKey}`, post.hashtags)
-                                  }
-                                  className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors"
-                                >
-                                  {copiedField === `hashtags-${postKey}`
-                                    ? "복사됨"
-                                    : "해시태그 복사"}
-                                </button>
-                              </div>
-                              <div className="flex flex-wrap gap-1.5 pt-1">
-                                {post.hashtags.split(" ").map((tag) => (
-                                  <span
-                                    key={`${postKey}-${tag}`}
-                                    className="text-xs bg-violet-50 text-violet-500 px-2 py-0.5 rounded-full font-medium"
-                                  >
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
+                  {snapshot.posts.length === 0 ? (
+                    <EmptyState
+                      title="아직 생성된 게시물이 없습니다"
+                      description="게시물을 생성하면 이미지, 제목, 내용, 해시태그가 이곳에 저장됩니다."
+                      actions={
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <button
+                            onClick={() => router.push("/tools")}
+                            className="w-full py-2.5 bg-gradient-to-r from-violet-500 to-purple-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
+                          >
+                            게시물 AI 생성하기
+                          </button>
+                          <button
+                            onClick={() => router.push("/?screen=account-check")}
+                            className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
+                          >
+                            AI 마케터 신청하기
+                          </button>
                         </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
+                      }
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      {snapshot.posts.map((post, index) => {
+                        const postKey = buildGeneratedPostSignature(post);
+
+                        return (
+                          <Card key={postKey} className="space-y-3 border-gray-100">
+                            <SectionLabel>
+                              생성된 게시물 #{snapshot.posts.length - index}
+                            </SectionLabel>
+                            <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-4 items-start">
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-gray-900">
+                                      정사각형 피드 이미지
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                      저장된 게시물 이미지 미리보기
+                                    </p>
+                                  </div>
+                                  <a
+                                    href={post.imageUrl}
+                                    download={`인스타그램-게시물-${snapshot.posts.length - index}.png`}
+                                    className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors"
+                                  >
+                                    이미지 다운로드
+                                  </a>
+                                </div>
+                                <div className="relative max-w-[260px] w-full rounded-xl overflow-hidden border border-gray-100 aspect-square bg-gray-50 mx-auto md:mx-0 shadow-sm">
+                                  <Image
+                                    src={post.imageUrl}
+                                    alt="생성된 게시물 이미지"
+                                    fill
+                                    unoptimized
+                                    sizes="260px"
+                                    className="object-cover"
+                                  />
+                                </div>
+                              </div>
+                              <div className="p-3 bg-gray-50 rounded-xl space-y-3">
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-xs text-gray-400">제목</span>
+                                    <button
+                                      onClick={() =>
+                                        handleCopy(`title-${postKey}`, post.title)
+                                      }
+                                      className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors"
+                                    >
+                                      {copiedField === `title-${postKey}`
+                                        ? "복사됨"
+                                        : "제목 복사"}
+                                    </button>
+                                  </div>
+                                  <p className="text-sm font-medium text-gray-800">
+                                    {post.title}
+                                  </p>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-xs text-gray-400">내용</span>
+                                    <button
+                                      onClick={() =>
+                                        handleCopy(`content-${postKey}`, post.content)
+                                      }
+                                      className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors"
+                                    >
+                                      {copiedField === `content-${postKey}`
+                                        ? "복사됨"
+                                        : "내용 복사"}
+                                    </button>
+                                  </div>
+                                  <p className="text-sm text-gray-700 leading-relaxed">
+                                    {post.content}
+                                  </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-xs text-gray-400">
+                                      해시태그
+                                    </span>
+                                    <button
+                                      onClick={() =>
+                                        handleCopy(`hashtags-${postKey}`, post.hashtags)
+                                      }
+                                      className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors"
+                                    >
+                                      {copiedField === `hashtags-${postKey}`
+                                        ? "복사됨"
+                                        : "해시태그 복사"}
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {post.hashtags.split(" ").map((tag) => (
+                                      <span
+                                        key={`${postKey}-${tag}`}
+                                        className="text-xs bg-violet-50 text-violet-500 px-2 py-0.5 rounded-full font-medium"
+                                      >
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+              </>
+            )}
           </>
         )}
       </div>

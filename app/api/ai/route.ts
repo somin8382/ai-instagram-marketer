@@ -118,11 +118,11 @@ export async function POST(request: Request) {
   }
 
   if (body.type === "image_only") {
-    return handleImageOnly(body, apiKey);
+    return handleImageOnly(body, apiKey, request);
   }
 
   if (body.type === "image_edit") {
-    return handleImageEdit(body, apiKey);
+    return handleImageEdit(body, apiKey, request);
   }
 
   return handlePlanning(body, apiKey);
@@ -1417,7 +1417,18 @@ function getPlanningValidationIssues(result: AccountPlanResult) {
   return issues;
 }
 
-async function handleImageOnly(body: AiRequestBody, apiKey: string) {
+async function handleImageOnly(body: AiRequestBody, apiKey: string, request: Request) {
+  const premiumAccess = await verifyPremiumGenerationAccess({
+    usageMode: "premium",
+    accessToken: String(body.accessToken ?? "").trim(),
+    allowInternalTestBypass: body.isInternalTestAccount === true,
+    request,
+  });
+
+  if (!premiumAccess.ok) {
+    return Response.json({ error: premiumAccess.error }, { status: premiumAccess.statusCode });
+  }
+
   const imageBase64 = String(body.imageEditBase64 ?? "").trim();
   const visualPromptRaw = String(body.visualPrompt ?? "").trim();
 
@@ -1488,10 +1499,30 @@ Output a polished square 1:1 Instagram feed post image.`;
   }
 
   const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
+
+  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(premiumAccess);
+  if (!premiumUsageResult.ok) {
+    return Response.json(
+      { error: premiumUsageResult.error },
+      { status: premiumUsageResult.statusCode }
+    );
+  }
+
   return Response.json({ generatedImageUrl, source: "api" });
 }
 
-async function handleImageEdit(body: AiRequestBody, apiKey: string) {
+async function handleImageEdit(body: AiRequestBody, apiKey: string, request: Request) {
+  const premiumAccess = await verifyPremiumGenerationAccess({
+    usageMode: "premium",
+    accessToken: String(body.accessToken ?? "").trim(),
+    allowInternalTestBypass: body.isInternalTestAccount === true,
+    request,
+  });
+
+  if (!premiumAccess.ok) {
+    return Response.json({ error: premiumAccess.error }, { status: premiumAccess.statusCode });
+  }
+
   const imageBase64 = String(body.imageEditBase64 ?? "").trim();
   const editPromptRaw = String(body.editPrompt ?? "").trim();
 
@@ -1558,5 +1589,14 @@ Rules:
   }
 
   const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
+
+  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(premiumAccess);
+  if (!premiumUsageResult.ok) {
+    return Response.json(
+      { error: premiumUsageResult.error },
+      { status: premiumUsageResult.statusCode }
+    );
+  }
+
   return Response.json({ generatedImageUrl, source: "api" });
 }

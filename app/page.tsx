@@ -49,6 +49,7 @@ import {
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
   persistApplicationSubmission,
+  persistGrantedApplicationSubmission,
   persistGeneratedPost,
   startPostGeneratorSubscription,
   type SavedSubscription,
@@ -781,6 +782,15 @@ export default function Home() {
   const [paymentId, setPaymentId] = useState("");
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [submittingApplication, setSubmittingApplication] = useState(false);
+  const [marketerGrantState, setMarketerGrantState] = useState<
+    | { status: "idle" }
+    | { status: "none" }
+    | { status: "ready"; marketerQuantity: number | null; marketerDuration: number | null }
+  >({ status: "idle" });
+  const [grantSubmitted, setGrantSubmitted] = useState(false);
+  const [grantCheckDone, setGrantCheckDone] = useState(false);
+  // null = check pending, "" = no application, "uuid" = existing application found
+  const [existingApplicationId, setExistingApplicationId] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
   const [hasTestAccess, setHasTestAccess] = useState(false);
   const [validationToast, setValidationToast] = useState<string | null>(null);
@@ -1283,6 +1293,8 @@ export default function Home() {
   const isPostGenerationReady = postGenerationValidationIssues.length === 0;
   const isPostSubscriptionPaymentReady =
     postSubscriptionPaymentValidationIssues.length === 0;
+  const isAppliedCheckPending = isAuthenticated && existingApplicationId === null;
+  const isAlreadyApplied = isAuthenticated && !!existingApplicationId;
 
   function getSafeStep(nextStep: Step): Step {
     switch (nextStep) {
@@ -2443,6 +2455,182 @@ export default function Home() {
     };
   }, [isAuthenticated, userId, isTestAccountAuthenticated, remainingPosts]);
 
+  // ── Marketer grant detection ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!isAuthenticated || !userId) {
+      setMarketerGrantState({ status: "none" });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClientOrNull();
+    if (!supabase) {
+      setMarketerGrantState({ status: "none" });
+      return;
+    }
+
+    let active = true;
+
+    void (async () => {
+      const { data: rawGrant } = await (
+        supabase
+          .from("service_grants")
+          .select("ai_marketer, marketer_quantity, marketer_months")
+          .maybeSingle() as unknown as Promise<{
+            data: {
+              ai_marketer: boolean;
+              marketer_quantity: number | null;
+              marketer_months: string | null;
+            } | null;
+          }>
+      );
+      if (!active) return;
+
+      if (!rawGrant || !rawGrant.ai_marketer) {
+        setMarketerGrantState({ status: "none" });
+        return;
+      }
+
+      const monthsCount = rawGrant.marketer_months
+        ? rawGrant.marketer_months.split(",").filter((s) => s.trim()).length
+        : null;
+
+      setMarketerGrantState({
+        status: "ready",
+        marketerQuantity: rawGrant.marketer_quantity ?? null,
+        marketerDuration: monthsCount && monthsCount > 0 ? monthsCount : null,
+      });
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isAuthenticated, userId]);
+
+  // ── Existing-application check: block re-entry into the editable flow ──────
+  // Runs once per auth session. Sets existingApplicationId to "" (none) or a UUID.
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setExistingApplicationId(null);
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClientOrNull();
+    if (!supabase) {
+      setExistingApplicationId("");
+      return;
+    }
+
+    let active = true;
+    void (async () => {
+      type AppRow = { id: string };
+      let existing: AppRow | null = null;
+
+      if (userId) {
+        const { data } = await (
+          supabase
+            .from("applications")
+            .select("id")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle() as unknown as Promise<{ data: AppRow | null }>
+        );
+        existing = data;
+      }
+
+      if (!existing && authEmail) {
+        const { data } = await (
+          supabase
+            .from("applications")
+            .select("id")
+            .ilike("email", authEmail.trim().toLowerCase())
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle() as unknown as Promise<{ data: AppRow | null }>
+        );
+        existing = data;
+      }
+
+      if (!active) return;
+      setExistingApplicationId(existing?.id ?? "");
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isAuthenticated, userId, authEmail]);
+
+  // ── Pre-check: look up existing grant application on entering payment step ─
+  // Prevents duplicate submission and shows completion screen immediately on
+  // refresh. Runs once per (step, grant-status) combination.
+  useEffect(() => {
+    if (activeStep !== "payment") return;
+    if (marketerGrantState.status !== "ready") return;
+    if (grantCheckDone) return;
+
+    const supabase = getSupabaseBrowserClientOrNull();
+    if (!supabase) {
+      setGrantCheckDone(true);
+      return;
+    }
+
+    let active = true;
+    void (async () => {
+      type AppRow = { id: string; main_content_url: string | null };
+      let existing: AppRow | null = null;
+
+      if (userId) {
+        const { data } = await (
+          supabase
+            .from("applications")
+            .select("id, main_content_url")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle() as unknown as Promise<{ data: AppRow | null }>
+        );
+        existing = data;
+      }
+
+      if (!existing && email) {
+        const { data } = await (
+          supabase
+            .from("applications")
+            .select("id, main_content_url")
+            .ilike("email", email.trim().toLowerCase())
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle() as unknown as Promise<{ data: AppRow | null }>
+        );
+        existing = data;
+      }
+
+      if (!active) return;
+
+      if (existing?.main_content_url) {
+        setApplicationId(existing.id);
+        setGrantSubmitted(true);
+      }
+      setGrantCheckDone(true);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [activeStep, marketerGrantState.status, grantCheckDone, userId, email]);
+
+  // ── Auto-submit for granted marketer users at the payment step ───────────
+  // Only fires after pre-check confirms no existing submission.
+  useEffect(() => {
+    if (activeStep !== "payment") return;
+    if (marketerGrantState.status !== "ready") return;
+    if (!grantCheckDone) return;
+    if (grantSubmitted || submittingApplication) return;
+
+    void handleGrantedApplicationSubmit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStep, marketerGrantState.status, grantCheckDone, grantSubmitted]);
+
   function handleSignupCta() {
     openAuthPage("status");
   }
@@ -2541,6 +2729,52 @@ export default function Home() {
     }
   }
 
+  async function handleGrantedApplicationSubmit() {
+    if (submittingApplication || grantSubmitted) return;
+    if (marketerGrantState.status !== "ready") return;
+
+    setSubmittingApplication(true);
+    setSubmissionError(null);
+
+    try {
+      const result = await persistGrantedApplicationSubmission({
+        userId: isTestAccountAuthenticated ? null : userId || null,
+        sessionEmail: isTestAccountAuthenticated ? null : authEmail || null,
+        email,
+        instagramId: isYoutubeChannel ? "" : effectiveInstagramId.trim(),
+        industry,
+        productService,
+        marketingChannel,
+        channelUrl: resolvedChannelUrl,
+        mainContentUrl,
+        accountDirection: aiResult?.accountPlan.direction,
+        accountBio: aiResult?.accountPlan.bio,
+        accountConcept: aiResult?.accountPlan.concept,
+        managerName,
+        phone,
+        marketerQuantity: marketerGrantState.marketerQuantity,
+        marketerDuration: marketerGrantState.marketerDuration,
+      });
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      setApplicationId(result.applicationId ?? "");
+      setExistingApplicationId(result.applicationId ?? "x");
+      setGrantSubmitted(true);
+      setSubmissionError(null);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "신청 정보를 저장하지 못했습니다. 다시 시도해주세요.";
+      setSubmissionError(message);
+    } finally {
+      setSubmittingApplication(false);
+    }
+  }
+
   async function handleApplicationSubmit() {
     if (submittingApplication) {
       return;
@@ -2561,6 +2795,7 @@ export default function Home() {
     try {
       const result = await persistApplicationSubmission({
         userId: isTestAccountAuthenticated ? null : userId || null,
+        sessionEmail: isTestAccountAuthenticated ? null : authEmail || null,
         email,
         instagramId: isYoutubeChannel ? "" : effectiveInstagramId.trim(),
         hasAccount: Boolean(hasAccount),
@@ -2597,6 +2832,7 @@ export default function Home() {
       }
 
       setApplicationId(result.applicationId ?? "");
+      setExistingApplicationId(result.applicationId ?? "x");
       setPaymentId(result.paymentId ?? "");
       setIsPaid(false);
       setApplicationStatus("payment_pending");
@@ -2751,11 +2987,11 @@ export default function Home() {
               >
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-400 to-pink-500 flex items-center justify-center text-white text-xl flex-shrink-0">
-                    📱
+                    🤖
                   </div>
                   <div className="space-y-1">
                     <p className="font-bold text-gray-900 text-lg group-hover:text-rose-600 transition-colors">
-                      AI 인스타그램 마케터
+                      AI 마케터
                     </p>
                     <p className="text-sm text-gray-500">
                       AI가 계정 기획부터 마케팅 전략까지 한번에
@@ -2782,7 +3018,7 @@ export default function Home() {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-gray-900 text-lg group-hover:text-violet-600 transition-colors">
-                        게시물 AI 생성
+                        게시물 AI 생성기
                       </p>
                       {!hasConsumedFreeTrial ? (
                         <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
@@ -2806,6 +3042,74 @@ export default function Home() {
               </button>
             </div>
           </div>
+        </div>
+      </main>
+    );
+  }
+
+  /* ═══════════════ ALREADY-APPLIED GUARD ═══════════════ */
+  // Covers channel → channel-materials + payment. Bypassed when the grant
+  // completion screen is already showing (grantSubmitted = true), since the
+  // grant pre-check handles that case independently.
+
+  const isMarketerFormStep = (
+    activeStep === "channel" ||
+    activeStep === "account-check" ||
+    activeStep === "input" ||
+    activeStep === "result" ||
+    activeStep === "names" ||
+    activeStep === "confirm" ||
+    activeStep === "channel-materials" ||
+    activeStep === "payment"
+  );
+
+  if (isMarketerFormStep && !grantSubmitted && isAppliedCheckPending) {
+    return (
+      <main className={wrapper}>
+        <div className="max-w-2xl w-full flex justify-center py-24">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-rose-500" />
+        </div>
+      </main>
+    );
+  }
+
+  if (isMarketerFormStep && !grantSubmitted && isAlreadyApplied) {
+    return (
+      <main className={wrapper}>
+        <div className="max-w-2xl w-full space-y-6">
+          <StepUtilityHeader
+            onBack={() => goToStep("landing")}
+            onHome={() => goToStep("landing")}
+            onMyPage={() => router.push("/mypage")}
+            progress={serviceFlowProgress}
+          />
+          <Card className="space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-bold text-gray-900">AI 마케터 신청 완료</p>
+                <p className="text-sm text-gray-500">이미 신청이 접수되어 있습니다</p>
+              </div>
+            </div>
+            <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 flex gap-2.5">
+              <svg className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 3a9 9 0 110 18A9 9 0 0112 3z" />
+              </svg>
+              <p className="text-sm text-amber-800">
+                제출한 정보는 직접 변경할 수 없습니다. 변경이 필요하신 경우 1:1 문의로 요청해 주세요.
+              </p>
+            </div>
+            <button
+              onClick={() => router.push("/mypage")}
+              className="w-full bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold rounded-2xl py-4 shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+            >
+              마이페이지에서 현황 보기
+            </button>
+          </Card>
         </div>
       </main>
     );
@@ -4140,6 +4444,134 @@ export default function Home() {
   /* ═══════════════ PAYMENT ═══════════════ */
 
   if (activeStep === "payment") {
+    // ── Institution-granted users: skip the paid flow entirely ───────────
+    if (marketerGrantState.status === "idle") {
+      // Waiting for grant check to resolve — show spinner to prevent paid-UI flash.
+      return (
+        <main className={wrapper}>
+          <div className="max-w-2xl w-full flex justify-center py-24">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-rose-500" />
+          </div>
+        </main>
+      );
+    }
+
+    if (marketerGrantState.status === "ready") {
+      if (grantSubmitted) {
+        // Completion screen for granted users.
+        return (
+          <>
+          <main className={wrapper}>
+            <div className="max-w-2xl w-full space-y-6">
+              <StepUtilityHeader
+                onBack={() => goToStep("landing")}
+                onHome={() => goToStep("landing")}
+                onMyPage={() => router.push("/mypage")}
+                progress={serviceFlowProgress}
+              />
+
+              <Card className="text-center space-y-3 py-10">
+                <div className="w-16 h-16 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
+                  <span className="text-white text-2xl">✓</span>
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900">
+                  세팅이 완료되었습니다
+                </h2>
+                <p className="text-gray-500 text-sm">
+                  제출해주신 정보를 바탕으로 AI 마케터 운영을 준비하겠습니다.
+                </p>
+              </Card>
+
+              <Card className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-gray-700">결제 상태</p>
+                  <span className="inline-block text-xs font-semibold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full">
+                    기관 결제 완료
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500">
+                  지원기관을 통해 이용 중입니다. 추가 결제 없이 서비스가 진행됩니다.
+                </p>
+              </Card>
+
+              <button
+                onClick={() => router.push("/mypage")}
+                className="w-full bg-gradient-to-r from-rose-500 to-violet-500 text-white font-semibold rounded-2xl py-4 shadow-md hover:shadow-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="w-5 h-5"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                마이페이지로 이동
+              </button>
+            </div>
+          </main>
+          </>
+        );
+      }
+
+      if (submissionError) {
+        // Error state with retry.
+        return (
+          <>
+          <main className={wrapper}>
+            <div className="max-w-2xl w-full space-y-6">
+              <StepUtilityHeader
+                onBack={() => goToStep("landing")}
+                onHome={() => goToStep("landing")}
+                onMyPage={() => router.push("/mypage")}
+                progress={serviceFlowProgress}
+              />
+
+              <Card className="space-y-4">
+                <p className="text-sm font-semibold text-rose-600">
+                  제출에 실패했습니다
+                </p>
+                <p className="text-sm text-gray-600">{submissionError}</p>
+                <button
+                  onClick={() => void handleGrantedApplicationSubmit()}
+                  disabled={submittingApplication}
+                  className={getPrimaryActionButtonClass({ theme: "rose" })}
+                >
+                  {submittingApplication ? "재시도 중..." : "다시 시도"}
+                </button>
+              </Card>
+            </div>
+          </main>
+          </>
+        );
+      }
+
+      // Pre-check in progress or submitting.
+      return (
+        <main className={wrapper}>
+          <div className="max-w-2xl w-full space-y-6">
+            <StepUtilityHeader
+              onBack={() => goToStep("landing")}
+              onHome={() => goToStep("landing")}
+              onMyPage={() => router.push("/mypage")}
+              progress={serviceFlowProgress}
+            />
+            <Card className="flex flex-col items-center gap-4 py-14">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-rose-500" />
+              <p className="text-sm text-gray-500">
+                {grantCheckDone ? "제출 중입니다..." : "확인 중입니다..."}
+              </p>
+            </Card>
+          </div>
+        </main>
+      );
+    }
+    // marketerGrantState.status === "none": fall through to the existing paid flow.
+
     const basePrice = getPrice(selectedPlan, selectedDuration);
     const expressFee = getExpressFee(isExpress);
     const totalPrice = basePrice + expressFee;

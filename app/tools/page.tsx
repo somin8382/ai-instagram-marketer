@@ -41,7 +41,6 @@ import {
   fetchSavedGeneratedPosts,
   persistAccountProfile,
   persistGeneratedPost,
-  consumePostGeneratorSubscriptionCredit,
   startPostGeneratorSubscription,
   syncProfileAndLinkData,
   type SavedGeneratedPost,
@@ -1280,36 +1279,6 @@ export default function ToolsPage() {
     });
   }
 
-  async function consumeMonthlyImageCredit() {
-    if (isTestAccountAuthenticated) {
-      const today = getKoreaDateString();
-      setPostGeneratorSubscription((current) => {
-        const baseSubscription =
-          current ?? buildTestAccountSubscription(POST_GENERATOR_MONTHLY_CREDITS);
-        const dailyUsageCount =
-          baseSubscription.lastUsageDate === today
-            ? baseSubscription.dailyUsageCount
-            : 0;
-
-        return {
-          ...baseSubscription,
-          remainingCredits: Math.max(baseSubscription.remainingCredits - 1, 0),
-          dailyUsageCount: dailyUsageCount + 1,
-          lastUsageDate: today,
-        };
-      });
-      return;
-    }
-
-    const result = await consumePostGeneratorSubscriptionCredit({ userId });
-
-    if (result.error || !result.subscription) {
-      throw new Error(result.error ?? "이미지 횟수 차감에 실패했습니다.");
-    }
-
-    setPostGeneratorSubscription(result.subscription);
-  }
-
   function updatePostEditState(postKey: string, originalUrl: string, patch: Partial<PostEditState>) {
     setPostEditStates((prev) => ({
       ...prev,
@@ -1376,6 +1345,23 @@ export default function ToolsPage() {
     const currentUrl = getCurrentImageUrl(postKey, post.imagePreview);
     updatePostEditState(postKey, post.imagePreview, { rerollLoading: true });
 
+    let accessToken = "";
+    if (!isTestAccountAuthenticated) {
+      const supabase = getSupabaseBrowserClientOrNull();
+      if (!supabase) {
+        updatePostEditState(postKey, post.imagePreview, { rerollLoading: false });
+        showValidationToast("로그인 정보를 확인할 수 없습니다. 다시 로그인해주세요.");
+        return;
+      }
+      const { data: { session } } = await supabase.auth.getSession();
+      accessToken = session?.access_token ?? "";
+      if (!accessToken) {
+        updatePostEditState(postKey, post.imagePreview, { rerollLoading: false });
+        showValidationToast("로그인 정보가 만료되었습니다. 다시 로그인해주세요.");
+        return;
+      }
+    }
+
     try {
       const base64 = await loadImageAsDataUrl(currentUrl);
       const res = await fetch("/api/ai", {
@@ -1383,6 +1369,8 @@ export default function ToolsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "image_only",
+          accessToken: accessToken || null,
+          isInternalTestAccount: isTestAccountAuthenticated,
           imageEditBase64: base64,
           visualPrompt: post.visualPrompt,
           rerollSuffix: suffix,
@@ -1396,7 +1384,19 @@ export default function ToolsPage() {
       if (!res.ok) throw new Error(data.error ?? "재생성 실패");
       if (!data.generatedImageUrl) throw new Error("이미지 결과 없음");
 
-      await consumeMonthlyImageCredit();
+      // Credit consumed server-side — sync local count
+      if (isTestAccountAuthenticated) {
+        const today = getKoreaDateString();
+        setPostGeneratorSubscription((current) => {
+          const base = current ?? buildTestAccountSubscription(POST_GENERATOR_MONTHLY_CREDITS);
+          const dailyUsageCount = base.lastUsageDate === today ? base.dailyUsageCount : 0;
+          return { ...base, remainingCredits: Math.max(base.remainingCredits - 1, 0), dailyUsageCount: dailyUsageCount + 1, lastUsageDate: today };
+        });
+      } else if (userId) {
+        const subscriptionResult = await fetchPostGeneratorSubscription({ userId });
+        if (!subscriptionResult.error) setPostGeneratorSubscription(subscriptionResult.subscription);
+      }
+
       pushImageToHistory(postKey, post.imagePreview, data.generatedImageUrl);
       setPostEditStates((prev) => ({
         ...prev,
@@ -1429,6 +1429,23 @@ export default function ToolsPage() {
     const currentUrl = getCurrentImageUrl(postKey, post.imagePreview);
     updatePostEditState(postKey, post.imagePreview, { editLoading: true });
 
+    let accessToken = "";
+    if (!isTestAccountAuthenticated) {
+      const supabase = getSupabaseBrowserClientOrNull();
+      if (!supabase) {
+        updatePostEditState(postKey, post.imagePreview, { editLoading: false });
+        showValidationToast("로그인 정보를 확인할 수 없습니다. 다시 로그인해주세요.");
+        return;
+      }
+      const { data: { session } } = await supabase.auth.getSession();
+      accessToken = session?.access_token ?? "";
+      if (!accessToken) {
+        updatePostEditState(postKey, post.imagePreview, { editLoading: false });
+        showValidationToast("로그인 정보가 만료되었습니다. 다시 로그인해주세요.");
+        return;
+      }
+    }
+
     try {
       const base64 = await loadImageAsDataUrl(currentUrl);
 
@@ -1437,6 +1454,8 @@ export default function ToolsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "image_edit",
+          accessToken: accessToken || null,
+          isInternalTestAccount: isTestAccountAuthenticated,
           imageEditBase64: base64,
           editPrompt: s.editPrompt,
           industry: contextIndustry,
@@ -1447,7 +1466,19 @@ export default function ToolsPage() {
       if (!res.ok) throw new Error(data.error ?? "수정 실패");
       if (!data.generatedImageUrl) throw new Error("이미지 결과 없음");
 
-      await consumeMonthlyImageCredit();
+      // Credit consumed server-side — sync local count
+      if (isTestAccountAuthenticated) {
+        const today = getKoreaDateString();
+        setPostGeneratorSubscription((current) => {
+          const base = current ?? buildTestAccountSubscription(POST_GENERATOR_MONTHLY_CREDITS);
+          const dailyUsageCount = base.lastUsageDate === today ? base.dailyUsageCount : 0;
+          return { ...base, remainingCredits: Math.max(base.remainingCredits - 1, 0), dailyUsageCount: dailyUsageCount + 1, lastUsageDate: today };
+        });
+      } else if (userId) {
+        const subscriptionResult = await fetchPostGeneratorSubscription({ userId });
+        if (!subscriptionResult.error) setPostGeneratorSubscription(subscriptionResult.subscription);
+      }
+
       pushImageToHistory(postKey, post.imagePreview, data.generatedImageUrl);
       setPostEditStates((prev) => ({
         ...prev,
