@@ -99,6 +99,7 @@ function AuthPageInner() {
   const [signupPendingEmail, setSignupPendingEmail] = useState("");
   const [duplicateSignupEmail, setDuplicateSignupEmail] = useState("");
   const [resendingSignupEmail, setResendingSignupEmail] = useState(false);
+  const [signupCooldownSeconds, setSignupCooldownSeconds] = useState(0);
 
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -274,7 +275,17 @@ function AuthPageInner() {
       return "아이디(이메일) 인증이 아직 완료되지 않았습니다. 메일함의 인증 링크를 눌러주세요.";
     }
 
+    if (message.includes("For security purposes, you can only request this after")) {
+      return "보안상 인증 메일은 1분에 1회만 발송할 수 있습니다.\n1분 후 다시 시도해주세요.";
+    }
+
     return "인증 요청 처리 중 오류가 발생했습니다. 네트워크 상태를 확인해주세요.";
+  }
+
+  function isSignupRateLimitError(message?: string) {
+    return Boolean(
+      message?.includes("For security purposes, you can only request this after")
+    );
   }
 
   function isDuplicateSignupError(message?: string) {
@@ -444,6 +455,16 @@ function AuthPageInner() {
 
   const isLoginReady = loginValidationIssues.length === 0;
   const isSignupReady = signupValidationIssues.length === 0;
+  const isSignupCoolingDown = signupCooldownSeconds > 0;
+
+  useEffect(() => {
+    if (signupCooldownSeconds <= 0) return;
+    const timer = setTimeout(
+      () => setSignupCooldownSeconds((s) => Math.max(0, s - 1)),
+      1000
+    );
+    return () => clearTimeout(timer);
+  }, [signupCooldownSeconds]);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClientOrNull();
@@ -527,7 +548,7 @@ function AuthPageInner() {
   }
 
   async function handleSignup() {
-    if (submitting || resendingSignupEmail) {
+    if (submitting || resendingSignupEmail || isSignupCoolingDown) {
       return;
     }
 
@@ -550,6 +571,9 @@ function AuthPageInner() {
       const submittedEmail = signupEmail.trim();
       // eslint-disable-next-line react-hooks/purity
       const signupRequestedAt = Date.now();
+      // [TEMP DEBUG] log the email going into signUp
+      console.log("[SIGNUP DEBUG] submittedEmail=", submittedEmail);
+
       const { data, error } = await supabase.auth.signUp({
         email: submittedEmail,
         password: signupPassword,
@@ -559,6 +583,19 @@ function AuthPageInner() {
           },
         },
       });
+
+      // [TEMP DEBUG] log the full signUp result
+      console.log("[SIGNUP DEBUG] data=", data, "error=", error);
+      if (error) {
+        console.error(
+          "[SIGNUP ERROR]",
+          "\n  name   =", (error as any).name,
+          "\n  message=", error.message,
+          "\n  status =", (error as any).status,
+          "\n  code   =", (error as any).code,
+          "\n  full   =", error
+        );
+      }
 
       if (error) {
         if (isDuplicateSignupError(error.message)) {
@@ -591,10 +628,22 @@ function AuthPageInner() {
         return;
       }
 
-      await completeAuth();
+      // Use data.user directly instead of calling completeAuth() (which would
+      // re-call getUser()). Right after signUp(), the session may not yet be
+      // committed to the Supabase client's storage, so a redundant getUser()
+      // call races and returns AuthSessionMissingError. data.user is already
+      // authentic — Supabase just issued it.
+      await clearTestAccountAccess();
+      await syncProfileAndLinkData({
+        user: data.user,
+        requestEmail: getRequestEmail(),
+      });
+      router.replace("/mypage");
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      setAuthError(toKoreanAuthError(message));
+      // [TEMP DEBUG] show raw error on screen instead of generic Korean fallback
+      console.error("[SIGNUP CATCH]", error);
+      setAuthError(`[DEBUG] ${(error as any)?.name ?? "Error"}: ${message} (status=${(error as any)?.status ?? "?"} code=${(error as any)?.code ?? "?"})`);
     } finally {
       setSubmitting(false);
     }
@@ -619,6 +668,9 @@ function AuthPageInner() {
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      if (isSignupRateLimitError(message)) {
+        setSignupCooldownSeconds(60);
+      }
       setAuthError(toKoreanAuthError(message));
       return false;
     } finally {
@@ -743,18 +795,15 @@ function AuthPageInner() {
                     <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
                       <div className="space-y-1">
                         <p className="text-lg font-bold text-gray-900">
-                          인증 메일을 다시 보냈습니다.
-                        </p>
-                        <p className="text-sm text-gray-600">
-                          입력하신 이메일로 인증 메일을 다시 발송했습니다.
+                          인증 메일을 발송했습니다.
                         </p>
                         <p className="text-sm font-medium text-violet-700">
                           {signupPendingEmail}
                         </p>
                       </div>
                       <div className="space-y-2 text-sm text-gray-600 leading-relaxed">
-                        <p>이메일함에서 인증 링크를 눌러 회원가입을 완료해주세요.</p>
-                        <p>5분 내로 메일이 보이지 않으면 스팸함도 확인 부탁드립니다.</p>
+                        <p>메일함에서 인증 링크를 눌러 회원가입을 완료해주세요.</p>
+                        <p>메일이 보이지 않으면 스팸함도 함께 확인해주세요.</p>
                         <p>1대1 문의 : https://open.kakao.com/o/s0Viuxzi</p>
                       </div>
                     </div>
@@ -834,14 +883,18 @@ function AuthPageInner() {
                       <button
                         type="button"
                         onClick={handleSignup}
-                        disabled={submitting}
-                        aria-disabled={submitting || !isSignupReady}
+                        disabled={submitting || isSignupCoolingDown}
+                        aria-disabled={submitting || isSignupCoolingDown || !isSignupReady}
                         className={`${getPrimaryActionButtonClass({
                           theme: "violet",
-                          isInactive: submitting || !isSignupReady,
+                          isInactive: submitting || isSignupCoolingDown || !isSignupReady,
                         })} py-3`}
                       >
-                        {submitting ? "가입 중입니다..." : "회원가입하기"}
+                        {submitting
+                          ? "가입 중입니다..."
+                          : isSignupCoolingDown
+                            ? `${signupCooldownSeconds}초 후 재시도 가능합니다`
+                            : "회원가입하기"}
                       </button>
                     </div>
                   </>
