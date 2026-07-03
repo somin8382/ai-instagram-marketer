@@ -218,6 +218,10 @@ async function handlePostImageGeneration(
       ? [String(body.image)]
       : [];
   const userPrompt = String(body.userPrompt ?? "").trim();
+  // Follow the user's prompt language: Hangul-free prompts with Latin
+  // letters get English copy; everything else keeps the Korean default.
+  const preferEnglishOutput =
+    Boolean(userPrompt) && !/[가-힣]/.test(userPrompt) && /[A-Za-z]/.test(userPrompt);
 
   console.log(
     "[/api/ai] Post image request summary:",
@@ -265,6 +269,7 @@ async function handlePostImageGeneration(
     requestId,
     previousPost: body.previousPost ?? null,
     userPrompt,
+    preferEnglishOutput,
   });
 
   if (!postPlan.ok) {
@@ -277,6 +282,7 @@ async function handlePostImageGeneration(
     );
   }
 
+  const imageTextLanguage = preferEnglishOutput ? "English" : "Korean";
   const imagePrompt = `
 Create an Instagram marketing post visual.
 
@@ -299,14 +305,14 @@ ${postPlan.data.visualPrompt}
 Requirements:
 - Output a polished square Instagram feed post image
 - Prioritize strong composition, clean typography space, and premium brand presentation
-- Keep it suitable for a Korean audience
+- Keep it suitable for a ${preferEnglishOutput ? "global English-speaking" : "Korean"} audience
 - Make it feel like a real branded social media creative, not a stock photo
 - Compose it in a strict 1:1 square layout suitable for the Instagram feed
 - Respect the uploaded reference images for product, mood, style, or composition cues when useful
 - Avoid cluttered layouts and avoid dense text overlays
 - Prefer no text inside the image whenever possible
-- If text is absolutely necessary, use only one very short Korean headline or at most two short lines
-- Never include long Korean sentences, paragraphs, multiple text blocks, or small unreadable Korean copy
+- If text is absolutely necessary, use only one very short ${imageTextLanguage} headline or at most two short lines
+- Never include long ${imageTextLanguage} sentences, paragraphs, multiple text blocks, or small unreadable ${imageTextLanguage} copy
 - Keep the main marketing copy outside the image; the image should be visually strong even without readable text
 `;
 
@@ -675,6 +681,7 @@ async function generatePostPlan({
   requestId,
   previousPost,
   userPrompt,
+  preferEnglishOutput,
 }: {
   apiKey: string;
   instagramHandle: string;
@@ -690,6 +697,7 @@ async function generatePostPlan({
   requestId: string;
   previousPost: AiRequestBody["previousPost"];
   userPrompt: string;
+  preferEnglishOutput: boolean;
 }) {
   const isYoutube = marketingChannel === "youtube";
   const minHashtags = isYoutube ? 3 : 5;
@@ -732,6 +740,7 @@ async function generatePostPlan({
   const hashtagExample = isYoutube
     ? `["태그명1", "태그명2", "태그명3"]`
     : `["태그명1", "태그명2", "태그명3", "태그명4", "태그명5"]`;
+  const overlayLanguage = preferEnglishOutput ? "영어" : "한국어";
 
   const buildUserInput = (retryReason = "") => `
 당신은 한국의 SNS 마케팅 전문가입니다.
@@ -744,6 +753,14 @@ async function generatePostPlan({
 계정 소개글: ${accountBio}
 운영 컨셉: ${accountConcept}
 사용자 요청 방향: ${userPrompt || "없음"}
+
+출력 언어: ${preferEnglishOutput ? "영어" : "한국어"}
+${
+  preferEnglishOutput
+    ? `- 사용자 요청 방향이 영어로 작성되었으므로 title, content, hashtags를 모두 자연스러운 영어로 작성하세요.
+- hashtags도 영어 키워드로 작성하세요. 아래 규칙의 "한글" 표기는 모두 영어로 대체해 적용하세요.`
+    : `- title, content, hashtags를 모두 한국어로 작성하세요.`
+}
 
 채널 가이드:
 ${channelTone}
@@ -765,7 +782,7 @@ ${channelTone}
 - 한글 위주. 총 ${minHashtags}~${maxHashtags}개.
 
 중요 규칙:
-- title은 공백 포함 25자 이내, 스크롤을 멈추게 하는 강한 후킹 한 줄. 업종/아이템 구체 키워드 1개 이상 포함.
+- title은 공백 포함 ${preferEnglishOutput ? "60" : "25"}자 이내, 스크롤을 멈추게 하는 강한 후킹 한 줄. 업종/아이템 구체 키워드 1개 이상 포함.
 - 위 업종·상품/서비스·계정명을 구체적으로 드러내고, 일반적인 미사여구나 업종 불문 범용 표현으로 대체하지 말 것
 - 업종이나 상품/서비스 정보가 비어 있으면, 사용자 요청 방향과 참고 이미지를 바탕으로 자연스럽게 맥락을 추론하세요
 - 반드시 계정명, 업종, 상품/서비스, 계정 방향, 소개글, 운영 컨셉을 우선 참고해 이 계정에 실제로 올라갈 법한 게시물만 작성하세요
@@ -780,7 +797,7 @@ ${channelTone}
 - visualPrompt에는 반드시 업종, 상품/서비스, 브랜드 톤, 계정 컨셉, 타깃 분위기를 반영하세요
 - visualPrompt 이미지 스타일: ${imageStyle} — ${imageStyleGuide}
 - visualPrompt에는 텍스트 오버레이를 최소화하라고 명확히 지시하세요
-- visualPrompt에는 한국어 문장은 이미지 안에 넣지 말고, 꼭 필요한 경우에도 매우 짧은 한국어 한 줄 또는 두 줄만 허용하라고 적으세요
+- visualPrompt에는 ${overlayLanguage} 문장은 이미지 안에 넣지 말고, 꼭 필요한 경우에도 매우 짧은 ${overlayLanguage} 한 줄 또는 두 줄만 허용하라고 적으세요
 - visualPrompt에는 긴 슬로건, 문단, 여러 개의 텍스트 박스, 복잡한 타이포그래피를 피하라고 적으세요
 - visualPrompt는 시각적 완성도를 우선하고, 본문 카피는 이미지 밖 title/content/hashtags로 전달하도록 유도하세요
 - 사용자가 참고 이미지는 참고용이며, 사용자 요청 방향이 있으면 반드시 그 방향을 우선 반영하세요

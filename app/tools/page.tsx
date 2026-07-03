@@ -13,6 +13,12 @@ import {
 } from "@/lib/form-validation";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import {
+  compressImageToDataUrl,
+  getAiErrorMessage,
+  isRequestBodyTooLarge,
+  readAiJsonResponse,
+} from "@/lib/client/ai-request";
+import {
   addMonthsToKoreaDateString,
   getKoreaDateString,
   getRemainingSubscriptionCredits,
@@ -1264,19 +1270,14 @@ export default function ToolsPage() {
 
   async function loadImageAsDataUrl(imageUrl: string) {
     if (imageUrl.startsWith("data:")) {
-      return imageUrl;
+      return compressImageToDataUrl(imageUrl);
     }
 
     const proxyRes = await fetch(`/api/image-proxy?url=${encodeURIComponent(imageUrl)}`);
     if (!proxyRes.ok) throw new Error("이미지를 불러오지 못했습니다.");
     const blob = await proxyRes.blob();
 
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    return compressImageToDataUrl(blob);
   }
 
   function updatePostEditState(postKey: string, originalUrl: string, patch: Partial<PostEditState>) {
@@ -1380,8 +1381,8 @@ export default function ToolsPage() {
           marketingChannel: contextMarketingChannel,
         }),
       });
-      const data = await res.json() as { generatedImageUrl?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "재생성 실패");
+      const data = (await readAiJsonResponse(res)) as { generatedImageUrl?: string; error?: string };
+      if (!res.ok) throw new Error(getAiErrorMessage(res, data, "재생성에 실패했습니다."));
       if (!data.generatedImageUrl) throw new Error("이미지 결과 없음");
 
       // Credit consumed server-side — sync local count
@@ -1462,8 +1463,8 @@ export default function ToolsPage() {
           productService: contextProductService,
         }),
       });
-      const data = await res.json() as { generatedImageUrl?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "수정 실패");
+      const data = (await readAiJsonResponse(res)) as { generatedImageUrl?: string; error?: string };
+      if (!res.ok) throw new Error(getAiErrorMessage(res, data, "수정에 실패했습니다."));
       if (!data.generatedImageUrl) throw new Error("이미지 결과 없음");
 
       // Credit consumed server-side — sync local count
@@ -1698,17 +1699,7 @@ export default function ToolsPage() {
     );
     if (files.length === 0) return;
 
-    Promise.all(
-      files.map(
-        (file) =>
-          new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = () => reject(new Error("이미지 업로드에 실패했습니다."));
-            reader.readAsDataURL(file);
-          })
-      )
-    )
+    Promise.all(files.map((file) => compressImageToDataUrl(file)))
       .then((results) => {
         setUploadedImages((prev) => [...prev, ...results].slice(0, 2));
         if (fileInputRef.current) {
@@ -1773,37 +1764,45 @@ export default function ToolsPage() {
     }
 
     try {
+      const requestBody = JSON.stringify({
+        type: "post_image",
+        usageMode: isFreeTrialGeneration ? "free_trial" : "premium",
+        accessToken: accessToken || null,
+        isInternalTestAccount: isTestAccountAuthenticated,
+        images: uploadedImages,
+        userPrompt: postPrompt,
+        instagramHandle: contextInstagramHandle.trim(),
+        industry: contextIndustry,
+        productService: contextProductService,
+        accountDirection: contextAccountDirection,
+        accountBio: contextAccountBio,
+        accountConcept: contextAccountConcept,
+        marketingChannel: contextMarketingChannel,
+        requestId: crypto.randomUUID(),
+        previousPost: latestPostContext
+          ? {
+              title: latestPostContext.title,
+              content: latestPostContext.content,
+              hashtags: latestPostContext.hashtags,
+            }
+          : null,
+      });
+
+      if (isRequestBodyTooLarge(requestBody)) {
+        throw new Error(
+          "업로드한 이미지 용량이 너무 큽니다. 더 작은 이미지로 다시 시도해주세요."
+        );
+      }
+
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "post_image",
-          usageMode: isFreeTrialGeneration ? "free_trial" : "premium",
-          accessToken: accessToken || null,
-          isInternalTestAccount: isTestAccountAuthenticated,
-          images: uploadedImages,
-          userPrompt: postPrompt,
-          instagramHandle: contextInstagramHandle.trim(),
-          industry: contextIndustry,
-          productService: contextProductService,
-          accountDirection: contextAccountDirection,
-          accountBio: contextAccountBio,
-          accountConcept: contextAccountConcept,
-          marketingChannel: contextMarketingChannel,
-          requestId: crypto.randomUUID(),
-          previousPost: latestPostContext
-            ? {
-                title: latestPostContext.title,
-                content: latestPostContext.content,
-                hashtags: latestPostContext.hashtags,
-              }
-            : null,
-        }),
+        body: requestBody,
       });
-      const data = await res.json();
+      const data = await readAiJsonResponse(res);
 
       if (!res.ok) {
-        throw new Error(data?.error ?? "게시물 생성에 실패했습니다.");
+        throw new Error(getAiErrorMessage(res, data, "게시물 생성에 실패했습니다."));
       }
 
       if (data.source !== "api") {
