@@ -73,6 +73,92 @@ type EditFormData = {
 
 type AdminPageState = "loading" | "no_session" | "forbidden" | "error" | "ready";
 
+type UserSearchResult = {
+  id: string;
+  email: string | null;
+  name: string | null;
+  createdAt: string | null;
+  source: "profile" | "application";
+};
+
+type Application = Record<string, unknown>;
+
+type UserDetail = {
+  user: {
+    id: string | null;
+    email: string | null;
+    name: string | null;
+    createdAt: string | null;
+    companyName: string | null;
+    instagramUrl: string | null;
+    youtubeUrl: string | null;
+    accountOnboardedAt: string | null;
+  };
+  subscription: {
+    id: string;
+    startDate: string;
+    endDate: string;
+    remainingCredits: number;
+    dailyUsageCount: number;
+    lastUsageDate: string | null;
+    createdAt: string;
+    updatedAt: string;
+    isActive: boolean;
+  } | null;
+  applications: Application[];
+  aiUsage: {
+    totalGenerations: number;
+    freeTrialGenerations: number;
+    paidGenerations: number;
+    latestGeneratedAt: string | null;
+    latestTitle: string | null;
+  };
+  posts: Array<{
+    id: string;
+    title: string;
+    createdAt: string;
+    isFreeTrial: boolean;
+  }>;
+};
+
+type OpsMetrics = {
+  generatedAt: string;
+  today: string;
+  activity: {
+    dau: number;
+    wau: number;
+    mau: number;
+    totalUsers: number | null;
+    newSignupsToday: number | null;
+    newSignups7d: number | null;
+  };
+  aiUsage: {
+    generationsToday: number;
+    generations7d: number;
+    generations30d: number;
+    freeToday: number;
+    paidToday: number;
+    free30d: number;
+    paid30d: number;
+    capped: boolean;
+  };
+  freeTrial: {
+    usedToday: number | null;
+    used7d: number | null;
+    dailyBudget: number;
+    remainingBudget: number | null;
+    perIpLimit: number;
+  };
+  subscriptions: {
+    active: number;
+    remainingCreditsSum: number;
+    startedToday: number;
+    started7d: number;
+  };
+  cost: { unitUsd: number; estTodayUsd: number; est30dUsd: number };
+  trend7d: Array<{ date: string; total: number; free: number; paid: number }>;
+};
+
 const EMPTY_ADD_FORM = {
   email: "",
   applicant_name: "",
@@ -114,6 +200,163 @@ function Badge({ label, color }: { label: string; color: BadgeColor }) {
     >
       {label}
     </span>
+  );
+}
+
+// ─── Operations panel ───────────────────────────────────────────────────────
+
+function fmt(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return value.toLocaleString();
+}
+
+function StatCard({
+  label,
+  value,
+  sub,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "default" | "warn" | "good";
+}) {
+  const valueCls =
+    tone === "warn"
+      ? "text-red-600"
+      : tone === "good"
+        ? "text-green-600"
+        : "text-gray-900";
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <p className="text-xs font-medium text-gray-500">{label}</p>
+      <p className={`mt-1 text-2xl font-bold tabular-nums ${valueCls}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-gray-400">{sub}</p>}
+    </div>
+  );
+}
+
+function OpsPanel({ ops, error }: { ops: OpsMetrics | null; error: boolean }) {
+  if (error) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <p className="text-sm text-gray-500">운영 지표를 불러오지 못했습니다.</p>
+      </div>
+    );
+  }
+
+  if (!ops) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <p className="text-sm text-gray-400">운영 지표를 불러오는 중…</p>
+      </div>
+    );
+  }
+
+  const budgetLow =
+    ops.freeTrial.remainingBudget !== null &&
+    ops.freeTrial.remainingBudget <= Math.max(ops.freeTrial.dailyBudget * 0.1, 1);
+  const maxTrend = Math.max(1, ...ops.trend7d.map((d) => d.total));
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+          운영 현황
+        </p>
+        <p className="text-xs text-gray-400">
+          {ops.today} · 갱신 {new Date(ops.generatedAt).toLocaleTimeString("ko-KR")}
+        </p>
+      </div>
+
+      {/* Activity */}
+      <div>
+        <p className="text-xs font-medium text-gray-400 mb-2">사용자 활동</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="오늘 활성 사용자 (DAU)" value={fmt(ops.activity.dau)} />
+          <StatCard label="주간 활성 (WAU)" value={fmt(ops.activity.wau)} />
+          <StatCard label="월간 활성 (MAU)" value={fmt(ops.activity.mau)} />
+          <StatCard
+            label="가입 사용자"
+            value={fmt(ops.activity.totalUsers)}
+            sub={`오늘 +${fmt(ops.activity.newSignupsToday)} · 7일 +${fmt(ops.activity.newSignups7d)}`}
+          />
+        </div>
+      </div>
+
+      {/* AI usage */}
+      <div>
+        <p className="text-xs font-medium text-gray-400 mb-2">AI 생성 (저장 기준)</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard
+            label="오늘 생성"
+            value={fmt(ops.aiUsage.generationsToday)}
+            sub={`무료 ${fmt(ops.aiUsage.freeToday)} · 구독 ${fmt(ops.aiUsage.paidToday)}`}
+          />
+          <StatCard label="최근 7일" value={fmt(ops.aiUsage.generations7d)} />
+          <StatCard
+            label="최근 30일"
+            value={fmt(ops.aiUsage.generations30d)}
+            sub={ops.aiUsage.capped ? "상한 도달(≥10,000)" : undefined}
+          />
+          <StatCard
+            label="예상 비용(오늘)"
+            value={`$${ops.cost.estTodayUsd.toLocaleString()}`}
+            sub={`30일 $${ops.cost.est30dUsd.toLocaleString()} · 단가 $${ops.cost.unitUsd}`}
+          />
+        </div>
+      </div>
+
+      {/* Free trial + subscriptions */}
+      <div>
+        <p className="text-xs font-medium text-gray-400 mb-2">무료 체험 / 구독</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard
+            label="오늘 무료 체험"
+            value={fmt(ops.freeTrial.usedToday)}
+            sub={`7일 ${fmt(ops.freeTrial.used7d)}`}
+          />
+          <StatCard
+            label="남은 일일 예산"
+            value={fmt(ops.freeTrial.remainingBudget)}
+            sub={`예산 ${fmt(ops.freeTrial.dailyBudget)} · IP한도 ${fmt(ops.freeTrial.perIpLimit)}`}
+            tone={budgetLow ? "warn" : "default"}
+          />
+          <StatCard
+            label="활성 구독"
+            value={fmt(ops.subscriptions.active)}
+            sub={`오늘 +${fmt(ops.subscriptions.startedToday)} · 7일 +${fmt(ops.subscriptions.started7d)}`}
+            tone="good"
+          />
+          <StatCard
+            label="잔여 크레딧 합계"
+            value={fmt(ops.subscriptions.remainingCreditsSum)}
+          />
+        </div>
+      </div>
+
+      {/* 7-day trend */}
+      <div>
+        <p className="text-xs font-medium text-gray-400 mb-2">최근 7일 생성 추이</p>
+        <div className="flex items-end gap-2 h-24">
+          {ops.trend7d.map((day) => (
+            <div key={day.date} className="flex-1 flex flex-col items-center gap-1">
+              <div className="w-full flex items-end justify-center h-20">
+                <div
+                  className="w-full max-w-[36px] bg-violet-500 rounded-t"
+                  style={{ height: `${Math.round((day.total / maxTrend) * 100)}%` }}
+                  title={`${day.date} · 총 ${day.total} (무료 ${day.free} / 구독 ${day.paid})`}
+                />
+              </div>
+              <span className="text-[10px] text-gray-400">{day.date.slice(5)}</span>
+              <span className="text-[10px] font-medium text-gray-600 tabular-nums">
+                {day.total}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -236,6 +479,18 @@ export default function AdminPage() {
   // Detail view modal
   const [viewDetailRow, setViewDetailRow] = useState<OverviewRow | null>(null);
 
+  // Operations metrics
+  const [ops, setOps] = useState<OpsMetrics | null>(null);
+  const [opsError, setOpsError] = useState(false);
+
+  // User search
+  const [userSearchQuery, setUserSearchQuery] = useState("");
+  const [userSearchResults, setUserSearchResults] = useState<UserSearchResult[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(null);
+  const [userDetail, setUserDetail] = useState<UserDetail | null>(null);
+  const [userDetailLoading, setUserDetailLoading] = useState(false);
+
   // ── Init ──────────────────────────────────────────────────────────────────
 
   async function loadOverview(token: string) {
@@ -253,6 +508,58 @@ export default function AdminPage() {
     setPageState("ready");
   }
 
+  async function loadOps(token: string) {
+    setOpsError(false);
+    try {
+      const res = await adminFetch("/api/admin/ops", token);
+      if (!res.ok) {
+        setOpsError(true);
+        return;
+      }
+      setOps((await res.json()) as OpsMetrics);
+    } catch {
+      setOpsError(true);
+    }
+  }
+
+  async function searchUsers(query: string, token: string) {
+    if (query.trim().length < 2) {
+      setUserSearchResults([]);
+      return;
+    }
+    setUserSearchLoading(true);
+    try {
+      const res = await adminFetch(`/api/admin/users/search?q=${encodeURIComponent(query)}`, token);
+      if (res.ok) {
+        const data = (await res.json()) as { results: UserSearchResult[] };
+        setUserSearchResults(data.results ?? []);
+      } else {
+        setUserSearchResults([]);
+      }
+    } catch {
+      setUserSearchResults([]);
+    } finally {
+      setUserSearchLoading(false);
+    }
+  }
+
+  async function loadUserDetail(user: UserSearchResult, token: string) {
+    setSelectedUser(user);
+    setUserDetailLoading(true);
+    try {
+      const query = user.source === "profile" ? `userId=${user.id}` : `email=${encodeURIComponent(user.email || "")}`;
+      const res = await adminFetch(`/api/admin/users/detail?${query}`, token);
+      if (res.ok) {
+        const data = (await res.json()) as UserDetail;
+        setUserDetail(data);
+      }
+    } catch {
+      // Error handled by modal displaying null
+    } finally {
+      setUserDetailLoading(false);
+    }
+  }
+
   useEffect(() => {
     const supabase = getSupabaseBrowserClientOrNull();
     if (!supabase) {
@@ -267,6 +574,7 @@ export default function AdminPage() {
       }
       setAccessToken(token);
       loadOverview(token);
+      loadOps(token);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -517,12 +825,181 @@ export default function AdminPage() {
             <p className="text-sm text-gray-500 mt-0.5">서비스 권한 사전등록 관리</p>
           </div>
           <button
-            onClick={() => loadOverview(accessToken)}
+            onClick={() => {
+              loadOverview(accessToken);
+              loadOps(accessToken);
+            }}
             className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
           >
             새로고침
           </button>
         </div>
+
+        <OpsPanel ops={ops} error={opsError} />
+
+        {/* ── User search ────────────────────────────────────────────────────── */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+            사용자 조사
+          </p>
+          <input
+            type="text"
+            placeholder="이메일 또는 이름으로 검색 (최소 2글자)"
+            value={userSearchQuery}
+            onChange={(e) => {
+              const val = e.target.value;
+              setUserSearchQuery(val);
+              searchUsers(val, accessToken);
+            }}
+            className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-200 rounded-xl text-sm placeholder:text-gray-400 focus:outline-none focus:border-gray-400"
+          />
+          {userSearchLoading && (
+            <p className="text-sm text-gray-500">검색 중...</p>
+          )}
+          {userSearchResults.length > 0 && (
+            <div className="space-y-2">
+              {userSearchResults.map((result) => (
+                <button
+                  key={result.id}
+                  onClick={() => loadUserDetail(result, accessToken)}
+                  className="block w-full text-left px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors"
+                >
+                  <p className="text-sm font-medium text-gray-900">{result.email || "—"}</p>
+                  {result.name && <p className="text-xs text-gray-600">{result.name}</p>}
+                  <p className="text-xs text-gray-400">
+                    {result.source === "profile" ? "가입됨" : "신청만 함"} · {result.createdAt ? new Date(result.createdAt).toLocaleDateString("ko-KR") : "—"}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+          {userSearchQuery.length >= 2 && userSearchResults.length === 0 && !userSearchLoading && (
+            <p className="text-sm text-gray-500">검색 결과 없음</p>
+          )}
+        </div>
+
+        {/* ── User detail modal ──────────────────────────────────────────────── */}
+        {selectedUser && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-96 overflow-y-auto">
+              {userDetailLoading ? (
+                <div className="p-6 text-center text-gray-500">로딩 중...</div>
+              ) : userDetail ? (
+                <div className="p-6 space-y-6">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900">{userDetail.user.email}</h2>
+                      <p className="text-sm text-gray-600 mt-1">{userDetail.user.name || "—"}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setSelectedUser(null);
+                        setUserDetail(null);
+                      }}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Profile info */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">프로필</p>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-500">가입일</p>
+                        <p className="font-medium text-gray-900">
+                          {userDetail.user.createdAt ? new Date(userDetail.user.createdAt).toLocaleDateString("ko-KR") : "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">온보딩</p>
+                        <p className="font-medium text-gray-900">
+                          {userDetail.user.accountOnboardedAt ? new Date(userDetail.user.accountOnboardedAt).toLocaleDateString("ko-KR") : "미완료"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">회사명</p>
+                        <p className="font-medium text-gray-900">{userDetail.user.companyName || "—"}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Subscription */}
+                  {userDetail.subscription && (
+                    <div className="border-t border-gray-200 pt-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">구독</p>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <p className="text-gray-500">상태</p>
+                          <p className="font-medium text-green-600">활성</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">남은 크레딧</p>
+                          <p className="font-medium text-gray-900">{userDetail.subscription.remainingCredits}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">시작일</p>
+                          <p className="font-medium text-gray-900">{new Date(userDetail.subscription.startDate).toLocaleDateString("ko-KR")}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">종료일</p>
+                          <p className="font-medium text-gray-900">{new Date(userDetail.subscription.endDate).toLocaleDateString("ko-KR")}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI usage */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">AI 생성</p>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-500">총 생성</p>
+                        <p className="font-medium text-gray-900">{userDetail.aiUsage.totalGenerations}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">무료 체험</p>
+                        <p className="font-medium text-gray-900">{userDetail.aiUsage.freeTrialGenerations}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">구독 사용</p>
+                        <p className="font-medium text-gray-900">{userDetail.aiUsage.paidGenerations}</p>
+                      </div>
+                      <div className="col-span-3">
+                        <p className="text-gray-500">최신 생성</p>
+                        <p className="font-medium text-gray-900">
+                          {userDetail.aiUsage.latestGeneratedAt
+                            ? new Date(userDetail.aiUsage.latestGeneratedAt).toLocaleDateString("ko-KR")
+                            : "없음"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recent posts */}
+                  {userDetail.posts.length > 0 && (
+                    <div className="border-t border-gray-200 pt-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">최신 생성물 (상위 5개)</p>
+                      <div className="space-y-2">
+                        {userDetail.posts.slice(0, 5).map((post) => (
+                          <div key={post.id} className="text-sm px-3 py-2 bg-gray-50 rounded-lg">
+                            <p className="font-medium text-gray-900">{post.title}</p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(post.createdAt).toLocaleDateString("ko-KR")} · {post.isFreeTrial ? "무료" : "구독"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-6 text-center text-red-500">사용자 정보를 불러올 수 없습니다</div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Bulk registration ──────────────────────────────────────────────── */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">

@@ -14,31 +14,31 @@ type InternalTestSessionPayload = {
   issuedAt: number;
 };
 
+// The default credentials/secret ship in the repository and client bundle, so
+// they must never be honored in production: there the feature only works when
+// all three values are explicitly configured via environment variables.
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
 function isInternalTestAccountFeatureEnabled() {
-  // Keep the built-in test account always enabled so deployed environments
-  // can consistently use the fixed QA credentials.
   return true;
 }
 
 function getInternalTestAccountId() {
-  return (
-    process.env.INTERNAL_TEST_ACCOUNT_ID?.trim() ??
-    DEFAULT_INTERNAL_TEST_ACCOUNT_ID
-  );
+  const configured = process.env.INTERNAL_TEST_ACCOUNT_ID?.trim();
+  if (configured) return configured;
+  return IS_PRODUCTION ? "" : DEFAULT_INTERNAL_TEST_ACCOUNT_ID;
 }
 
 function getInternalTestAccountPassword() {
-  return (
-    process.env.INTERNAL_TEST_ACCOUNT_PASSWORD?.trim() ??
-    DEFAULT_INTERNAL_TEST_ACCOUNT_PASSWORD
-  );
+  const configured = process.env.INTERNAL_TEST_ACCOUNT_PASSWORD?.trim();
+  if (configured) return configured;
+  return IS_PRODUCTION ? "" : DEFAULT_INTERNAL_TEST_ACCOUNT_PASSWORD;
 }
 
 function getInternalTestSecret() {
-  return (
-    process.env.INTERNAL_TEST_ACCOUNT_SECRET?.trim() ??
-    DEFAULT_INTERNAL_TEST_ACCOUNT_SECRET
-  );
+  const configured = process.env.INTERNAL_TEST_ACCOUNT_SECRET?.trim();
+  if (configured) return configured;
+  return IS_PRODUCTION ? "" : DEFAULT_INTERNAL_TEST_ACCOUNT_SECRET;
 }
 
 function encodePayload(payload: InternalTestSessionPayload) {
@@ -103,13 +103,8 @@ export function verifyInternalTestCredentials(id: string, password: string) {
   const normalizedPassword = password.trim();
   const expectedId = getInternalTestAccountId().toLowerCase();
   const expectedPassword = getInternalTestAccountPassword();
-  const matchesConfigured =
-    normalizedId === expectedId && normalizedPassword === expectedPassword;
-  const matchesDefault =
-    normalizedId === DEFAULT_INTERNAL_TEST_ACCOUNT_ID.toLowerCase() &&
-    normalizedPassword === DEFAULT_INTERNAL_TEST_ACCOUNT_PASSWORD;
 
-  return matchesConfigured || matchesDefault;
+  return normalizedId === expectedId && normalizedPassword === expectedPassword;
 }
 
 export function createInternalTestSessionToken(sessionId: string) {

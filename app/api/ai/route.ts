@@ -12,6 +12,7 @@ import {
   INTERNAL_TEST_SESSION_COOKIE_NAME,
   verifyInternalTestSessionToken,
 } from "@/lib/server/internal-test-session";
+import { evaluateAnonymousFreeTrial } from "@/lib/server/free-trial";
 
 export const maxDuration = 60;
 
@@ -166,7 +167,22 @@ async function handlePostImageGeneration(
   apiKey: string,
   request: Request
 ) {
+  const startedAt = Date.now();
   const usageMode = body.usageMode === "premium" ? "premium" : "free_trial";
+  const logOutcome = (
+    outcome: "success" | "plan_failed" | "image_failed" | "no_image_output",
+    extra: Record<string, unknown> = {}
+  ) => {
+    console.info(
+      "[/api/ai] post_image outcome:",
+      JSON.stringify({
+        outcome,
+        usageMode,
+        durationMs: Date.now() - startedAt,
+        ...extra,
+      })
+    );
+  };
   const premiumAccess = await verifyPremiumGenerationAccess({
     usageMode,
     accessToken: String(body.accessToken ?? "").trim(),
@@ -254,6 +270,25 @@ async function handlePostImageGeneration(
     );
   }
 
+  // Anonymous (no-account) free trial: layered gate (signed cookie → global
+  // daily budget → per-IP limit) so the unmetered free path cannot be scripted
+  // to run up OpenRouter cost. Premium requests are metered separately by
+  // subscription credits above. On success we mark this browser via cookie.
+  let freeTrialCookieHeader: string | null = null;
+
+  if (usageMode === "free_trial") {
+    const trialDecision = await evaluateAnonymousFreeTrial(request);
+
+    if (!trialDecision.ok) {
+      return Response.json(
+        { error: trialDecision.error },
+        { status: trialDecision.statusCode }
+      );
+    }
+
+    freeTrialCookieHeader = trialDecision.setCookieHeader;
+  }
+
   const postPlan = await generatePostPlan({
     apiKey,
     instagramHandle: normalizedInstagramHandle,
@@ -273,6 +308,7 @@ async function handlePostImageGeneration(
   });
 
   if (!postPlan.ok) {
+    logOutcome("plan_failed");
     return Response.json(
       {
         error: "게시물 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
@@ -342,6 +378,7 @@ Requirements:
   });
 
   if (!imageResponse.ok) {
+    logOutcome("image_failed");
     return Response.json(
       { error: "이미지 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
       { status: 502 }
@@ -359,6 +396,7 @@ Requirements:
       "[/api/ai] Available image response keys:",
       getImageResponseDebugSummary(imageResponse.data)
     );
+    logOutcome("no_image_output");
     return Response.json(
       { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
       { status: 502 }
@@ -391,7 +429,14 @@ Requirements:
     result.imageModelText = imageModelText;
   }
 
-  return Response.json({ ...result, source: "api" });
+  logOutcome("success", { imageModel: IMAGE_MODEL, planningModel: TEXT_MODEL });
+
+  return Response.json(
+    { ...result, source: "api" },
+    freeTrialCookieHeader
+      ? { headers: { "Set-Cookie": freeTrialCookieHeader } }
+      : undefined
+  );
 }
 
 type PremiumUsageMode = "free_trial" | "premium";
