@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import {
-  getEffectiveDailyUsageCount,
   getKoreaDateString,
   getRemainingSubscriptionCredits,
   isPostGeneratorSubscriptionActive,
@@ -186,6 +185,41 @@ async function handleBrandSlogans(body: AiRequestBody, apiKey: string) {
     );
   }
 
+  // Per-user daily cap (cost control): slogan generations are cheap but
+  // otherwise unbounded. Count today's logged slogan runs (KST day) and block
+  // past the cap. Uses generation_logs (service-role only). Fails open on any
+  // logging/infra error so a transient DB issue never blocks a paying feature.
+  const sloganDailyCap = (() => {
+    const raw = process.env.BRAND_SLOGANS_MAX_PER_USER_PER_DAY;
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+  })();
+  const startOfKoreaDayIso = new Date(
+    `${getKoreaDateString()}T00:00:00+09:00`
+  ).toISOString();
+  let sloganLogDb: ReturnType<typeof getSupabaseServiceRoleClient> | null = null;
+  try {
+    sloganLogDb = getSupabaseServiceRoleClient();
+    const countRes = (await (
+      sloganLogDb
+        .from("generation_logs")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("usage_mode", "brand_slogans")
+        .gte("created_at", startOfKoreaDayIso) as unknown
+    )) as { count: number | null; error: { message: string } | null };
+    if (!countRes.error && (countRes.count ?? 0) >= sloganDailyCap) {
+      return Response.json(
+        {
+          error: `오늘 슬로건 생성 한도(${sloganDailyCap}회)를 초과했습니다. 내일 다시 이용해주세요.`,
+        },
+        { status: 429 }
+      );
+    }
+  } catch {
+    sloganLogDb = null; // fail open (e.g. service role unavailable locally)
+  }
+
   const prompt = `
 당신은 한국의 브랜드 카피라이터입니다. 아래 브랜드 정보를 바탕으로 브랜드 슬로건 후보 5개를 제안하세요.
 
@@ -239,6 +273,24 @@ async function handleBrandSlogans(body: AiRequestBody, apiKey: string) {
       { error: "슬로건 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
       { status: 502 }
     );
+  }
+
+  // Log the successful run so it counts toward the daily cap. Fire-and-forget;
+  // never blocks the response.
+  if (sloganLogDb) {
+    void (
+      sloganLogDb.from("generation_logs").insert({
+        user_id: user.id,
+        usage_mode: "brand_slogans",
+        outcome: "success",
+        text_model: TEXT_MODEL,
+        image_count: 0,
+      } as never) as unknown as Promise<{ error: { message: string } | null }>
+    ).then(({ error }) => {
+      if (error) {
+        console.warn("[/api/ai] slogan log insert failed:", error.message);
+      }
+    });
   }
 
   return Response.json({ slogans, source: "api" });

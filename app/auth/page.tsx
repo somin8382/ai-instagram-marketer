@@ -106,8 +106,17 @@ function AuthPageInner() {
   const [loginPassword, setLoginPassword] = useState("");
 
   // Password reset (비밀번호를 잊으셨나요?)
-  // "request": email entry form; "update": arrived via recovery email link
-  const isRecoveryFlow = searchParams.get("reset") === "1";
+  // "request": email entry form; "update": arrived via recovery email link.
+  // Detect recovery from BOTH the ?reset=1 query param and the recovery link's
+  // URL hash (#...type=recovery). Origins outside Supabase's redirect allow
+  // list fall back to the Site URL and drop the query param, but the hash is
+  // preserved — without hash detection the user would be silently logged in
+  // instead of shown the reset form. The PASSWORD_RECOVERY auth event (below)
+  // is a third fallback in case both are consumed before this runs.
+  const isRecoveryFlow =
+    searchParams.get("reset") === "1" ||
+    (typeof window !== "undefined" &&
+      /(?:^|[#&])type=recovery(?:&|$)/.test(window.location.hash));
   const [resetMode, setResetMode] = useState<"none" | "request" | "update">(
     isRecoveryFlow ? "update" : "none"
   );
@@ -490,24 +499,20 @@ function AuthPageInner() {
       return;
     }
 
-    // Recovery-link flow: the link signs the user in, but they must set a new
-    // password first — never auto-redirect to /mypage in that state.
-    if (isRecoveryFlow) {
-      return;
-    }
-
-    supabase.auth
-      .getSession()
-      .then(async ({ data }) => {
-        if (data.session?.user) {
-          await completeAuth();
-        }
-      })
-      .catch(() => undefined);
-
+    // Always listen for PASSWORD_RECOVERY so the reset form shows even if the
+    // ?reset=1 param and the hash were consumed before this effect ran.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setResetMode("update");
+        return;
+      }
+      // Recovery-link flow: the link signs the user in, but they must set a new
+      // password first — never auto-redirect to /mypage in that state.
+      if (isRecoveryFlow) {
+        return;
+      }
       if (
         (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") &&
         session?.user
@@ -515,6 +520,18 @@ function AuthPageInner() {
         void completeAuth();
       }
     });
+
+    // Auto-continue an existing (non-recovery) session on load.
+    if (!isRecoveryFlow) {
+      supabase.auth
+        .getSession()
+        .then(async ({ data }) => {
+          if (data.session?.user) {
+            await completeAuth();
+          }
+        })
+        .catch(() => undefined);
+    }
 
     return () => subscription.unsubscribe();
   }, [completeAuth, isRecoveryFlow]);

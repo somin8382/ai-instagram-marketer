@@ -1,7 +1,22 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getSupabaseServiceRoleClient } from "@/lib/server/admin";
+import { checkAndReserveRateLimit } from "@/lib/server/rate-limit";
+import {
+  getApplicationValidationIssues,
+  getFirstValidationIssue,
+} from "@/lib/form-validation";
 import type { Database } from "@/lib/supabase/types";
+
+const SUBMISSION_USAGE_TABLE = "application_submission_usage";
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+function str(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
 // Pre-login (and logged-in) application submission.
 //
@@ -159,6 +174,57 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "결제 금액을 다시 확인해주세요." },
       { status: 400 }
+    );
+  }
+
+  // Server-side mandatory-field validation — the same rules the client
+  // enforces, so a direct API call can't bypass them.
+  const validationIssue = getFirstValidationIssue(
+    getApplicationValidationIssues({
+      selectedPlan:
+        application.selected_plan != null
+          ? Number(application.selected_plan)
+          : null,
+      selectedDuration:
+        application.selected_duration != null
+          ? Number(application.selected_duration)
+          : null,
+      marketingChannel: str(application.marketing_channel),
+      channelUrl: str(application.channel_url),
+      mainContentUrl: str(application.main_content_url),
+      instagramId: str(application.instagram_id),
+      industry: str(application.industry),
+      productService: str(application.product_service),
+      managerName: str(application.manager_name),
+      phone: str(application.phone),
+      email,
+      depositorName: str(payment?.depositor_name),
+      isExpress: Boolean(application.is_express),
+      completionDate: str(application.completion_date),
+    })
+  );
+  if (validationIssue) {
+    return NextResponse.json({ error: validationIssue.message }, { status: 400 });
+  }
+
+  // Rate limit anonymous/automated spam: per-IP rolling 24h + global daily cap
+  // (reuses the shared free-trial gate machinery). Fails open on infra errors.
+  const rate = await checkAndReserveRateLimit({
+    request,
+    table: SUBMISSION_USAGE_TABLE,
+    perIpPerDay: envInt("APPLICATION_SUBMIT_MAX_PER_IP_PER_DAY", 10),
+    globalDaily: envInt("APPLICATION_SUBMIT_GLOBAL_DAILY", 300),
+    logTag: "/api/applications/submit",
+  });
+  if (!rate.ok) {
+    return NextResponse.json(
+      {
+        error:
+          rate.reason === "ip"
+            ? "신청이 너무 많습니다. 잠시 후 다시 시도해주세요."
+            : "지금은 신청이 많습니다. 잠시 후 다시 시도해주세요.",
+      },
+      { status: rate.statusCode }
     );
   }
 
