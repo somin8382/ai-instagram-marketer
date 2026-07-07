@@ -17,6 +17,85 @@ export function getSupabaseServiceRoleClient() {
   });
 }
 
+/**
+ * Propagate an admin-side change of grant credits to the user's live
+ * subscription. Grant credits are copied into subscriptions.remaining_credits
+ * only at redeem time, so editing a grant after the user has an active
+ * subscription would otherwise never reach the user. Applies the DELTA
+ * (new - old) rather than overwriting, to preserve consumption history.
+ * Returns "synced" | "no_subscription" | "inactive" | "error".
+ */
+export async function applyGrantCreditDelta({
+  db,
+  appliedUserId,
+  oldCredits,
+  newCredits,
+  todayKr,
+}: {
+  db: ReturnType<typeof getSupabaseServiceRoleClient>;
+  appliedUserId: string;
+  oldCredits: number;
+  newCredits: number;
+  todayKr: string;
+}): Promise<"synced" | "no_subscription" | "inactive" | "error"> {
+  const delta = newCredits - oldCredits;
+  if (delta === 0) return "synced";
+
+  const subRes = (await (
+    db
+      .from("subscriptions")
+      .select("id, start_date, end_date, remaining_credits")
+      .eq("user_id", appliedUserId)
+      .eq("plan_type", "post_generator")
+      .maybeSingle() as unknown
+  )) as {
+    data: {
+      id: string;
+      start_date: string;
+      end_date: string;
+      remaining_credits: number;
+    } | null;
+    error: { message: string } | null;
+  };
+
+  if (subRes.error) {
+    console.error(
+      "[admin] grant credit sync: subscription lookup failed:",
+      subRes.error.message
+    );
+    return "error";
+  }
+  if (!subRes.data) return "no_subscription";
+
+  const sub = subRes.data;
+  const isActive = sub.start_date <= todayKr && sub.end_date >= todayKr;
+  if (!isActive) return "inactive";
+
+  // Atomic adjust via RPC (no read-modify-write race with concurrent
+  // consumption); floors at 0.
+  const adjustRes = (await (db.rpc("adjust_post_generator_credits" as never, {
+    p_user_id: appliedUserId,
+    p_delta: delta,
+  } as never) as unknown)) as {
+    data: number | null;
+    error: { message: string } | null;
+  };
+
+  if (adjustRes.error) {
+    console.error(
+      "[admin] grant credit sync: adjust RPC failed:",
+      adjustRes.error.message
+    );
+    return "error";
+  }
+
+  console.info(
+    "[admin] grant credit sync applied:",
+    JSON.stringify({ userId: appliedUserId, delta, nextCredits: adjustRes.data })
+  );
+  return "synced";
+}
+
 // Reused in overview/route.ts for state derivation
 export function parseMonthsList(months: string | null | undefined): number[] {
   if (!months) return [];

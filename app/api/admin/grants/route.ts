@@ -1,5 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { assertAdmin, getSupabaseServiceRoleClient } from "@/lib/server/admin";
+import {
+  applyGrantCreditDelta,
+  assertAdmin,
+  getSupabaseServiceRoleClient,
+} from "@/lib/server/admin";
+import { getKoreaDateString } from "@/lib/post-generator/subscription";
 
 function extractBearerToken(request: NextRequest): string {
   const auth = request.headers.get("authorization") ?? "";
@@ -53,6 +58,31 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const db = getSupabaseServiceRoleClient();
+
+    // Read the current row first so a credits change can be propagated as a
+    // delta to the user's live subscription (see applyGrantCreditDelta).
+    const beforeRes = (await (
+      db
+        .from("service_grants")
+        .select("id, generator_credits, applied_user_id")
+        .eq("id", id)
+        .maybeSingle() as unknown
+    )) as {
+      data: {
+        id: string;
+        generator_credits: number;
+        applied_user_id: string | null;
+      } | null;
+      error: { message: string } | null;
+    };
+
+    if (beforeRes.error) {
+      return NextResponse.json({ error: beforeRes.error.message }, { status: 500 });
+    }
+    if (!beforeRes.data) {
+      return NextResponse.json({ error: "대상 행을 찾을 수 없습니다." }, { status: 404 });
+    }
+
     const res = (await (
       db
         .from("service_grants")
@@ -71,7 +101,23 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "대상 행을 찾을 수 없습니다." }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true });
+    let creditSync: string | null = null;
+    if (
+      "generator_credits" in update &&
+      typeof update.generator_credits === "number" &&
+      beforeRes.data.applied_user_id &&
+      update.generator_credits !== beforeRes.data.generator_credits
+    ) {
+      creditSync = await applyGrantCreditDelta({
+        db,
+        appliedUserId: beforeRes.data.applied_user_id,
+        oldCredits: beforeRes.data.generator_credits,
+        newCredits: update.generator_credits,
+        todayKr: getKoreaDateString(),
+      });
+    }
+
+    return NextResponse.json({ ok: true, creditSync });
   } catch {
     return NextResponse.json(
       { error: "서버 오류가 발생했습니다." },

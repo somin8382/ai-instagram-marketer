@@ -1,7 +1,6 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import {
   getSupabaseBrowserClient,
-  getSupabasePublicClient,
   hasSupabaseEnv,
 } from "./client";
 import type { Database } from "./types";
@@ -13,7 +12,6 @@ import {
   isValidPlanSelection,
 } from "../form-validation";
 import {
-  addMonthsToKoreaDateString,
   getEffectiveDailyUsageCount,
   getKoreaDateString,
   getRemainingSubscriptionCredits,
@@ -234,74 +232,6 @@ function getCreatedAtTime(value?: string | null) {
   return Number.isNaN(time) ? 0 : time;
 }
 
-function buildGeneratedPostPayloads(input: {
-  userId?: string | null;
-  email?: string | null;
-  applicationId?: string | null;
-  title: string;
-  content: string;
-  hashtags: string;
-  imageUrl: string;
-  isFreeTrial: boolean;
-  createdAt: string;
-  visualPrompt?: string | null;
-}) {
-  const vp = input.visualPrompt ?? null;
-  return [
-    {
-      user_id: input.userId ?? null,
-      application_id: input.applicationId ?? null,
-      title: input.title,
-      content: input.content,
-      hashtags: input.hashtags,
-      image_url: input.imageUrl,
-      is_free_trial: input.isFreeTrial,
-      created_at: input.createdAt,
-      visual_prompt: vp,
-    },
-    {
-      user_id: input.userId ?? null,
-      application_id: input.applicationId ?? null,
-      title: input.title,
-      content: input.content,
-      hashtags: input.hashtags,
-      image_url: input.imageUrl,
-      is_free_trial: input.isFreeTrial,
-      created_at: input.createdAt,
-      visual_prompt: vp,
-    },
-    {
-      user_id: input.userId ?? null,
-      title: input.title,
-      content: input.content,
-      hashtags: input.hashtags,
-      image_url: input.imageUrl,
-      is_free_trial: input.isFreeTrial,
-      created_at: input.createdAt,
-      visual_prompt: vp,
-    },
-    {
-      application_id: input.applicationId ?? null,
-      title: input.title,
-      content: input.content,
-      hashtags: input.hashtags,
-      image_url: input.imageUrl,
-      is_free_trial: input.isFreeTrial,
-      created_at: input.createdAt,
-      visual_prompt: vp,
-    },
-    {
-      title: input.title,
-      content: input.content,
-      hashtags: input.hashtags,
-      image_url: input.imageUrl,
-      is_free_trial: input.isFreeTrial,
-      created_at: input.createdAt,
-      visual_prompt: vp,
-    },
-  ];
-}
-
 function buildAuthSnapshot(user: User, requestEmail?: string | null): AuthSnapshot {
   const authEmail = user.email ?? "";
   const authName =
@@ -391,18 +321,6 @@ async function tryInsert(
   }
 
   return { data: null, error: lastError };
-}
-
-function hasMissingApplicationPlanColumnError(message?: string | null) {
-  if (!message) return false;
-
-  const normalized = message.toLowerCase();
-
-  return (
-    normalized.includes("account_direction") ||
-    normalized.includes("account_bio") ||
-    normalized.includes("account_concept")
-  );
 }
 
 const OPTIONAL_APPLICATION_COLUMNS = new Set([
@@ -825,9 +743,7 @@ export async function redeemServiceGrants({
         const months = parseMonthsList(grant.generator_months);
         if (months.includes(currentMonth)) {
           const subResult = await startPostGeneratorSubscription({
-            userId,
-            bypassPaymentRequirement: true,
-            credits: grant.generator_credits,
+            mode: "grant_redeem",
           });
           // Real failure: no subscription was issued and an error is present.
           // Benign no-op: subscription already active (subResult.subscription is non-null).
@@ -930,7 +846,6 @@ export async function syncProfileAndLinkData({
   });
 
   await flushPendingGeneratedPosts({
-    userId: user.id,
     email: snapshot.authEmail || emailCandidates[0] || null,
   });
 
@@ -1101,117 +1016,81 @@ export async function persistApplicationSubmission(
     optionalApplicationPayload.invoice_email = normalizedInvoiceEmail;
   }
 
-  let applicationPayload: Record<string, unknown> = {
+  const applicationPayload: Record<string, unknown> = {
     ...baseApplicationPayload,
     ...optionalApplicationPayload,
   };
 
-  let applicationResult = await tryInsert("applications", [
-    applicationPayload,
-  ]);
+  // Submission goes through a server endpoint (service role): with RLS enabled
+  // on applications, an anonymous session can no longer INSERT … RETURNING its
+  // own row. The server derives user_id from the verified access token — the
+  // payload's user_id is intentionally not sent.
+  delete applicationPayload.user_id;
 
-  const removedOptionalColumns: string[] = [];
+  let accessToken: string | null = null;
+  try {
+    const {
+      data: { session },
+    } = await getSupabaseBrowserClient().auth.getSession();
+    accessToken = session?.access_token ?? null;
+  } catch {
+    accessToken = null;
+  }
 
-  while (applicationResult.error) {
-    const missingColumn = getMissingApplicationColumnName(applicationResult.error);
+  try {
+    const response = await fetch("/api/applications/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accessToken,
+        application: applicationPayload,
+        payment: {
+          expected_amount: input.amount,
+          bank_name: input.bankName.trim(),
+          account_number: input.accountNumber.trim(),
+          account_holder: input.accountHolder.trim(),
+          depositor_name: normalizedDepositorName,
+        },
+      }),
+    });
 
-    if (
-      !missingColumn ||
-      !OPTIONAL_APPLICATION_COLUMNS.has(missingColumn) ||
-      !(missingColumn in applicationPayload)
-    ) {
-      break;
+    const result = (await response.json().catch(() => ({}))) as {
+      applicationId?: string | null;
+      paymentId?: string | null;
+      error?: string | null;
+    };
+
+    if (!response.ok || !result.applicationId) {
+      return {
+        applicationId: null,
+        paymentId: null,
+        error: result.error ?? "신청 정보를 저장하지 못했습니다.",
+      };
     }
 
-    const nextPayload = { ...applicationPayload };
-    delete nextPayload[missingColumn];
-    applicationPayload = nextPayload;
-    removedOptionalColumns.push(missingColumn);
-
-    applicationResult = await tryInsert("applications", [applicationPayload]);
-  }
-
-  if (
-    applicationResult.error &&
-    hasMissingApplicationPlanColumnError(applicationResult.error)
-  ) {
-    console.warn(
-      "[Application] account_* 컬럼 미존재로 기본 payload로 재시도:",
-      applicationResult.error
+    console.info(
+      "[Application] 저장 결과:",
+      JSON.stringify({
+        applicationId: result.applicationId,
+        email: normalizedEmail,
+        userId: input.userId ?? null,
+        selectedPlan: input.selectedPlan,
+        selectedDuration: input.selectedDuration,
+      })
     );
 
-    applicationResult = await tryInsert("applications", [baseApplicationPayload]);
-  }
-
-  if (removedOptionalColumns.length > 0) {
-    console.warn(
-      "[Application] 스키마 누락으로 제외된 선택 컬럼:",
-      removedOptionalColumns.join(", ")
-    );
-  }
-
-  if (applicationResult.error || !applicationResult.data) {
+    return {
+      applicationId: result.applicationId,
+      paymentId: result.paymentId ?? null,
+      error: result.error ?? null,
+    };
+  } catch {
     return {
       applicationId: null,
       paymentId: null,
-      error: applicationResult.error ?? "신청 정보를 저장하지 못했습니다.",
+      error: "신청 정보를 저장하지 못했습니다. 잠시 후 다시 시도해주세요.",
     };
   }
-
-  const applicationId =
-    typeof applicationResult.data === "object" && applicationResult.data !== null
-      ? String((applicationResult.data as { id?: string }).id ?? "")
-      : "";
-
-  console.info(
-    "[Application] 저장 결과:",
-    JSON.stringify({
-      applicationId: applicationId || null,
-      email: normalizedEmail,
-      userId: input.userId ?? null,
-      selectedPlan: input.selectedPlan,
-      selectedDuration: input.selectedDuration,
-    })
-  );
-
-  const paymentResult = await tryInsert("payments", [
-    {
-      application_id: applicationId || null,
-      expected_amount: input.amount,
-      bank_name: input.bankName.trim(),
-      account_number: input.accountNumber.trim(),
-      account_holder: input.accountHolder.trim(),
-      depositor_name: normalizedDepositorName,
-      created_at: createdAt,
-    },
-  ]);
-
-  console.info(
-    "[Payment] 저장 결과:",
-    JSON.stringify({
-      applicationId: applicationId || null,
-      paymentId:
-        paymentResult.data &&
-        typeof paymentResult.data === "object" &&
-        "id" in paymentResult.data
-          ? String((paymentResult.data as { id?: string }).id ?? "")
-          : null,
-      amount: input.amount,
-      depositorName: normalizedDepositorName,
-      hasError: Boolean(paymentResult.error),
-    })
-  );
-
-  return {
-    applicationId: applicationId || null,
-    paymentId:
-      paymentResult.data &&
-      typeof paymentResult.data === "object" &&
-      "id" in paymentResult.data
-        ? String((paymentResult.data as { id?: string }).id ?? "")
-        : null,
-    error: paymentResult.error,
-  };
 }
 
 export async function persistGeneratedPost(
@@ -1264,12 +1143,17 @@ export async function persistGeneratedPost(
     };
   }
 
-  const payloads = buildGeneratedPostPayloads({
-    ...input,
+  const result = await saveGeneratedPostViaApi({
+    applicationId: input.applicationId ?? null,
+    email: input.email ?? null,
+    title: input.title,
+    content: input.content,
+    hashtags: input.hashtags,
+    imageUrl: input.imageUrl,
+    isFreeTrial: input.isFreeTrial,
+    visualPrompt: input.visualPrompt ?? null,
     createdAt,
   });
-
-  const result = await tryInsert("generated_posts", payloads);
 
   if (result.error) {
     queuePendingGeneratedPost({
@@ -1294,16 +1178,77 @@ export async function persistGeneratedPost(
   return {
     saved: true,
     queued: false,
-    generatedPostId: result.data?.id ?? null,
+    generatedPostId: result.generatedPostId,
     error: null as string | null,
   };
 }
 
+// Saves go through a server endpoint (service role): with RLS enabled on
+// generated_posts, anonymous free-trial sessions cannot INSERT … RETURNING
+// their own row. The server binds user_id from the session token; the
+// payload's userId is intentionally not sent.
+async function saveGeneratedPostViaApi(input: {
+  applicationId: string | null;
+  email: string | null;
+  title: string;
+  content: string;
+  hashtags: string;
+  imageUrl: string;
+  isFreeTrial: boolean;
+  visualPrompt?: string | null;
+  createdAt: string;
+}): Promise<{ generatedPostId: string | null; error: string | null }> {
+  let accessToken: string | null = null;
+  try {
+    const {
+      data: { session },
+    } = await getSupabaseBrowserClient().auth.getSession();
+    accessToken = session?.access_token ?? null;
+  } catch {
+    accessToken = null;
+  }
+
+  try {
+    const response = await fetch("/api/generated-posts/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accessToken,
+        post: {
+          application_id: input.applicationId,
+          email: input.email,
+          title: input.title,
+          content: input.content,
+          hashtags: input.hashtags,
+          image_url: input.imageUrl,
+          is_free_trial: input.isFreeTrial,
+          visual_prompt: input.visualPrompt ?? null,
+          created_at: input.createdAt,
+        },
+      }),
+    });
+    const result = (await response.json().catch(() => ({}))) as {
+      generatedPostId?: string | null;
+      error?: string | null;
+    };
+    if (!response.ok || !result.generatedPostId) {
+      return {
+        generatedPostId: null,
+        error: result.error ?? "게시물을 저장하지 못했습니다.",
+      };
+    }
+    return { generatedPostId: result.generatedPostId, error: null };
+  } catch {
+    return {
+      generatedPostId: null,
+      error: "게시물을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.",
+    };
+  }
+}
+
 export async function flushPendingGeneratedPosts({
-  userId,
   email,
 }: {
-  userId: string;
   email?: string | null;
 }) {
   const pendingPosts = readPendingGeneratedPosts();
@@ -1326,20 +1271,16 @@ export async function flushPendingGeneratedPosts({
       continue;
     }
 
-    const result = await tryInsert(
-      "generated_posts",
-      buildGeneratedPostPayloads({
-        userId,
-        email: email ?? post.email ?? null,
-        applicationId: post.applicationId ?? null,
-        title: post.title,
-        content: post.content,
-        hashtags: post.hashtags,
-        imageUrl: post.imageUrl,
-        isFreeTrial: post.isFreeTrial,
-        createdAt: post.createdAt,
-      })
-    );
+    const result = await saveGeneratedPostViaApi({
+      applicationId: post.applicationId ?? null,
+      email: email ?? post.email ?? null,
+      title: post.title,
+      content: post.content,
+      hashtags: post.hashtags,
+      imageUrl: post.imageUrl,
+      isFreeTrial: post.isFreeTrial,
+      createdAt: post.createdAt,
+    });
 
     if (result.error) {
       remainingPosts.push(post);
@@ -1390,14 +1331,10 @@ export async function fetchPostGeneratorSubscription({
 }
 
 export async function startPostGeneratorSubscription({
-  userId,
-  bypassPaymentRequirement = false,
-  credits,
+  mode = "monthly_start",
 }: {
-  userId?: string | null;
-  bypassPaymentRequirement?: boolean;
-  credits?: number;
-}) {
+  mode?: "grant_redeem" | "monthly_start";
+} = {}) {
   if (!hasSupabaseEnv()) {
     return {
       subscription: null as SavedSubscription | null,
@@ -1405,207 +1342,50 @@ export async function startPostGeneratorSubscription({
     };
   }
 
-  if (!userId) {
+  // Subscription creation happens on a server endpoint (service role): the
+  // browser no longer has write access to subscriptions, and the credit
+  // amount is decided server-side (grant lookup / fixed monthly default).
+  let accessToken: string | null = null;
+  try {
+    const {
+      data: { session },
+    } = await getSupabaseBrowserClient().auth.getSession();
+    accessToken = session?.access_token ?? null;
+  } catch {
+    accessToken = null;
+  }
+
+  if (!accessToken) {
     return {
       subscription: null as SavedSubscription | null,
       error: "로그인 후 구독을 시작해주세요.",
     };
   }
 
-  const supabase = getSupabaseBrowserClient();
-  const currentSubscriptionResult = await fetchPostGeneratorSubscription({
-    userId,
-  });
-
-  if (currentSubscriptionResult.error) {
+  try {
+    const response = await fetch("/api/subscriptions/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken, mode }),
+    });
+    const result = (await response.json().catch(() => ({}))) as {
+      subscription?: SubscriptionRow | null;
+      error?: string | null;
+    };
+    return {
+      subscription: result.subscription
+        ? mapSubscriptionRow(result.subscription)
+        : (null as SavedSubscription | null),
+      error: result.error ?? (response.ok ? null : "구독을 시작하지 못했습니다."),
+    };
+  } catch {
     return {
       subscription: null as SavedSubscription | null,
-      error: currentSubscriptionResult.error,
+      error: "구독을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.",
     };
   }
-
-  if (
-    currentSubscriptionResult.subscription &&
-    isPostGeneratorSubscriptionActive(currentSubscriptionResult.subscription)
-  ) {
-    return {
-      subscription: currentSubscriptionResult.subscription,
-      error: "이미 활성화된 구독입니다. 남은 생성 횟수를 먼저 사용해주세요.",
-    };
-  }
-
-  if (!bypassPaymentRequirement) {
-    const userApplicationResponse = await fetchApplicationsByColumn(
-      supabase,
-      "user_id",
-      userId
-    );
-
-    if (userApplicationResponse.error) {
-      return {
-        subscription: null as SavedSubscription | null,
-        error: "결제 상태를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.",
-      };
-    }
-
-    const latestApplication = userApplicationResponse.data?.[0] ?? null;
-
-    if (!latestApplication?.id) {
-      return {
-        subscription: null as SavedSubscription | null,
-        error: "입금 확인 후 구독이 활성화됩니다.",
-      };
-    }
-
-    const paymentResponse = await fetchPaymentsByApplicationId(
-      supabase,
-      String(latestApplication.id)
-    );
-
-    if (paymentResponse.error) {
-      return {
-        subscription: null as SavedSubscription | null,
-        error: "결제 상태를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.",
-      };
-    }
-
-    const latestPayment = paymentResponse.data?.[0] ?? null;
-
-    if (latestPayment?.payment_status !== "confirmed") {
-      return {
-        subscription: null as SavedSubscription | null,
-        error: "입금 확인 후 구독이 활성화됩니다.",
-      };
-    }
-  }
-
-  const startDate = getKoreaDateString();
-  const endDate = addMonthsToKoreaDateString(startDate, 1);
-
-  const response = (await ((
-    supabase
-      .from("subscriptions")
-      .upsert(
-        {
-          user_id: userId,
-          plan_type: POST_GENERATOR_PLAN_TYPE,
-          start_date: startDate,
-          end_date: endDate,
-          remaining_credits: credits ?? POST_GENERATOR_MONTHLY_CREDITS,
-          daily_usage_count: 0,
-          last_usage_date: null,
-        } as never,
-        { onConflict: "user_id,plan_type" }
-      )
-      .select(
-        "id, user_id, plan_type, start_date, end_date, remaining_credits, daily_usage_count, last_usage_date, created_at, updated_at"
-      )
-      .single() as unknown
-  ) as Promise<{
-    data: SubscriptionRow | null;
-    error: { message: string } | null;
-  }>)) as {
-    data: SubscriptionRow | null;
-    error: { message: string } | null;
-  };
-
-  if (response.error) {
-    return {
-      subscription: null as SavedSubscription | null,
-      error: toKoreanSubscriptionErrorMessage(response.error.message),
-    };
-  }
-
-  return {
-    subscription: mapSubscriptionRow(response.data),
-    error: null as string | null,
-  };
 }
 
-export async function consumePostGeneratorSubscriptionCredit({
-  userId,
-}: {
-  userId?: string | null;
-}) {
-  if (!hasSupabaseEnv()) {
-    return {
-      subscription: null as SavedSubscription | null,
-      error: "Supabase 환경 변수가 설정되지 않았습니다.",
-    };
-  }
-
-  if (!userId) {
-    return {
-      subscription: null as SavedSubscription | null,
-      error: "로그인 후 이용해주세요.",
-    };
-  }
-
-  const currentSubscriptionResult = await fetchPostGeneratorSubscription({ userId });
-
-  if (currentSubscriptionResult.error) {
-    return {
-      subscription: null as SavedSubscription | null,
-      error: currentSubscriptionResult.error,
-    };
-  }
-
-  const subscription = currentSubscriptionResult.subscription;
-
-  if (!subscription || !isPostGeneratorSubscriptionActive(subscription)) {
-    return {
-      subscription: null as SavedSubscription | null,
-      error: "월 구독 후 이용할 수 있습니다.",
-    };
-  }
-
-  if (getRemainingSubscriptionCredits(subscription) <= 0) {
-    return {
-      subscription,
-      error: "남은 생성 횟수가 없습니다",
-    };
-  }
-
-  const supabase = getSupabaseBrowserClient();
-  const today = getKoreaDateString();
-  const nextRemainingCredits = getRemainingSubscriptionCredits(subscription) - 1;
-  const nextDailyUsageCount = getEffectiveDailyUsageCount(subscription, today) + 1;
-
-  const response = (await ((
-    supabase
-      .from("subscriptions")
-      .update(
-        {
-          remaining_credits: nextRemainingCredits,
-          daily_usage_count: nextDailyUsageCount,
-          last_usage_date: today,
-        } as never
-      )
-      .eq("id", subscription.id)
-      .select(
-        "id, user_id, plan_type, start_date, end_date, remaining_credits, daily_usage_count, last_usage_date, created_at, updated_at"
-      )
-      .single() as unknown
-  ) as Promise<{
-    data: SubscriptionRow | null;
-    error: { message: string } | null;
-  }>)) as {
-    data: SubscriptionRow | null;
-    error: { message: string } | null;
-  };
-
-  if (response.error) {
-    return {
-      subscription,
-      error: toKoreanSubscriptionErrorMessage(response.error.message),
-    };
-  }
-
-  return {
-    subscription: mapSubscriptionRow(response.data),
-    error: null as string | null,
-  };
-}
 
 export async function fetchSavedGeneratedPosts({
   userId,
@@ -1622,7 +1402,6 @@ export async function fetchSavedGeneratedPosts({
   }
 
   const supabase = getSupabaseBrowserClient();
-  const publicClient = getSupabasePublicClient();
   const normalizedEmail = normalizeEmail(email);
   const errors: string[] = [];
   const rows: GeneratedPostRow[] = [];
@@ -1681,8 +1460,10 @@ export async function fetchSavedGeneratedPosts({
   }
 
   if (applicationIds.size > 0) {
+    // Authed client (not the public one): under generated_posts RLS, rows are
+    // visible via ownership of the parent application.
     const applicationPostsResponse = await fetchGeneratedPostsByApplicationIds(
-      publicClient,
+      supabase,
       [...applicationIds]
     );
 

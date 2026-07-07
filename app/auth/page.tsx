@@ -15,6 +15,7 @@ import {
   hasSupabaseEnv,
 } from "@/lib/supabase/client";
 import { syncProfileAndLinkData } from "@/lib/supabase/persistence";
+import { trackLoginEventOnce } from "@/lib/client/track-login";
 import {
   getHelperTextClass,
   getPrimaryActionButtonClass,
@@ -103,6 +104,19 @@ function AuthPageInner() {
 
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+
+  // Password reset (비밀번호를 잊으셨나요?)
+  // "request": email entry form; "update": arrived via recovery email link
+  const isRecoveryFlow = searchParams.get("reset") === "1";
+  const [resetMode, setResetMode] = useState<"none" | "request" | "update">(
+    isRecoveryFlow ? "update" : "none"
+  );
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetSending, setResetSending] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [resetSaving, setResetSaving] = useState(false);
 
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
@@ -203,6 +217,9 @@ function AuthPageInner() {
     if (error || !user) {
       throw new Error("로그인 정보를 확인하지 못했습니다. 다시 로그인해주세요.");
     }
+
+    // No-op if handleLogin already recorded a "login" for this browser session
+    trackLoginEventOnce(user.id, user.email, "visit");
 
     await syncProfileAndLinkData({
       user,
@@ -473,6 +490,12 @@ function AuthPageInner() {
       return;
     }
 
+    // Recovery-link flow: the link signs the user in, but they must set a new
+    // password first — never auto-redirect to /mypage in that state.
+    if (isRecoveryFlow) {
+      return;
+    }
+
     supabase.auth
       .getSession()
       .then(async ({ data }) => {
@@ -494,7 +517,7 @@ function AuthPageInner() {
     });
 
     return () => subscription.unsubscribe();
-  }, [completeAuth]);
+  }, [completeAuth, isRecoveryFlow]);
 
   async function handleLogin() {
     if (submitting) {
@@ -529,7 +552,7 @@ function AuthPageInner() {
 
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: enteredId,
         password: enteredPassword,
       });
@@ -538,12 +561,74 @@ function AuthPageInner() {
         throw error;
       }
 
+      trackLoginEventOnce(data.user?.id, data.user?.email, "login");
       await completeAuth();
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       setAuthError(toKoreanAuthError(message));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleSendResetEmail() {
+    if (resetSending) return;
+    const email = resetEmail.trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      setAuthError("이메일 형식을 확인해주세요.");
+      return;
+    }
+    if (!supabaseReady) {
+      setAuthError("Supabase 연결 정보를 다시 확인해주세요.");
+      return;
+    }
+    setAuthError("");
+    setResetSending(true);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      // Always report success — do not leak whether the email is registered
+      await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth?reset=1`,
+      });
+      setResetSent(true);
+    } catch {
+      setResetSent(true);
+    } finally {
+      setResetSending(false);
+    }
+  }
+
+  async function handleUpdatePassword() {
+    if (resetSaving) return;
+    const password = newPassword.trim();
+    if (password.length < 8) {
+      setAuthError("비밀번호는 8자 이상이어야 합니다.");
+      return;
+    }
+    if (password !== newPasswordConfirm.trim()) {
+      setAuthError("비밀번호가 서로 다릅니다.");
+      return;
+    }
+    setAuthError("");
+    setResetSaving(true);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        setAuthError(
+          "비밀번호 변경에 실패했습니다. 재설정 메일을 다시 요청해주세요."
+        );
+        return;
+      }
+      // Password set — now finish the normal post-login flow
+      setResetMode("none");
+      await completeAuth();
+    } catch {
+      setAuthError(
+        "비밀번호 변경에 실패했습니다. 재설정 메일을 다시 요청해주세요."
+      );
+    } finally {
+      setResetSaving(false);
     }
   }
 
@@ -926,6 +1011,18 @@ function AuthPageInner() {
                   >
                     {submitting ? "로그인 중입니다..." : "로그인"}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetEmail(loginEmail);
+                      setResetSent(false);
+                      setAuthError("");
+                      setResetMode("request");
+                    }}
+                    className="w-full text-center text-sm text-gray-500 underline underline-offset-2 hover:text-gray-700 transition-colors"
+                  >
+                    비밀번호를 잊으셨나요?
+                  </button>
                 </div>
               </div>
             )}
@@ -938,6 +1035,125 @@ function AuthPageInner() {
           </div>
         </div>
       </main>
+      {/* ── Password reset ─────────────────────────────────────────────────── */}
+      {resetMode !== "none" && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <div className="flex items-start justify-between">
+              <h2 className="text-lg font-bold text-gray-900">
+                비밀번호 재설정
+              </h2>
+              {resetMode === "request" && (
+                <button
+                  onClick={() => {
+                    setResetMode("none");
+                    setAuthError("");
+                  }}
+                  className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                  aria-label="닫기"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {resetMode === "request" ? (
+              resetSent ? (
+                <>
+                  <p className="text-sm text-gray-600 leading-relaxed">
+                    입력하신 주소가 가입된 이메일이라면 비밀번호 재설정 메일이
+                    발송되었습니다. 메일함(스팸함 포함)을 확인하고 링크를 눌러
+                    새 비밀번호를 설정해주세요.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setResetMode("none");
+                      setAuthError("");
+                    }}
+                    className={`${getPrimaryActionButtonClass({
+                      theme: "violet",
+                      isInactive: false,
+                    })} py-3`}
+                  >
+                    확인
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-600">
+                    가입한 이메일을 입력하시면 비밀번호 재설정 링크를
+                    보내드립니다.
+                  </p>
+                  <input
+                    type="email"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    placeholder="예: brand@company.com"
+                    className={getTextFieldClass({
+                      theme: "violet",
+                      hasError: false,
+                    })}
+                  />
+                  {authError && (
+                    <p className="text-sm text-red-500">{authError}</p>
+                  )}
+                  <button
+                    onClick={() => void handleSendResetEmail()}
+                    disabled={resetSending || !resetEmail.trim()}
+                    className={`${getPrimaryActionButtonClass({
+                      theme: "violet",
+                      isInactive: resetSending || !resetEmail.trim(),
+                    })} py-3`}
+                  >
+                    {resetSending ? "발송 중..." : "재설정 메일 보내기"}
+                  </button>
+                </>
+              )
+            ) : (
+              <>
+                <p className="text-sm text-gray-600">
+                  새로 사용할 비밀번호를 입력해주세요. (8자 이상)
+                </p>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="새 비밀번호"
+                  className={getTextFieldClass({
+                    theme: "violet",
+                    hasError: false,
+                  })}
+                />
+                <input
+                  type="password"
+                  value={newPasswordConfirm}
+                  onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                  placeholder="새 비밀번호 확인"
+                  className={getTextFieldClass({
+                    theme: "violet",
+                    hasError: false,
+                  })}
+                />
+                {authError && (
+                  <p className="text-sm text-red-500">{authError}</p>
+                )}
+                <button
+                  onClick={() => void handleUpdatePassword()}
+                  disabled={resetSaving || !newPassword || !newPasswordConfirm}
+                  className={`${getPrimaryActionButtonClass({
+                    theme: "violet",
+                    isInactive:
+                      resetSaving || !newPassword || !newPasswordConfirm,
+                  })} py-3`}
+                >
+                  {resetSaving ? "변경 중..." : "비밀번호 변경하고 로그인"}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}

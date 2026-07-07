@@ -16,6 +16,8 @@ import {
   type MyPageSnapshot,
   type SavedGeneratedPost,
 } from "@/lib/supabase/persistence";
+import { trackLoginEventOnce } from "@/lib/client/track-login";
+import { CreditGrantPopup } from "@/lib/ui/credit-grant-popup";
 import {
   clearTestAccountAccess,
   fetchTestAccountAccess,
@@ -513,6 +515,9 @@ export default function MyPage() {
             return;
           }
 
+          // Returning persisted session that skipped /auth — deduped per browser session
+          trackLoginEventOnce(user.id, user.email, "visit");
+
           const authResult = await syncProfileAndLinkData({ user });
 
           if (!active) return;
@@ -734,6 +739,11 @@ export default function MyPage() {
           )}
         </div>
 
+        {/* One-time popup for admin-issued bonus credits */}
+        {authUserId && !isTestAccountAuthenticated && (
+          <CreditGrantPopup userId={authUserId} />
+        )}
+
         {/* Show spinner while the main snapshot OR the grant check is still loading */}
         {loading || serviceGrantState.status === "idle" ? (
           <Card className="text-center py-12">
@@ -747,6 +757,26 @@ export default function MyPage() {
             {errorMessage && (
               <Card className="bg-red-50 border-red-100">
                 <p className="text-sm font-medium text-red-600">{errorMessage}</p>
+              </Card>
+            )}
+
+            {/* AI-generator input info (view/edit) now lives on the generator tab */}
+            {authUserId && !isTestAccountAuthenticated && (
+              <Card className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    AI 생성기 입력 정보
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    회사·브랜드·URL 등 생성 정보는 게시물 AI 생성기 탭에서 확인·수정할 수 있어요.
+                  </p>
+                </div>
+                <a
+                  href="/tools"
+                  className="shrink-0 text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  생성기로 이동
+                </a>
               </Card>
             )}
 

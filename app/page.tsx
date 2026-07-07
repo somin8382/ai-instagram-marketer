@@ -2707,8 +2707,7 @@ export default function Home() {
 
     try {
       const result = await startPostGeneratorSubscription({
-        userId,
-        bypassPaymentRequirement: true,
+        mode: "monthly_start",
       });
 
       if (result.error || !result.subscription) {

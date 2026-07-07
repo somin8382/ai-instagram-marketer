@@ -432,6 +432,163 @@ function rowToEditForm(row: OverviewRow): EditFormData {
   };
 }
 
+// ─── Inquiries panel ──────────────────────────────────────────────────────────
+
+type InquiryRow = {
+  id: string;
+  email: string | null;
+  message: string;
+  page_path: string | null;
+  status: string;
+  admin_reply: string | null;
+  replied_by: string | null;
+  replied_at: string | null;
+  created_at: string;
+};
+
+function InquiriesPanel({ token }: { token: string }) {
+  const [inquiries, setInquiries] = useState<InquiryRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [showAnswered, setShowAnswered] = useState(false);
+
+  async function load() {
+    try {
+      const res = await adminFetch("/api/admin/inquiries", token);
+      if (res.ok) {
+        const data = (await res.json()) as { inquiries: InquiryRow[] };
+        setInquiries(data.inquiries ?? []);
+      }
+    } finally {
+      setLoaded(true);
+    }
+  }
+
+  useEffect(() => {
+    if (token) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  async function sendReply(inquiry: InquiryRow) {
+    const reply = (replyDrafts[inquiry.id] ?? "").trim();
+    if (!reply || savingId) return;
+    setSavingId(inquiry.id);
+    try {
+      const res = await adminFetch("/api/admin/inquiries", token, {
+        method: "PATCH",
+        body: JSON.stringify({ id: inquiry.id, reply }),
+      });
+      if (res.ok) {
+        setReplyDrafts((prev) => ({ ...prev, [inquiry.id]: "" }));
+        await load();
+      }
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  const openInquiries = inquiries.filter((inquiry) => inquiry.status === "open");
+  const visible = showAnswered ? inquiries : openInquiries;
+
+  if (!loaded || inquiries.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+          문의 관리{" "}
+          {openInquiries.length > 0 && (
+            <span className="ml-1 text-red-500">
+              미답변 {openInquiries.length}건
+            </span>
+          )}
+        </p>
+        <button
+          onClick={() => setShowAnswered((prev) => !prev)}
+          className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
+        >
+          {showAnswered ? "미답변만 보기" : `전체 보기 (${inquiries.length})`}
+        </button>
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="text-sm text-gray-400">미답변 문의가 없습니다.</p>
+      ) : (
+        <div className="space-y-3">
+          {visible.map((inquiry) => (
+            <div key={inquiry.id} className="bg-gray-50 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
+                <span>
+                  {inquiry.email ?? "(이메일 없음)"} ·{" "}
+                  {new Date(inquiry.created_at).toLocaleString("ko-KR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                  {inquiry.page_path && ` · ${inquiry.page_path}`}
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded-full ${
+                    inquiry.status === "answered"
+                      ? "bg-green-100 text-green-700"
+                      : "bg-amber-100 text-amber-700"
+                  }`}
+                >
+                  {inquiry.status === "answered" ? "답변완료" : "미답변"}
+                </span>
+              </div>
+              <p className="text-sm text-gray-900 whitespace-pre-wrap">
+                {inquiry.message}
+              </p>
+              {inquiry.admin_reply && (
+                <div className="bg-white rounded-lg p-3 border border-gray-100">
+                  <p className="text-[11px] text-gray-400 mb-1">
+                    답변 · {inquiry.replied_by} ·{" "}
+                    {inquiry.replied_at &&
+                      new Date(inquiry.replied_at).toLocaleString("ko-KR", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}
+                  </p>
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">
+                    {inquiry.admin_reply}
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={replyDrafts[inquiry.id] ?? ""}
+                  onChange={(e) =>
+                    setReplyDrafts((prev) => ({
+                      ...prev,
+                      [inquiry.id]: e.target.value,
+                    }))
+                  }
+                  placeholder={
+                    inquiry.admin_reply ? "답변 수정..." : "답변 입력..."
+                  }
+                  className={inputSmCls}
+                />
+                <button
+                  onClick={() => void sendReply(inquiry)}
+                  disabled={
+                    savingId === inquiry.id ||
+                    !(replyDrafts[inquiry.id] ?? "").trim()
+                  }
+                  className="shrink-0 text-sm px-4 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-gray-700 transition-colors disabled:opacity-40"
+                >
+                  {savingId === inquiry.id ? "저장 중..." : "답변"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Shared class constants ───────────────────────────────────────────────────
 
 const pageShellCls =
@@ -824,18 +981,34 @@ export default function AdminPage() {
             <h1 className="text-2xl font-bold text-gray-900">관리자 대시보드</h1>
             <p className="text-sm text-gray-500 mt-0.5">서비스 권한 사전등록 관리</p>
           </div>
-          <button
-            onClick={() => {
-              loadOverview(accessToken);
-              loadOps(accessToken);
-            }}
-            className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            새로고침
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="/admin/users"
+              className="text-sm px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors"
+            >
+              전체 사용자
+            </a>
+            <a
+              href="/admin/marketer-urls"
+              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              잘못된 URL
+            </a>
+            <button
+              onClick={() => {
+                loadOverview(accessToken);
+                loadOps(accessToken);
+              }}
+              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              새로고침
+            </button>
+          </div>
         </div>
 
         <OpsPanel ops={ops} error={opsError} />
+
+        <InquiriesPanel token={accessToken} />
 
         {/* ── User search ────────────────────────────────────────────────────── */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">

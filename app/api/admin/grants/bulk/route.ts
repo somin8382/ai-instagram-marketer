@@ -1,5 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { assertAdmin, getSupabaseServiceRoleClient } from "@/lib/server/admin";
+import {
+  applyGrantCreditDelta,
+  assertAdmin,
+  getSupabaseServiceRoleClient,
+} from "@/lib/server/admin";
+import { getKoreaDateString } from "@/lib/post-generator/subscription";
 
 function extractBearerToken(request: NextRequest): string {
   const auth = request.headers.get("authorization") ?? "";
@@ -192,11 +197,20 @@ export async function POST(request: NextRequest) {
 
   const db = getSupabaseServiceRoleClient();
 
-  // Fetch all existing grants for email matching (case-insensitive via JS after normalizing)
+  // Fetch all existing grants for email matching (case-insensitive via JS after normalizing).
+  // generator_credits + applied_user_id are needed to propagate credit deltas
+  // to already-redeemed users' subscriptions (see applyGrantCreditDelta).
   const existingRes = (await (
-    db.from("service_grants").select("id, email") as unknown
+    db
+      .from("service_grants")
+      .select("id, email, generator_credits, applied_user_id") as unknown
   )) as {
-    data: Array<{ id: string; email: string }> | null;
+    data: Array<{
+      id: string;
+      email: string;
+      generator_credits: number;
+      applied_user_id: string | null;
+    }> | null;
     error: { message: string } | null;
   };
 
@@ -207,10 +221,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Map: normalizedEmail → existing id
-  const existingMap = new Map<string, string>();
+  // Map: normalizedEmail → existing row
+  const existingMap = new Map<
+    string,
+    { id: string; generator_credits: number; applied_user_id: string | null }
+  >();
   for (const row of existingRes.data ?? []) {
-    existingMap.set(row.email.trim().toLowerCase(), row.id);
+    existingMap.set(row.email.trim().toLowerCase(), {
+      id: row.id,
+      generator_credits: row.generator_credits,
+      applied_user_id: row.applied_user_id,
+    });
   }
 
   const toUpdate = deduped.filter((r) => existingMap.has(r.normalizedEmail));
@@ -256,8 +277,9 @@ export async function POST(request: NextRequest) {
   let updated = 0;
 
   // UPDATE existing rows (do NOT touch status / applied_user_id / applied_at)
+  const todayKr = getKoreaDateString();
   for (const row of toUpdate) {
-    const id = existingMap.get(row.normalizedEmail)!;
+    const existing = existingMap.get(row.normalizedEmail)!;
     const updateRes = (await (
       db
         .from("service_grants")
@@ -273,7 +295,7 @@ export async function POST(request: NextRequest) {
           generator_months: row.generator_months,
           generator_credits: row.generator_credits,
         } as never)
-        .eq("id", id) as unknown
+        .eq("id", existing.id) as unknown
     )) as { error: { message: string } | null };
 
     if (updateRes.error) {
@@ -284,6 +306,18 @@ export async function POST(request: NextRequest) {
       });
     } else {
       updated++;
+      if (
+        existing.applied_user_id &&
+        row.generator_credits !== existing.generator_credits
+      ) {
+        await applyGrantCreditDelta({
+          db,
+          appliedUserId: existing.applied_user_id,
+          oldCredits: existing.generator_credits,
+          newCredits: row.generator_credits,
+          todayKr,
+        });
+      }
     }
   }
 

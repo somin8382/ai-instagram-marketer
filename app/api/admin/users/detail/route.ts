@@ -6,6 +6,21 @@ function extractBearerToken(request: NextRequest): string {
   return auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 }
 
+// Earliest (min) of several ISO timestamps, ignoring null/invalid.
+function earliestIso(...values: Array<string | null | undefined>): string | null {
+  let min: string | null = null;
+  let minT = Infinity;
+  for (const v of values) {
+    if (!v) continue;
+    const t = new Date(v).getTime();
+    if (Number.isFinite(t) && t < minT) {
+      minT = t;
+      min = v;
+    }
+  }
+  return min;
+}
+
 type ProfileRow = Record<string, unknown>;
 type ApplicationRow = Record<string, unknown>;
 type SubscriptionRow = Record<string, unknown>;
@@ -77,28 +92,180 @@ export async function GET(request: NextRequest) {
 
     const applications = appRes.error ? [] : appRes.data || [];
 
-    // Fetch generated posts (by resolved userId)
+    // Fetch generated posts (by resolved userId). count is exact so usage
+    // totals stay correct even though the returned list is capped at 50.
     let posts: GeneratedPostRow[] = [];
+    let postsTotalCount = 0;
     if (actualUserId) {
       const postsRes = (await (
         db
           .from("generated_posts")
-          .select("*")
+          .select("*", { count: "exact" })
           .eq("user_id", actualUserId)
           .order("created_at", { ascending: false })
           .limit(50) as unknown
-      )) as { data: GeneratedPostRow[]; error: { message: string } | null };
+      )) as {
+        data: GeneratedPostRow[];
+        count: number | null;
+        error: { message: string } | null;
+      };
       posts = postsRes.error ? [] : postsRes.data || [];
+      postsTotalCount = postsRes.error ? 0 : (postsRes.count ?? posts.length);
     }
 
-    // Fetch free-trial usage (if we have an IP hash, we can't query it directly without the hash,
-    // so we just report that this feature exists)
-    // For now, just note that we'd need to add more detailed logging to capture block reasons.
+    // Login history (full, newest first) + auth metadata for first/latest login
+    let loginHistory: Array<{ occurredAt: string; eventType: string }> = [];
+    let loginCount = 0;
+    let authLastSignInAt: string | null = null;
+    let authCreatedAt: string | null = null;
+    if (actualUserId) {
+      const loginsRes = (await (
+        db
+          .from("login_events")
+          .select("occurred_at, event_type", { count: "exact" })
+          .eq("user_id", actualUserId)
+          .order("occurred_at", { ascending: false })
+          .limit(200) as unknown
+      )) as {
+        data: Array<{ occurred_at: string; event_type: string }> | null;
+        count: number | null;
+        error: { message: string } | null;
+      };
+      if (!loginsRes.error && loginsRes.data) {
+        loginHistory = loginsRes.data.map((row) => ({
+          occurredAt: row.occurred_at,
+          eventType: row.event_type,
+        }));
+        loginCount = loginsRes.count ?? loginsRes.data.length;
+      }
 
-    // Calculate metrics
-    const totalGenerations = posts.length;
+      try {
+        const { data: authUser } = await db.auth.admin.getUserById(
+          actualUserId as string
+        );
+        authLastSignInAt = authUser?.user?.last_sign_in_at ?? null;
+        authCreatedAt = authUser?.user?.created_at ?? null;
+      } catch {
+        // Non-fatal: auth metadata simply omitted
+      }
+    }
+
+    // 최초 접속일 (first-access, distinct from signup) + 접속 횟수.
+    // Earliest across login/visit events, first generation, and first
+    // application — accurate (dedicated asc queries), never the signup date.
+    let firstAccessAt: string | null = null;
+    const accessCount: number | null = loginCount > 0 ? loginCount : null;
+    if (actualUserId) {
+      const orFilter = emailToSearch
+        ? `user_id.eq.${actualUserId},email.ilike.${emailToSearch}`
+        : `user_id.eq.${actualUserId}`;
+      const [earliestLoginRes, earliestPostRes, earliestAppRes] =
+        await Promise.all([
+          (db
+            .from("login_events")
+            .select("occurred_at")
+            .eq("user_id", actualUserId)
+            .order("occurred_at", { ascending: true })
+            .limit(1)
+            .maybeSingle() as unknown) as Promise<{
+            data: { occurred_at: string | null } | null;
+            error: { message: string } | null;
+          }>,
+          (db
+            .from("generated_posts")
+            .select("created_at")
+            .eq("user_id", actualUserId)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle() as unknown) as Promise<{
+            data: { created_at: string | null } | null;
+            error: { message: string } | null;
+          }>,
+          (db
+            .from("applications")
+            .select("created_at")
+            .or(orFilter)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle() as unknown) as Promise<{
+            data: { created_at: string | null } | null;
+            error: { message: string } | null;
+          }>,
+        ]);
+      firstAccessAt = earliestIso(
+        earliestLoginRes.error ? null : earliestLoginRes.data?.occurred_at,
+        earliestPostRes.error ? null : earliestPostRes.data?.created_at,
+        earliestAppRes.error ? null : earliestAppRes.data?.created_at
+      );
+    } else if (email) {
+      // 미가입 lookup by email: application submission is the only evidence.
+      const earliestAppRes = (await (
+        db
+          .from("applications")
+          .select("created_at")
+          .ilike("email", email)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle() as unknown
+      )) as {
+        data: { created_at: string | null } | null;
+        error: { message: string } | null;
+      };
+      firstAccessAt = earliestAppRes.error
+        ? null
+        : (earliestAppRes.data?.created_at ?? null);
+    }
+
+    // Service grant (registration/org info) by email
+    const grantEmail = ((profile as ProfileRow)?.email as string | null) || email;
+    let grant: Record<string, unknown> | null = null;
+    if (grantEmail) {
+      const grantRes = (await (
+        db
+          .from("service_grants")
+          .select("*")
+          .ilike("email", grantEmail)
+          .maybeSingle() as unknown
+      )) as {
+        data: Record<string, unknown> | null;
+        error: { message: string } | null;
+      };
+      if (!grantRes.error) grant = grantRes.data;
+    }
+
+    // Credit grants + generation logs (tolerate missing tables pre-migration)
+    let creditGrants: Array<Record<string, unknown>> = [];
+    let generationLogs: Array<Record<string, unknown>> = [];
+    if (actualUserId) {
+      const [creditRes, logsRes] = await Promise.all([
+        (db
+          .from("credit_grants")
+          .select("*")
+          .eq("user_id", actualUserId)
+          .order("created_at", { ascending: false })
+          .limit(50) as unknown) as Promise<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>,
+        (db
+          .from("generation_logs")
+          .select("*")
+          .eq("user_id", actualUserId)
+          .order("created_at", { ascending: false })
+          .limit(100) as unknown) as Promise<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>,
+      ]);
+      if (!creditRes.error && creditRes.data) creditGrants = creditRes.data;
+      if (!logsRes.error && logsRes.data) generationLogs = logsRes.data;
+    }
+
+    // Calculate metrics (free/paid split is derived from the 50 returned rows;
+    // the total uses the exact count)
+    const totalGenerations = postsTotalCount;
     const freeTrialGenerations = posts.filter((p) => p.is_free_trial).length;
-    const paidGenerations = totalGenerations - freeTrialGenerations;
+    const paidGenerations = Math.max(totalGenerations - freeTrialGenerations, 0);
     const latestPost = posts[0] || null;
     const latestCreatedAt = latestPost?.created_at;
 
@@ -129,6 +296,28 @@ export async function GET(request: NextRequest) {
         isActive: (subscriptionData.start_date as string) <= new Date().toISOString().split("T")[0] && (subscriptionData.end_date as string) >= new Date().toISOString().split("T")[0],
       } : null,
       applications,
+      grant,
+      creditGrants,
+      generationLogs,
+      loginStats: {
+        count: loginCount,
+        firstLoginAt:
+          loginHistory.length > 0
+            ? loginHistory[loginHistory.length - 1].occurredAt
+            : authCreatedAt,
+        lastLoginAt:
+          [authLastSignInAt, loginHistory[0]?.occurredAt]
+            .filter(Boolean)
+            .sort()
+            .pop() ?? null,
+        authLastSignInAt,
+        authCreatedAt,
+      },
+      accessStats: {
+        firstAccessAt,
+        accessCount,
+      },
+      loginHistory,
       aiUsage: {
         totalGenerations,
         freeTrialGenerations,

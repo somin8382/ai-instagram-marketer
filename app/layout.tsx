@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { SERVICE_VERSION } from "@/lib/constants/version";
+import { InquiryWidget } from "@/lib/ui/inquiry-widget";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,6 +31,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <div className="flex-1">{children}</div>
+        <InquiryWidget />
         <div
           aria-hidden="true"
           className="pointer-events-none fixed bottom-3 right-3 z-50 text-[11px] leading-none text-[#999] opacity-70 sm:bottom-4 sm:right-4"

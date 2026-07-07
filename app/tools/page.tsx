@@ -52,6 +52,19 @@ import {
   type SavedGeneratedPost,
   type SavedSubscription,
 } from "@/lib/supabase/persistence";
+import { trackLoginEventOnce } from "@/lib/client/track-login";
+import { checkSocialUrl } from "@/lib/client/social-url";
+import { BrandProfileEditor } from "@/lib/ui/brand-profile-editor";
+import {
+  CONTENT_TONE_OPTIONS,
+  EMOJI_USAGE_OPTIONS,
+  IMAGE_STYLE_OPTIONS,
+  loadGenerationPrefs,
+  saveGenerationPrefs,
+  type ContentTone,
+  type EmojiUsage,
+  type ImageStyle,
+} from "@/lib/client/generation-prefs";
 import { stripTrailingPunct } from "@/lib/text/korean";
 
 type ToolStep = "postgen" | "postsub-payment" | "postsub-status";
@@ -313,6 +326,98 @@ function TextareaField({
   );
 }
 
+function PrefChipRow<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ value: T; label: string }>;
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs font-medium text-gray-500 w-16 shrink-0">
+        {label}
+      </span>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={`text-xs px-2.5 py-1.5 rounded-full border transition-colors ${
+            value === option.value
+              ? "border-violet-400 bg-violet-50 text-violet-700 font-medium"
+              : "border-gray-200 bg-white text-gray-500 hover:border-violet-200"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OnboardingUrlStatus({
+  value,
+  platform,
+}: {
+  value: string;
+  platform: "instagram" | "youtube";
+}) {
+  const check = checkSocialUrl(value, platform);
+  if (!check) return null;
+  const color =
+    check.status === "ok"
+      ? "text-green-600"
+      : check.status === "invalid"
+        ? "text-red-500"
+        : "text-amber-600";
+  return (
+    <p className={`text-xs ${color}`}>
+      {check.statusLabel}
+      {check.kindLabel && ` · ${check.kindLabel}`} — {check.message}
+    </p>
+  );
+}
+
+function ReviewUrlRow({
+  label,
+  value,
+  platform,
+}: {
+  label: string;
+  value: string;
+  platform: "instagram" | "youtube";
+}) {
+  const check = checkSocialUrl(value, platform);
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-gray-400">{label}</p>
+      {!check ? (
+        <p className="text-sm text-gray-500">입력 안 함</p>
+      ) : (
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-sm text-gray-900 break-all">{check.normalized}</p>
+            <OnboardingUrlStatus value={value} platform={platform} />
+          </div>
+          <a
+            href={check.normalized}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-xs px-2.5 py-1.5 rounded-lg border border-violet-200 text-violet-600 hover:bg-violet-50 transition-colors"
+          >
+            열어보기 ↗
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Card({
   children,
   className = "",
@@ -473,6 +578,15 @@ export default function ToolsPage() {
   const [onboardingInstagramUrlError, setOnboardingInstagramUrlError] = useState("");
   const [onboardingYoutubeUrlError, setOnboardingYoutubeUrlError] = useState("");
   const [savingOnboarding, setSavingOnboarding] = useState(false);
+  // Review step (입력 → 확인 → 최종 제출)
+  const [onboardingReview, setOnboardingReview] = useState(false);
+  const [onboardingConfirmChecked, setOnboardingConfirmChecked] = useState(false);
+
+  // Tone & style presets — loaded per user, saved after each generation so the
+  // brand voice stays consistent across sessions and devices.
+  const [contentTone, setContentTone] = useState<ContentTone>("friendly");
+  const [emojiUsage, setEmojiUsage] = useState<EmojiUsage>("minimal");
+  const [imageStyle, setImageStyle] = useState<ImageStyle>("photoreal");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1008,6 +1122,9 @@ export default function ToolsPage() {
         return;
       }
 
+      // Returning persisted session that skipped /auth — deduped per browser session
+      trackLoginEventOnce(user.id, user.email, "visit");
+
       const { snapshot } = await syncProfileAndLinkData({
         user,
         requestEmail: postSubEmail || authEmail,
@@ -1057,6 +1174,22 @@ export default function ToolsPage() {
       subscription.unsubscribe();
     };
   }, [hasHydrated, postSubEmail, authEmail, hasTestAccess]);
+
+  // Restore the user's saved tone/style presets once we know who they are
+  useEffect(() => {
+    if (!userId || isTestAccountAuthenticated) return;
+    let active = true;
+    void (async () => {
+      const prefs = await loadGenerationPrefs(userId);
+      if (!active) return;
+      if (prefs.contentTone) setContentTone(prefs.contentTone);
+      if (prefs.emojiUsage) setEmojiUsage(prefs.emojiUsage);
+      if (prefs.imageStyle) setImageStyle(prefs.imageStyle);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [userId, isTestAccountAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1538,21 +1671,23 @@ export default function ToolsPage() {
     setPostGeneratorSubscription(null);
   }
 
-  async function handleOnboardingSave() {
+  // Step 1: validate the inputs and move to the review screen.
+  function handleOnboardingProceedToReview() {
     if (savingOnboarding || !userId) return;
 
-    const urlPattern = /^https?:\/\//i;
     let hasUrlError = false;
+    const instagramCheck = checkSocialUrl(onboardingInstagramUrl, "instagram");
+    const youtubeCheck = checkSocialUrl(onboardingYoutubeUrl, "youtube");
 
-    if (onboardingInstagramUrl.trim() && !urlPattern.test(onboardingInstagramUrl.trim())) {
-      setOnboardingInstagramUrlError("http:// 또는 https://로 시작하는 URL을 입력해주세요");
+    if (instagramCheck?.status === "invalid") {
+      setOnboardingInstagramUrlError(instagramCheck.message);
       hasUrlError = true;
     } else {
       setOnboardingInstagramUrlError("");
     }
 
-    if (onboardingYoutubeUrl.trim() && !urlPattern.test(onboardingYoutubeUrl.trim())) {
-      setOnboardingYoutubeUrlError("http:// 또는 https://로 시작하는 URL을 입력해주세요");
+    if (youtubeCheck?.status === "invalid") {
+      setOnboardingYoutubeUrlError(youtubeCheck.message);
       hasUrlError = true;
     } else {
       setOnboardingYoutubeUrlError("");
@@ -1565,14 +1700,26 @@ export default function ToolsPage() {
       return;
     }
 
+    setOnboardingConfirmChecked(false);
+    setOnboardingReview(true);
+  }
+
+  // Step 2: final submit from the review screen.
+  async function handleOnboardingSave() {
+    if (savingOnboarding || !userId) return;
+
+    // Persist the normalized URL (scheme/host fixed) when available
+    const instagramCheck = checkSocialUrl(onboardingInstagramUrl, "instagram");
+    const youtubeCheck = checkSocialUrl(onboardingYoutubeUrl, "youtube");
+
     setSavingOnboarding(true);
     try {
       const result = await persistAccountProfile({
         userId,
         companyName: onboardingCompanyName,
         brandName: onboardingBrandName,
-        instagramUrl: onboardingInstagramUrl,
-        youtubeUrl: onboardingYoutubeUrl,
+        instagramUrl: instagramCheck?.normalized ?? onboardingInstagramUrl,
+        youtubeUrl: youtubeCheck?.normalized ?? onboardingYoutubeUrl,
         industry: onboardingIndustry,
         productService: onboardingProductService,
       });
@@ -1593,6 +1740,7 @@ export default function ToolsPage() {
       setContextCompanyName(onboardingCompanyName.trim());
       setContextIndustry(onboardingIndustry.trim());
       setContextProductService(onboardingProductService.trim());
+      setOnboardingReview(false);
       setShowOnboardingModal(false);
     } finally {
       setSavingOnboarding(false);
@@ -1666,8 +1814,7 @@ export default function ToolsPage() {
 
     try {
       const result = await startPostGeneratorSubscription({
-        userId,
-        bypassPaymentRequirement: true,
+        mode: "monthly_start",
       });
 
       if (result.error || !result.subscription) {
@@ -1778,6 +1925,9 @@ export default function ToolsPage() {
         accountBio: contextAccountBio,
         accountConcept: contextAccountConcept,
         marketingChannel: contextMarketingChannel,
+        contentTone,
+        emojiUsage,
+        imageStyle,
         requestId: crypto.randomUUID(),
         previousPost: latestPostContext
           ? {
@@ -1821,6 +1971,11 @@ export default function ToolsPage() {
         isPersisted: false,
         isFreeTrial: isFreeTrialGeneration,
       };
+
+      // Remember the tone/style that produced this result for next time
+      if (userId && !isTestAccountAuthenticated) {
+        saveGenerationPrefs(userId, { contentTone, emojiUsage, imageStyle });
+      }
 
       if (!isFreeTrialGeneration) {
         if (isTestAccountAuthenticated) {
@@ -2472,6 +2627,11 @@ export default function ToolsPage() {
               )}
             </Card>
 
+            {/* AI-generator input info (view + edit) — moved here from My Page */}
+            {userId && !isTestAccountAuthenticated && (
+              <BrandProfileEditor userId={userId} />
+            )}
+
             {shouldShowPostLock ? (
               <Card className="text-center space-y-4 py-10">
                 <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
@@ -2684,6 +2844,35 @@ export default function ToolsPage() {
                   error={postInputError}
                   fieldKey="postInput"
                 />
+
+                <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-gray-900">
+                      톤 & 스타일
+                    </p>
+                    <p className="text-[11px] text-gray-400">
+                      선택은 자동 저장되어 다음 생성에도 적용됩니다
+                    </p>
+                  </div>
+                  <PrefChipRow
+                    label="말투"
+                    options={CONTENT_TONE_OPTIONS}
+                    value={contentTone}
+                    onChange={setContentTone}
+                  />
+                  <PrefChipRow
+                    label="이모지"
+                    options={EMOJI_USAGE_OPTIONS}
+                    value={emojiUsage}
+                    onChange={setEmojiUsage}
+                  />
+                  <PrefChipRow
+                    label="이미지"
+                    options={IMAGE_STYLE_OPTIONS}
+                    value={imageStyle}
+                    onChange={setImageStyle}
+                  />
+                </div>
 
                 <div className="rounded-xl bg-violet-50/60 border border-violet-100 px-4 py-3 space-y-1">
                   <p className="text-sm font-medium text-violet-700">
@@ -3050,13 +3239,20 @@ export default function ToolsPage() {
           <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90dvh] overflow-y-auto p-6 space-y-5 shadow-xl">
             <div className="flex items-start justify-between">
               <div className="space-y-0.5">
-                <h2 className="text-lg font-bold text-gray-900">계정 정보를 알려주세요</h2>
+                <h2 className="text-lg font-bold text-gray-900">
+                  {onboardingReview ? "입력 정보 확인" : "계정 정보를 알려주세요"}
+                </h2>
                 <p className="text-sm text-gray-500">
-                  입력하신 정보로 더 딱 맞는 게시물을 만들어드려요.
+                  {onboardingReview
+                    ? "입력하신 정보가 맞는지 다시 확인해주세요."
+                    : "입력하신 정보로 더 딱 맞는 게시물을 만들어드려요."}
                 </p>
               </div>
               <button
-                onClick={() => setShowOnboardingModal(false)}
+                onClick={() => {
+                  setOnboardingReview(false);
+                  setShowOnboardingModal(false);
+                }}
                 className="text-gray-400 hover:text-gray-600 transition-colors text-xl leading-none ml-3 mt-0.5"
                 aria-label="닫기"
               >
@@ -3064,6 +3260,73 @@ export default function ToolsPage() {
               </button>
             </div>
 
+            {onboardingReview ? (
+              <>
+                <div className="space-y-3 bg-gray-50 rounded-xl p-4">
+                  {(
+                    [
+                      ["회사명", onboardingCompanyName],
+                      ["브랜드 / 아이템명", onboardingBrandName || "입력 안 함"],
+                      ["업종", onboardingIndustry],
+                      ["판매 상품 · 서비스", onboardingProductService],
+                    ] as Array<[string, string]>
+                  ).map(([label, value]) => (
+                    <div key={label}>
+                      <p className="text-xs text-gray-400">{label}</p>
+                      <p className="text-sm text-gray-900">{value}</p>
+                    </div>
+                  ))}
+                  <ReviewUrlRow
+                    label="인스타그램 URL"
+                    value={onboardingInstagramUrl}
+                    platform="instagram"
+                  />
+                  <ReviewUrlRow
+                    label="유튜브 URL"
+                    value={onboardingYoutubeUrl}
+                    platform="youtube"
+                  />
+                </div>
+
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  인스타그램 및 유튜브 링크는 직접 눌러 정상적으로 열리는지
+                  확인해주세요. 입력 정보는 AI 게시물 생성 품질에 그대로
+                  반영됩니다.
+                </p>
+
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={onboardingConfirmChecked}
+                    onChange={(e) => setOnboardingConfirmChecked(e.target.checked)}
+                    className="mt-0.5 accent-violet-600"
+                  />
+                  <span className="text-sm text-gray-700">
+                    입력한 정보를 모두 확인했습니다.
+                  </span>
+                </label>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setOnboardingReview(false)}
+                    className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    수정하기
+                  </button>
+                  <button
+                    onClick={() => void handleOnboardingSave()}
+                    disabled={savingOnboarding || !onboardingConfirmChecked}
+                    className={`${getPrimaryActionButtonClass({
+                      theme: "violet",
+                      isInactive: savingOnboarding || !onboardingConfirmChecked,
+                    })} flex-1 py-3`}
+                  >
+                    {savingOnboarding ? "저장 중..." : "최종 제출"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700">
                 인스타그램 URL
@@ -3083,6 +3346,12 @@ export default function ToolsPage() {
                 <p className={getHelperTextClass("violet")}>
                   {onboardingInstagramUrlError}
                 </p>
+              )}
+              {!onboardingInstagramUrlError && (
+                <OnboardingUrlStatus
+                  value={onboardingInstagramUrl}
+                  platform="instagram"
+                />
               )}
             </div>
 
@@ -3105,6 +3374,12 @@ export default function ToolsPage() {
                 <p className={getHelperTextClass("violet")}>
                   {onboardingYoutubeUrlError}
                 </p>
+              )}
+              {!onboardingYoutubeUrlError && (
+                <OnboardingUrlStatus
+                  value={onboardingYoutubeUrl}
+                  platform="youtube"
+                />
               )}
             </div>
 
@@ -3183,7 +3458,7 @@ export default function ToolsPage() {
             </div>
 
             <button
-              onClick={() => void handleOnboardingSave()}
+              onClick={handleOnboardingProceedToReview}
               disabled={
                 savingOnboarding ||
                 isBlank(onboardingCompanyName) ||
@@ -3199,8 +3474,10 @@ export default function ToolsPage() {
                   isBlank(onboardingProductService),
               })} py-3`}
             >
-              {savingOnboarding ? "저장 중..." : "저장하고 시작하기"}
+              다음 — 입력 정보 확인
             </button>
+              </>
+            )}
           </div>
         </div>
       )}

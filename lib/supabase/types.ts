@@ -23,6 +23,7 @@ export type Database = {
           instagram_url: string | null;
           youtube_url: string | null;
           company_name: string | null;
+          generation_prefs: Json | null;
         };
         Insert: {
           id: string;
@@ -37,6 +38,7 @@ export type Database = {
           instagram_url?: string | null;
           youtube_url?: string | null;
           company_name?: string | null;
+          generation_prefs?: Json | null;
         };
         Update: {
           id?: string;
@@ -51,6 +53,7 @@ export type Database = {
           instagram_url?: string | null;
           youtube_url?: string | null;
           company_name?: string | null;
+          generation_prefs?: Json | null;
         };
       };
       applications: {
@@ -137,6 +140,72 @@ export type Database = {
           updated_at: string | null;
         };
         Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      credit_grants: {
+        Row: {
+          id: string;
+          user_id: string;
+          email: string | null;
+          amount: number;
+          reason: string | null;
+          message: string | null;
+          granted_by: string | null;
+          created_at: string;
+          confirmed: boolean;
+          confirmed_at: string | null;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      generation_logs: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          usage_mode: string;
+          outcome: string;
+          duration_ms: number | null;
+          user_prompt: string | null;
+          image_count: number;
+          image_model: string | null;
+          text_model: string | null;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      inquiries: {
+        Row: {
+          id: string;
+          user_id: string;
+          email: string | null;
+          message: string;
+          page_path: string | null;
+          status: string;
+          admin_reply: string | null;
+          replied_by: string | null;
+          replied_at: string | null;
+          reply_read_at: string | null;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      login_events: {
+        Row: {
+          id: string;
+          user_id: string;
+          email: string | null;
+          event_type: string;
+          occurred_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          email?: string | null;
+          event_type?: string;
+          occurred_at?: string;
+        };
         Update: Record<string, Json | undefined>;
       };
       service_grants: {

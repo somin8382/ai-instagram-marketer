@@ -13,6 +13,7 @@ import {
   verifyInternalTestSessionToken,
 } from "@/lib/server/internal-test-session";
 import { evaluateAnonymousFreeTrial } from "@/lib/server/free-trial";
+import { getSupabaseServiceRoleClient } from "@/lib/server/admin";
 
 export const maxDuration = 60;
 
@@ -50,7 +51,7 @@ type PostImageResult = {
 };
 
 type AiRequestBody = {
-  type?: "planning" | "post_image" | "image_only" | "image_edit";
+  type?: "planning" | "post_image" | "image_only" | "image_edit" | "brand_slogans";
   usageMode?: "free_trial" | "premium";
   accessToken?: string | null;
   isInternalTestAccount?: boolean;
@@ -80,6 +81,9 @@ type AiRequestBody = {
   // image_edit (AI edit)
   imageEditBase64?: string;
   editPrompt?: string;
+  // brand_slogans
+  companyName?: string;
+  brandName?: string;
 };
 
 type OpenRouterMessage =
@@ -126,7 +130,118 @@ export async function POST(request: Request) {
     return handleImageEdit(body, apiKey, request);
   }
 
+  if (body.type === "brand_slogans") {
+    return handleBrandSlogans(body, apiKey);
+  }
+
   return handlePlanning(body, apiKey);
+}
+
+// Text-only slogan generation for signed-in users (no credit consumption:
+// a single cheap gpt-4o-mini call, gated by authentication).
+async function handleBrandSlogans(body: AiRequestBody, apiKey: string) {
+  const accessToken = String(body.accessToken ?? "").trim();
+  if (!accessToken) {
+    return Response.json(
+      { error: "로그인 후 이용할 수 있습니다." },
+      { status: 401 }
+    );
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return Response.json(
+      { error: "서비스 설정을 확인해주세요." },
+      { status: 500 }
+    );
+  }
+  const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser(accessToken);
+  if (authError || !user) {
+    return Response.json(
+      { error: "로그인 정보가 만료되었습니다. 다시 로그인해주세요." },
+      { status: 401 }
+    );
+  }
+
+  const companyName = String(body.companyName ?? "").trim();
+  const brandName = String(body.brandName ?? "").trim();
+  const industry = String(body.industry ?? "").trim();
+  const productService = String(body.productService ?? "").trim();
+
+  if (!companyName && !brandName) {
+    return Response.json(
+      { error: "회사명 또는 브랜드명을 먼저 입력해주세요." },
+      { status: 400 }
+    );
+  }
+
+  const prompt = `
+당신은 한국의 브랜드 카피라이터입니다. 아래 브랜드 정보를 바탕으로 브랜드 슬로건 후보 5개를 제안하세요.
+
+브랜드 정보:
+- 회사명: ${companyName || "정보 없음"}
+- 브랜드/아이템명: ${brandName || "정보 없음"}
+- 업종: ${industry || "정보 없음"}
+- 상품/서비스: ${productService || "정보 없음"}
+
+규칙:
+- 각 슬로건은 공백 포함 20자 이내의 한국어 한 줄
+- 다섯 개는 서로 다른 방향(감성형, 가치제안형, 위트형, 신뢰형, 행동유도형)으로 작성
+- 업종·상품이 구체적으로 느껴져야 하며, 어느 브랜드에나 붙는 범용 문구 금지
+- 각 슬로건에 어떤 방향인지 짧은 이유를 붙일 것
+- 특수 기호, 이모지, 따옴표 사용 금지
+
+다음 JSON 형식으로만 답변하세요. 설명 없이 JSON만 출력하세요:
+{"slogans": [{"text": "슬로건", "angle": "방향과 짧은 이유"}]}
+`;
+
+  const response = await callOpenRouter({
+    apiKey,
+    model: TEXT_MODEL,
+    requestType: "brand_slogans",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  if (!response.ok) {
+    return Response.json(
+      { error: "슬로건 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
+      { status: 502 }
+    );
+  }
+
+  const content = extractMessageContent(
+    response.data?.choices?.[0]?.message?.content
+  );
+  const parsed = extractJson<{
+    slogans?: Array<{ text?: unknown; angle?: unknown }>;
+  }>(content);
+  const slogans = (parsed?.slogans ?? [])
+    .map((item) => ({
+      text: sanitizeGenerated(String(item?.text ?? "").trim()),
+      angle: sanitizeGenerated(String(item?.angle ?? "").trim()),
+    }))
+    .filter((item) => item.text)
+    .slice(0, 5);
+
+  if (slogans.length === 0) {
+    return Response.json(
+      { error: "슬로건 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
+      { status: 502 }
+    );
+  }
+
+  return Response.json({ slogans, source: "api" });
 }
 
 async function handlePlanning(body: AiRequestBody, apiKey: string) {
@@ -169,19 +284,50 @@ async function handlePostImageGeneration(
 ) {
   const startedAt = Date.now();
   const usageMode = body.usageMode === "premium" ? "premium" : "free_trial";
+  // Filled in as the request is parsed/authenticated; read by logOutcome.
+  const logContext: {
+    userId: string | null;
+    userPrompt: string;
+    imageCount: number;
+  } = { userId: null, userPrompt: "", imageCount: 0 };
   const logOutcome = (
     outcome: "success" | "plan_failed" | "image_failed" | "no_image_output",
     extra: Record<string, unknown> = {}
   ) => {
+    const durationMs = Date.now() - startedAt;
     console.info(
       "[/api/ai] post_image outcome:",
       JSON.stringify({
         outcome,
         usageMode,
-        durationMs: Date.now() - startedAt,
+        durationMs,
         ...extra,
       })
     );
+    // Persist for admin support tooling; never blocks or fails the response.
+    try {
+      const db = getSupabaseServiceRoleClient();
+      void (
+        db.from("generation_logs").insert({
+          user_id: logContext.userId,
+          usage_mode: usageMode,
+          outcome,
+          duration_ms: durationMs,
+          user_prompt: logContext.userPrompt.slice(0, 2000) || null,
+          image_count: logContext.imageCount,
+          image_model: (extra.imageModel as string) ?? null,
+          text_model: (extra.planningModel as string) ?? null,
+        } as never) as unknown as Promise<{
+          error: { message: string } | null;
+        }>
+      ).then(({ error }) => {
+        if (error) {
+          console.warn("[/api/ai] generation log insert failed:", error.message);
+        }
+      });
+    } catch {
+      // Service role not configured (local dev): console log only
+    }
   };
   const premiumAccess = await verifyPremiumGenerationAccess({
     usageMode,
@@ -197,6 +343,10 @@ async function handlePostImageGeneration(
         status: premiumAccess.statusCode,
       }
     );
+  }
+
+  if ("userId" in premiumAccess) {
+    logContext.userId = premiumAccess.userId ?? null;
   }
 
   const industry = String(body.industry ?? "").trim();
@@ -234,6 +384,8 @@ async function handlePostImageGeneration(
       ? [String(body.image)]
       : [];
   const userPrompt = String(body.userPrompt ?? "").trim();
+  logContext.userPrompt = userPrompt;
+  logContext.imageCount = images.length;
   // Follow the user's prompt language: Hangul-free prompts with Latin
   // letters get English copy; everything else keeps the Korean default.
   const preferEnglishOutput =
@@ -587,6 +739,7 @@ async function verifyPremiumGenerationAccess(input: {
     shouldConsumeCredit: true as const,
     accessToken: input.accessToken,
     subscriptionId: subscription.id,
+    userId: user.id,
   };
 }
 
@@ -597,105 +750,49 @@ async function consumeVerifiedPremiumGenerationCredit(
     return { ok: true as const };
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return {
-      ok: false as const,
-      error: "서비스 설정을 확인해주세요. 잠시 후 다시 시도해주세요.",
-      statusCode: 500,
+  // Atomic server-side decrement via RPC (service role): the single UPDATE
+  // gates on the active window AND a positive balance, so concurrent requests
+  // cannot double-spend and the browser has no write path to credits.
+  try {
+    const db = getSupabaseServiceRoleClient();
+    const response = (await (db.rpc("consume_post_generator_credit" as never, {
+      p_user_id: access.userId,
+      p_today: getKoreaDateString(),
+    } as never) as unknown)) as {
+      data: Array<{ remaining_credits: number }> | null;
+      error: { message: string } | null;
     };
-  }
 
-  const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${access.accessToken}`,
-      },
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  });
+    if (response.error) {
+      console.error(
+        "[/api/ai] credit consume RPC failed:",
+        response.error.message
+      );
+      return {
+        ok: false as const,
+        error: "사용량 차감 처리에 실패했습니다. 다시 시도해주세요.",
+        statusCode: 409,
+      };
+    }
 
-  const subscriptionResponse = (await ((
-    supabase
-      .from("subscriptions")
-      .select(
-        "id, plan_type, start_date, end_date, remaining_credits, daily_usage_count, last_usage_date"
-      )
-      .eq("id", access.subscriptionId)
-      .eq("plan_type", POST_GENERATOR_PLAN_TYPE)
-      .maybeSingle() as unknown
-  ) as Promise<{
-    data: SubscriptionGuardRow | null;
-    error: { message: string } | null;
-  }>)) as {
-    data: SubscriptionGuardRow | null;
-    error: { message: string } | null;
-  };
+    if (!response.data || response.data.length === 0) {
+      // Inactive subscription or balance exhausted between verify and consume
+      return {
+        ok: false as const,
+        error: "남은 생성 횟수가 없습니다",
+        statusCode: 403,
+      };
+    }
 
-  const subscription = subscriptionResponse.data;
-  const today = getKoreaDateString();
-  const subscriptionForValidation = {
-    startDate: subscription?.start_date,
-    endDate: subscription?.end_date,
-    remainingCredits: subscription?.remaining_credits,
-    dailyUsageCount: subscription?.daily_usage_count,
-    lastUsageDate: subscription?.last_usage_date,
-  };
-
-  if (
-    subscriptionResponse.error ||
-    !subscription ||
-    !isPostGeneratorSubscriptionActive(subscriptionForValidation, today) ||
-    getRemainingSubscriptionCredits(subscriptionForValidation) <= 0
-  ) {
-    return {
-      ok: false as const,
-      error: "남은 생성 횟수가 없습니다",
-      statusCode: 403,
-    };
-  }
-
-  const nextRemainingCredits =
-    getRemainingSubscriptionCredits(subscriptionForValidation) - 1;
-  const nextDailyUsageCount =
-    getEffectiveDailyUsageCount(subscriptionForValidation, today) + 1;
-
-  const updateResponse = (await ((
-    supabase
-      .from("subscriptions")
-      .update(
-        {
-          remaining_credits: nextRemainingCredits,
-          daily_usage_count: nextDailyUsageCount,
-          last_usage_date: today,
-        } as never
-      )
-      .eq("id", access.subscriptionId)
-      .select("id")
-      .single() as unknown
-  ) as Promise<{
-    data: { id?: string } | null;
-    error: { message: string } | null;
-  }>)) as {
-    data: { id?: string } | null;
-    error: { message: string } | null;
-  };
-
-  if (updateResponse.error || !updateResponse.data?.id) {
+    return { ok: true as const };
+  } catch (error) {
+    console.error("[/api/ai] credit consume failed:", error);
     return {
       ok: false as const,
       error: "사용량 차감 처리에 실패했습니다. 다시 시도해주세요.",
-      statusCode: 409,
+      statusCode: 500,
     };
   }
-
-  return { ok: true as const };
 }
 
 function readCookie(cookieHeader: string, name: string) {
@@ -833,6 +930,7 @@ ${channelTone}
 - 반드시 계정명, 업종, 상품/서비스, 계정 방향, 소개글, 운영 컨셉을 우선 참고해 이 계정에 실제로 올라갈 법한 게시물만 작성하세요
 - 결과는 하나의 일회성 광고처럼 쓰지 말고, 이 계정이 꾸준히 운영되는 흐름 안에 들어가는 게시물처럼 써주세요
 - 계정 소개글과 운영 컨셉에 드러난 말투, 분위기, 브랜드 톤을 자연스럽게 반영하세요
+- 이전 생성 결과가 있으면 문구는 반복하지 말되, 그 게시물의 브랜드 말투·페르소나와 일관된 목소리를 유지하세요 (같은 계정이 연재하는 느낌)
 - 상품/서비스의 실제 쓰임, 장점, 타깃 고객, 사용 장면이 드러나야 하며 일반적인 마케팅 문구로 얼버무리지 마세요
 - 사용자 요청 방향이 있으면 가장 우선으로 반영하되, 나머지 계정 정보와 충돌 없이 자연스럽게 결합하세요
 - title, content, hashtags는 모두 이 비즈니스에 맞는 구체적인 결과여야 합니다
