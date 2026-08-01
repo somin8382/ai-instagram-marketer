@@ -1,5 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { assertAdmin, getSupabaseServiceRoleClient } from "@/lib/server/admin";
+import {
+  assertAdmin,
+  escapePostgrestFilterValue,
+  getSupabaseServiceRoleClient,
+} from "@/lib/server/admin";
 
 function extractBearerToken(request: NextRequest): string {
   const auth = request.headers.get("authorization") ?? "";
@@ -81,9 +85,9 @@ export async function GET(request: NextRequest) {
         .select("*")
         .or(
           actualUserId
-            ? `user_id.eq.${actualUserId}`
+            ? `user_id.eq.${escapePostgrestFilterValue(String(actualUserId))}`
             : emailToSearch
-              ? `email.ilike.${emailToSearch}`
+              ? `email.ilike.${escapePostgrestFilterValue(String(emailToSearch))}`
               : ""
         )
         .order("created_at", { ascending: false })
@@ -96,21 +100,33 @@ export async function GET(request: NextRequest) {
     // totals stay correct even though the returned list is capped at 50.
     let posts: GeneratedPostRow[] = [];
     let postsTotalCount = 0;
+    let freeTrialCountExact = 0;
     if (actualUserId) {
-      const postsRes = (await (
-        db
+      // Exact total + exact free-trial count (head-only) so the free/paid
+      // split is correct even for users with more than the 50 returned rows.
+      const [postsRes, freeCountRes] = await Promise.all([
+        (db
           .from("generated_posts")
           .select("*", { count: "exact" })
           .eq("user_id", actualUserId)
           .order("created_at", { ascending: false })
-          .limit(50) as unknown
-      )) as {
-        data: GeneratedPostRow[];
-        count: number | null;
-        error: { message: string } | null;
-      };
+          .limit(50) as unknown) as Promise<{
+          data: GeneratedPostRow[];
+          count: number | null;
+          error: { message: string } | null;
+        }>,
+        (db
+          .from("generated_posts")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", actualUserId)
+          .eq("is_free_trial", true) as unknown) as Promise<{
+          count: number | null;
+          error: { message: string } | null;
+        }>,
+      ]);
       posts = postsRes.error ? [] : postsRes.data || [];
       postsTotalCount = postsRes.error ? 0 : (postsRes.count ?? posts.length);
+      freeTrialCountExact = freeCountRes.error ? 0 : (freeCountRes.count ?? 0);
     }
 
     // Login history (full, newest first) + auth metadata for first/latest login
@@ -156,9 +172,10 @@ export async function GET(request: NextRequest) {
     let firstAccessAt: string | null = null;
     const accessCount: number | null = loginCount > 0 ? loginCount : null;
     if (actualUserId) {
+      const safeUid = escapePostgrestFilterValue(String(actualUserId));
       const orFilter = emailToSearch
-        ? `user_id.eq.${actualUserId},email.ilike.${emailToSearch}`
-        : `user_id.eq.${actualUserId}`;
+        ? `user_id.eq.${safeUid},email.ilike.${escapePostgrestFilterValue(String(emailToSearch))}`
+        : `user_id.eq.${safeUid}`;
       const [earliestLoginRes, earliestPostRes, earliestAppRes] =
         await Promise.all([
           (db
@@ -261,10 +278,10 @@ export async function GET(request: NextRequest) {
       if (!logsRes.error && logsRes.data) generationLogs = logsRes.data;
     }
 
-    // Calculate metrics (free/paid split is derived from the 50 returned rows;
-    // the total uses the exact count)
+    // Calculate metrics — total, free, and paid all use exact counts (not the
+    // 50-row window), so paid isn't overstated for users with >50 posts.
     const totalGenerations = postsTotalCount;
-    const freeTrialGenerations = posts.filter((p) => p.is_free_trial).length;
+    const freeTrialGenerations = freeTrialCountExact;
     const paidGenerations = Math.max(totalGenerations - freeTrialGenerations, 0);
     const latestPost = posts[0] || null;
     const latestCreatedAt = latestPost?.created_at;
@@ -273,7 +290,25 @@ export async function GET(request: NextRequest) {
     const subscriptionData = subscription as SubscriptionRow;
     const latestPostData = latestPost as GeneratedPostRow;
 
+    // Admin memo (특이사항), keyed by lowercased email.
+    let note = "";
+    const noteEmail = (grantEmail || email || "").trim().toLowerCase();
+    if (noteEmail) {
+      const noteRes = (await (
+        db
+          .from("admin_user_notes")
+          .select("note")
+          .eq("email", noteEmail)
+          .maybeSingle() as unknown
+      )) as {
+        data: { note: string } | null;
+        error: { message: string } | null;
+      };
+      if (!noteRes.error && noteRes.data) note = noteRes.data.note ?? "";
+    }
+
     return NextResponse.json({
+      note,
       user: {
         id: actualUserId || null,
         email: (profileData?.email as string | null) || email || null,

@@ -51,6 +51,8 @@ export async function PATCH(request: NextRequest) {
     update.generator_months = body.generator_months || null;
   if ("generator_credits" in body)
     update.generator_credits = Number(body.generator_credits) || 40;
+  if ("field" in body)
+    update.field = body.field === "local" ? "local" : "tech";
 
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: "변경할 항목이 없습니다." }, { status: 400 });

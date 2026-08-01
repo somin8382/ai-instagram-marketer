@@ -1,5 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { assertAdmin, getSupabaseServiceRoleClient } from "@/lib/server/admin";
+import {
+  assertAdmin,
+  escapePostgrestFilterValue,
+  getSupabaseServiceRoleClient,
+} from "@/lib/server/admin";
 
 function extractBearerToken(request: NextRequest): string {
   const auth = request.headers.get("authorization") ?? "";
@@ -21,7 +25,8 @@ export async function GET(request: NextRequest) {
   }
 
   const q = request.nextUrl.searchParams.get("q") ?? "";
-  const trimmed = q.trim().toLowerCase();
+  // Escape PostgREST filter metacharacters before interpolating into .or().
+  const trimmed = escapePostgrestFilterValue(q.trim().toLowerCase());
 
   if (!trimmed || trimmed.length < 2) {
     return NextResponse.json({ results: [] });

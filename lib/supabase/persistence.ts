@@ -114,6 +114,7 @@ type ApplicationPersistenceInput = {
   marketingChannel: string;
   channelUrl: string;
   mainContentUrl: string;
+  commentsIncluded?: boolean;
   accountDirection?: string;
   accountBio?: string;
   accountConcept?: string;
@@ -337,6 +338,7 @@ const OPTIONAL_APPLICATION_COLUMNS = new Set([
   "invoice_email",
   "channel_url",
   "main_content_url",
+  "comments_included",
 ]);
 
 function getMissingApplicationColumnName(errorMessage?: string | null) {
@@ -986,6 +988,10 @@ export async function persistApplicationSubmission(
 
   if (normalizedMainContentUrl) {
     optionalApplicationPayload.main_content_url = normalizedMainContentUrl;
+  }
+
+  if (typeof input.commentsIncluded === "boolean") {
+    optionalApplicationPayload.comments_included = input.commentsIncluded;
   }
 
   if (input.taxInvoiceRequested) {
@@ -1846,6 +1852,7 @@ export async function persistGrantedApplicationSubmission(input: {
   marketingChannel: string;
   channelUrl: string;
   mainContentUrl: string;
+  commentsIncluded?: boolean;
   accountDirection?: string;
   accountBio?: string;
   accountConcept?: string;
@@ -1942,6 +1949,9 @@ export async function persistGrantedApplicationSubmission(input: {
   if (accountDirection) submissionFields.account_direction = accountDirection;
   if (accountBio) submissionFields.account_bio = accountBio;
   if (accountConcept) submissionFields.account_concept = accountConcept;
+  if (typeof input.commentsIncluded === "boolean") {
+    submissionFields.comments_included = input.commentsIncluded;
+  }
 
   // ── UPDATE ───────────────────────────────────────────────────────────────
   if (existingId) {

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { AdminNav } from "@/lib/ui/admin-nav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,25 @@ type UserRow = {
   mentorOrg: string | null;
   aiMarketer: boolean;
   aiGenerator: boolean;
+  marketerQuantity: number | null;
+  marketerMonths: string | null; // 마케터 이용 월 목록 ("7,8")
+  generatorMonths: string | null; // 생성기 이용 월 목록 ("7,8")
+  field: string; // "local" | "tech"
+  note: string; // 관리자 메모(특이사항)
+  tossStatus: string; // 토스 진행 상태: "wait"(대기) | "in_progress"(진행중)
+  augustMarketing: string | null; // 8월 마케팅: "keep"|"change"|"pending"|null(미해당)
+  instagramUrl: string | null; // 마케터 제출 채널(인스타그램) 주소
+  postUrl: string | null; // 마케터 제출 대표 게시물 주소
+  instaFollowerCount: number | null; // 최근 기록된 인스타 팔로워 수
+  instaFollowerDate: string | null; // 그 기록 날짜(YYYY-MM-DD)
+  youtubeSubCount: number | null; // 최근 기록된 유튜브 구독자 수
+  youtubeSubDate: string | null;
+  youtubeViewCount: number | null; // 유튜브 조회수
+  youtubeViewDate: string | null;
+  postLikesCount: number | null; // 메인 게시물 좋아요 수
+  postLikesDate: string | null;
+  postCommentsCount: number | null; // 메인 게시물 댓글 수
+  postCommentsDate: string | null;
   aiMarketerSub: boolean;
   aiGeneratorSub: boolean;
   freeUser: boolean;
@@ -29,6 +48,7 @@ type UserRow = {
   subscriptionActive: boolean;
   subscriptionEndDate: string | null;
   remainingCredits: number | null;
+  grantGeneratorCredits: number | null;
   aiGenerationCount: number;
   freeTrialCount: number;
   lastGeneratedAt: string | null;
@@ -47,6 +67,7 @@ type UserRow = {
 type ApplicationRecord = Record<string, unknown>;
 
 type UserDetail = {
+  note: string;
   user: {
     id: string | null;
     email: string | null;
@@ -141,6 +162,11 @@ function fmtDate(value: string | null | undefined): string {
   return new Date(value).toLocaleDateString("ko-KR");
 }
 
+// 분야: local(로컬) | tech(기술). 기본 tech.
+function fieldLabel(field: string | null | undefined): string {
+  return field === "local" ? "로컬" : "기술";
+}
+
 function fmtDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleString("ko-KR", {
@@ -166,57 +192,159 @@ function activityLabel(
   return { label: `${days}일 전`, cls: "text-red-500" };
 }
 
+// "7,8" → [7, 8] (상품별 이용 개월 목록 파싱). 공백·빈값 안전.
+function parseMonths(list: string | null | undefined): number[] {
+  if (!list) return [];
+  return String(list)
+    .split(/[,\s]+/)
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 12)
+    .sort((a, b) => a - b);
+}
+
+type ViewMode = "normal" | "capture" | "marketer";
+const ALL_MODES: ViewMode[] = ["normal", "capture", "marketer"];
+
+type MetricKey =
+  | "instagram"
+  | "youtube"
+  | "youtube_views"
+  | "post_likes"
+  | "post_comments";
+
+// 각 열이 어느 보기 모드에서 내보내지는지(modes)를 화면 표의 열 노출과 일치시킨다.
+// 엑셀 내려받기는 "지금 보는 표"의 열만 나가도록 현재 모드로 필터링한다.
 const EXPORT_COLUMNS: Array<{
   header: string;
+  modes: ViewMode[];
   get: (u: UserRow) => string | number;
 }> = [
-  { header: "이름", get: (u) => u.name ?? "" },
-  { header: "이메일", get: (u) => u.email ?? "" },
-  { header: "구분", get: (u) => (u.signedUp ? "가입" : "미가입") },
-  { header: "회사", get: (u) => u.companyName ?? "" },
-  { header: "브랜드", get: (u) => u.brandName ?? "" },
-  { header: "주관기관", get: (u) => u.hostOrg ?? "" },
-  { header: "멘토기관", get: (u) => u.mentorOrg ?? "" },
-  { header: "전화", get: (u) => u.phone ?? "" },
-  { header: "무료 유저", get: (u) => (u.freeUser ? "O" : "") },
-  { header: "AI 마케터 구독", get: (u) => (u.aiMarketerSub ? "O" : "") },
-  { header: "AI 생성기 구독", get: (u) => (u.aiGeneratorSub ? "O" : "") },
-  { header: "가입/등록일", get: (u) => u.createdAt?.slice(0, 10) ?? "" },
-  { header: "최초 접속일", get: (u) => u.firstAccessAt?.slice(0, 10) ?? "-" },
-  { header: "접속 횟수", get: (u) => (u.accessCount === null ? "-" : u.accessCount) },
-  { header: "최근 로그인", get: (u) => u.lastLoginAt?.slice(0, 10) ?? "" },
-  { header: "최근 활동", get: (u) => u.lastActivityAt?.slice(0, 10) ?? "" },
-  { header: "로그인 수", get: (u) => u.loginCount },
-  { header: "AI 생성 수", get: (u) => u.aiGenerationCount },
+  { header: "이름", modes: ALL_MODES, get: (u) => u.name ?? "" },
+  { header: "이메일", modes: ALL_MODES, get: (u) => u.email ?? "" },
+  { header: "구분", modes: ["normal", "marketer"], get: (u) => (u.signedUp ? "가입" : "미가입") },
+  { header: "분야", modes: ALL_MODES, get: (u) => fieldLabel(u.field) },
+  { header: "메모", modes: ["normal", "marketer"], get: (u) => u.note ?? "" },
   {
-    header: "남은 크레딧",
-    get: (u) => (u.remainingCredits === null ? "" : u.remainingCredits),
+    header: "토스",
+    modes: ["normal"],
+    get: (u) => (u.tossStatus === "in_progress" ? "진행중" : "대기"),
+  },
+  {
+    header: "8월 마케팅",
+    modes: ["normal"],
+    get: (u) =>
+      u.augustMarketing === null
+        ? ""
+        : u.augustMarketing === "keep"
+          ? "유지"
+          : u.augustMarketing === "change"
+            ? "변경"
+            : "미정",
+  },
+  { header: "회사", modes: ALL_MODES, get: (u) => u.companyName ?? "" },
+  { header: "브랜드", modes: ["normal"], get: (u) => u.brandName ?? "" },
+  { header: "주관기관", modes: ["normal", "capture"], get: (u) => u.hostOrg ?? "" },
+  { header: "멘토기관", modes: ALL_MODES, get: (u) => u.mentorOrg ?? "" },
+  { header: "전화", modes: ["normal"], get: (u) => u.phone ?? "" },
+  { header: "무료 유저", modes: ["normal"], get: (u) => (u.freeUser ? "O" : "") },
+  { header: "AI 마케터 구독", modes: ["normal", "capture"], get: (u) => (u.aiMarketerSub ? "O" : "") },
+  { header: "AI 생성기 구독", modes: ["normal", "capture"], get: (u) => (u.aiGeneratorSub ? "O" : "") },
+  {
+    header: "마케터 개월",
+    modes: ["normal", "capture"],
+    get: (u) => (u.aiMarketer ? parseMonths(u.marketerMonths).join(",") : ""),
+  },
+  {
+    header: "생성기 개월",
+    modes: ["normal", "capture"],
+    get: (u) => (u.aiGenerator ? parseMonths(u.generatorMonths).join(",") : ""),
+  },
+  { header: "가입/등록일", modes: ["normal"], get: (u) => u.createdAt?.slice(0, 10) ?? "" },
+  { header: "최초 접속일", modes: ["normal", "capture"], get: (u) => (u.firstAccessAt ?? u.createdAt)?.slice(0, 10) ?? "-" },
+  { header: "접속 횟수", modes: ["normal"], get: (u) => (u.accessCount === null ? "-" : u.accessCount) },
+  { header: "최근 로그인", modes: ["normal"], get: (u) => u.lastLoginAt?.slice(0, 10) ?? "" },
+  { header: "최근 활동", modes: ["normal"], get: (u) => u.lastActivityAt?.slice(0, 10) ?? "" },
+  { header: "로그인 수", modes: ["normal"], get: (u) => u.loginCount },
+  { header: "AI 생성 수", modes: ["normal"], get: (u) => u.aiGenerationCount },
+  {
+    header: "마케터 크레딧",
+    modes: ["normal", "capture"],
+    get: (u) => (u.marketerQuantity === null ? "" : u.marketerQuantity),
+  },
+  {
+    header: "생성기 크레딧",
+    modes: ALL_MODES,
+    get: (u) =>
+      u.remainingCredits !== null
+        ? u.remainingCredits
+        : u.grantGeneratorCredits !== null
+          ? `${u.grantGeneratorCredits} (부여)`
+          : "",
   },
   {
     header: "마케터 제출",
+    modes: ["normal", "marketer"],
     get: (u) =>
       u.aiMarketer ? (u.marketerSubmitted ? "제출완료" : "미제출") : "",
   },
-  { header: "문의 수", get: (u) => u.inquiryCount },
+  { header: "인스타그램 주소", modes: ["marketer"], get: (u) => u.instagramUrl ?? "" },
+  { header: "게시물 주소", modes: ["marketer"], get: (u) => u.postUrl ?? "" },
+  {
+    header: "인스타 팔로워",
+    modes: ["marketer"],
+    get: (u) => (u.instaFollowerCount === null ? "" : u.instaFollowerCount),
+  },
+  {
+    header: "유튜브 구독자",
+    modes: ["marketer"],
+    get: (u) => (u.youtubeSubCount === null ? "" : u.youtubeSubCount),
+  },
+  {
+    header: "유튜브 조회수",
+    modes: ["marketer"],
+    get: (u) => (u.youtubeViewCount === null ? "" : u.youtubeViewCount),
+  },
+  {
+    header: "게시물 좋아요",
+    modes: ["marketer"],
+    get: (u) => (u.postLikesCount === null ? "" : u.postLikesCount),
+  },
+  {
+    header: "게시물 댓글",
+    modes: ["marketer"],
+    get: (u) => (u.postCommentsCount === null ? "" : u.postCommentsCount),
+  },
+  { header: "문의 수", modes: ["normal", "capture"], get: (u) => u.inquiryCount },
 ];
 
-async function exportXlsx(rows: UserRow[]) {
+async function exportXlsx(rows: UserRow[], viewMode: ViewMode = "normal") {
+  // Security note (xlsx@0.18.5): the advisories scanners flag against this
+  // package (prototype pollution CVE-2023-30533, ReDoS CVE-2024-22363) are in
+  // the PARSE path (read / sheet_to_json of untrusted files). This code is
+  // write-only — json_to_sheet + writeFile of admin-owned data — so those CVEs
+  // are not reachable here. Accepted low risk: staying on the npm build avoids
+  // a CDN-tarball dependency that would complicate CI/Vercel installs. Revisit
+  // if any read/parse usage is ever added.
   const XLSX = await import("xlsx");
+  // "지금 보는 표"와 동일하게 — 현재 보기 모드에서 노출되는 열만 내보낸다.
+  const columns = EXPORT_COLUMNS.filter((c) => c.modes.includes(viewMode));
   const data = rows.map((row) => {
     const record: Record<string, string | number> = {};
-    for (const column of EXPORT_COLUMNS) {
+    for (const column of columns) {
       record[column.header] = column.get(row);
     }
     return record;
   });
   const sheet = XLSX.utils.json_to_sheet(data, {
-    header: EXPORT_COLUMNS.map((c) => c.header),
+    header: columns.map((c) => c.header),
   });
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "사용자");
+  const modeTag =
+    viewMode === "capture" ? "_캡쳐용" : viewMode === "marketer" ? "_마케터" : "";
   XLSX.writeFile(
     workbook,
-    `users_${new Date().toISOString().slice(0, 10)}.xlsx`
+    `users${modeTag}_${new Date().toISOString().slice(0, 10)}.xlsx`
   );
 }
 
@@ -253,6 +381,38 @@ function Dot({ on }: { on: boolean }) {
   );
 }
 
+// 상품별 이용 개월 목록. 해당 상품 미이용이면 "—", 기준 월(highlight)이
+// 목록에 있으면 그 월만 강조해 "8월 이용 여부"를 한눈에 보이게 한다.
+function MonthsCell({
+  months,
+  on,
+  highlight,
+}: {
+  months: string | null;
+  on: boolean;
+  highlight: string;
+}) {
+  const ms = parseMonths(months);
+  if (!on || ms.length === 0) return <span className="text-gray-300">—</span>;
+  const hl = highlight !== "all" ? Number(highlight) : null;
+  return (
+    <span className="inline-flex flex-wrap justify-center gap-0.5">
+      {ms.map((m) => (
+        <span
+          key={m}
+          className={
+            hl === m
+              ? "rounded bg-violet-100 text-violet-700 font-semibold px-1"
+              : "text-gray-600 px-0.5"
+          }
+        >
+          {m}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminUsersPage() {
@@ -267,12 +427,14 @@ export default function AdminUsersPage() {
   // Filters
   const [query, setQuery] = useState("");
   const [hostOrgFilter, setHostOrgFilter] = useState("all");
+  const [fieldFilter, setFieldFilter] = useState("all"); // all | local | tech
   const [signupStateFilter, setSignupStateFilter] = useState("all"); // all | signed | pre
   const [serviceFilter, setServiceFilter] = useState("all"); // all | free | marketer | generator
   const [signupFilter, setSignupFilter] = useState("all");
   const [activityFilter, setActivityFilter] = useState("all");
   const [subscriptionFilter, setSubscriptionFilter] = useState("all");
   const [marketerFilter, setMarketerFilter] = useState("all");
+  const [monthFilter, setMonthFilter] = useState("all"); // 기준 월: all | "1".."12"
   const [creditFilter, setCreditFilter] = useState("all"); // all | low | zero
   const [inquiryFilter, setInquiryFilter] = useState("all"); // all | any | open
   const [minLogins, setMinLogins] = useState("");
@@ -281,14 +443,47 @@ export default function AdminUsersPage() {
   // Sort
   const [sortField, setSortField] = useState<SortField>("createdAt");
   const [sortDesc, setSortDesc] = useState(true);
+  // 표 보기 모드 (상호 배타):
+  //  - "capture" (캡쳐용): 구분·메모·가입등록일·최근활동·접속·로그인·AI생성·무료·마케터제출 숨김
+  //  - "marketer" (마케터 검토용): 사용자·구분·분야·회사·메모·멘토기관·생성기크레딧·마케터제출만
+  const [viewMode, setViewMode] = useState<"normal" | "capture" | "marketer">(
+    "normal"
+  );
+  const cap = viewMode === "capture";
+  const mkt = viewMode === "marketer";
+
+  // 마케터 검토용: 팔로워/구독자/좋아요/댓글 인라인 입력 (draft = 편집 중 값)
+  //   metricDraft[userId][metricKey] = 편집 중 문자열
+  const [metricDraft, setMetricDraft] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [metricError, setMetricError] = useState<string | null>(null);
+
+  // 토스 상태 변경 2단계 확인: tossConfirm[userId] = 확인 대기 중인 목표 상태
+  const [tossConfirm, setTossConfirm] = useState<Record<string, string>>({});
 
   // Detail
   const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
   const [detail, setDetail] = useState<UserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailTab, setDetailTab] = useState<
-    "summary" | "logins" | "posts" | "genlogs" | "marketer" | "credits"
+    "summary" | "memo" | "logins" | "posts" | "genlogs" | "marketer" | "credits"
   >("summary");
+
+  // Email edit (detail view)
+  const [emailEditing, setEmailEditing] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailResult, setEmailResult] = useState<string | null>(null);
+
+  // 분야(로컬/기술) edit (detail view)
+  const [fieldSaving, setFieldSaving] = useState(false);
+  const [fieldResult, setFieldResult] = useState<string | null>(null);
+
+  // 메모(특이사항) edit (detail view)
+  const [noteInput, setNoteInput] = useState("");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteResult, setNoteResult] = useState<string | null>(null);
 
   // Marketer edit
   const [marketerForm, setMarketerForm] = useState<MarketerEditForm | null>(
@@ -348,6 +543,12 @@ export default function AdminUsersPage() {
     setSelectedUser(user);
     setDetail(null);
     setDetailTab("summary");
+    setEmailEditing(false);
+    setEmailInput(user.email ?? "");
+    setEmailResult(null);
+    setFieldResult(null);
+    setNoteInput(user.note ?? "");
+    setNoteResult(null);
     setMarketerForm(null);
     setMarketerResult(null);
     setGrantAmount("");
@@ -367,12 +568,251 @@ export default function AdminUsersPage() {
       if (res.ok) {
         const data = (await res.json()) as UserDetail;
         setDetail(data);
+        setNoteInput(data.note ?? "");
         if (data.applications.length > 0) {
           setMarketerForm(applicationToEditForm(data.applications[0]));
         }
       }
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function saveEmail() {
+    if (!selectedUser || emailSaving) return;
+    const newEmail = emailInput.trim();
+    if (!newEmail) {
+      setEmailResult("오류: 이메일을 입력해주세요.");
+      return;
+    }
+    if (newEmail.toLowerCase() === (selectedUser.email ?? "").toLowerCase()) {
+      setEmailResult("오류: 기존 이메일과 동일합니다.");
+      return;
+    }
+    setEmailSaving(true);
+    setEmailResult(null);
+    try {
+      const res = await adminFetch("/api/admin/users/email", accessToken, {
+        method: "PATCH",
+        body: JSON.stringify({
+          userId: detail?.user.id ?? null,
+          currentEmail: selectedUser.email,
+          newEmail,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        newEmail?: string;
+        warning?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) {
+        setEmailResult(`오류: ${data.error ?? "이메일 변경에 실패했습니다."}`);
+        return;
+      }
+      const updated = { ...selectedUser, email: data.newEmail ?? newEmail };
+      setEmailEditing(false);
+      // Refresh the list and reopen detail with the new email (openDetail
+      // clears transient state, so set the result message afterwards).
+      void loadUsers(accessToken);
+      await openDetail(updated);
+      setEmailResult(data.warning ?? "이메일이 변경되었습니다.");
+    } catch {
+      setEmailResult("오류: 이메일 변경에 실패했습니다.");
+    } finally {
+      setEmailSaving(false);
+    }
+  }
+
+  async function saveField(value: string) {
+    if (fieldSaving || !selectedUser) return;
+    const grantId =
+      detail && detail.grant ? (detail.grant.id as string | undefined) : undefined;
+    if (!grantId) {
+      setFieldResult("이 사용자는 사전등록(grant)이 없어 분야를 저장할 수 없습니다.");
+      return;
+    }
+    setFieldSaving(true);
+    setFieldResult(null);
+    try {
+      const res = await adminFetch("/api/admin/grants", accessToken, {
+        method: "PATCH",
+        body: JSON.stringify({ id: grantId, field: value }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setFieldResult(`오류: ${data.error ?? "저장에 실패했습니다."}`);
+        return;
+      }
+      void loadUsers(accessToken);
+      await openDetail({ ...selectedUser, field: value });
+      setFieldResult("분야가 저장되었습니다.");
+    } catch {
+      setFieldResult("오류: 저장에 실패했습니다.");
+    } finally {
+      setFieldSaving(false);
+    }
+  }
+
+  const storedMetric = (u: UserRow, metric: MetricKey): number | null =>
+    metric === "instagram"
+      ? u.instaFollowerCount
+      : metric === "youtube"
+        ? u.youtubeSubCount
+        : metric === "youtube_views"
+          ? u.youtubeViewCount
+          : metric === "post_likes"
+            ? u.postLikesCount
+            : u.postCommentsCount;
+
+  // 지표(팔로워/구독자/좋아요/댓글)를 오늘 날짜로 저장 (마케터 검토용 인라인).
+  // 값이 비어있거나 기존과 같으면 무시. 성공 시 users 낙관적 갱신 + draft 비움.
+  async function saveMetric(user: UserRow, metric: MetricKey, raw: string) {
+    const clearDraft = () =>
+      setMetricDraft((d) => {
+        const cur = { ...(d[user.id] ?? {}) };
+        delete cur[metric];
+        return { ...d, [user.id]: cur };
+      });
+    const trimmed = raw.replace(/,/g, "").trim();
+    const stored = storedMetric(user, metric);
+    if (trimmed === "") {
+      clearDraft();
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isInteger(n) || n < 0) {
+      setMetricError(`${user.name || user.email}: 0 이상의 숫자만 입력하세요.`);
+      return;
+    }
+    if (n === stored) {
+      clearDraft();
+      return;
+    }
+    setMetricError(null);
+    try {
+      const res = await adminFetch("/api/admin/users/metrics", accessToken, {
+        method: "PUT",
+        body: JSON.stringify({ email: user.email, platform: metric, count: n }),
+      });
+      const data = (await res.json()) as { recordedOn?: string; error?: string };
+      if (!res.ok) {
+        setMetricError(`저장 실패: ${data.error ?? ""}`);
+        return;
+      }
+      const today =
+        data.recordedOn ??
+        new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+      setUsers((prev) =>
+        prev.map((u) => {
+          if (u.id !== user.id) return u;
+          switch (metric) {
+            case "instagram":
+              return { ...u, instaFollowerCount: n, instaFollowerDate: today };
+            case "youtube":
+              return { ...u, youtubeSubCount: n, youtubeSubDate: today };
+            case "youtube_views":
+              return { ...u, youtubeViewCount: n, youtubeViewDate: today };
+            case "post_likes":
+              return { ...u, postLikesCount: n, postLikesDate: today };
+            default:
+              return { ...u, postCommentsCount: n, postCommentsDate: today };
+          }
+        })
+      );
+      clearDraft();
+    } catch {
+      setMetricError("저장 중 오류가 발생했습니다.");
+    }
+  }
+
+  // 마케터 검토용의 지표 입력 셀 (팔로워/구독자/좋아요/댓글 공통).
+  function metricCell(
+    user: UserRow,
+    metric: MetricKey,
+    count: number | null,
+    date: string | null
+  ) {
+    return (
+      <td
+        className="px-3 py-2.5 text-right"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          type="text"
+          inputMode="numeric"
+          value={
+            metricDraft[user.id]?.[metric] ??
+            (count != null ? String(count) : "")
+          }
+          onChange={(e) =>
+            setMetricDraft((d) => ({
+              ...d,
+              [user.id]: { ...(d[user.id] ?? {}), [metric]: e.target.value },
+            }))
+          }
+          onBlur={(e) => void saveMetric(user, metric, e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          placeholder="—"
+          className="w-24 px-2 py-1 text-right text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-gray-400"
+        />
+        {date && (
+          <p className="text-[10px] text-gray-400 mt-0.5">{date.slice(5)} 기준</p>
+        )}
+      </td>
+    );
+  }
+
+  // 토스 상태 저장 (2단계 확인 후). users 낙관적 갱신.
+  async function saveToss(user: UserRow, status: string) {
+    setTossConfirm((c) => {
+      const next = { ...c };
+      delete next[user.id];
+      return next;
+    });
+    try {
+      const res = await adminFetch("/api/admin/users/toss", accessToken, {
+        method: "PUT",
+        body: JSON.stringify({ email: user.email, status }),
+      });
+      if (!res.ok) return;
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, tossStatus: status } : u))
+      );
+    } catch {
+      // 무시: 실패 시 상태 유지
+    }
+  }
+
+  async function saveNote() {
+    if (!selectedUser || noteSaving) return;
+    const email = selectedUser.email;
+    if (!email) {
+      setNoteResult("오류: 이메일이 없어 메모를 저장할 수 없습니다.");
+      return;
+    }
+    setNoteSaving(true);
+    setNoteResult(null);
+    try {
+      const res = await adminFetch("/api/admin/users/note", accessToken, {
+        method: "PUT",
+        body: JSON.stringify({ email, note: noteInput }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        setNoteResult(`오류: ${data.error ?? "저장에 실패했습니다."}`);
+        return;
+      }
+      setNoteResult("메모가 저장되었습니다.");
+      // Reflect in the open row + refresh the list so 전체 보기에도 반영.
+      setSelectedUser({ ...selectedUser, note: noteInput });
+      void loadUsers(accessToken);
+    } catch {
+      setNoteResult("오류: 저장에 실패했습니다.");
+    } finally {
+      setNoteSaving(false);
     }
   }
 
@@ -483,6 +923,8 @@ export default function AdminUsersPage() {
           user.companyName,
           user.brandName,
           user.hostOrg,
+          user.mentorOrg,
+          user.note,
         ]
           .filter(Boolean)
           .join(" ")
@@ -496,6 +938,7 @@ export default function AdminUsersPage() {
       if (serviceFilter === "generator" && !user.aiGeneratorSub) return false;
       if (hostOrgFilter !== "all" && user.hostOrg !== hostOrgFilter)
         return false;
+      if (fieldFilter !== "all" && user.field !== fieldFilter) return false;
       if (signupFilter !== "all") {
         const created = user.createdAt ? new Date(user.createdAt).getTime() : 0;
         const days = Number(signupFilter);
@@ -544,6 +987,14 @@ export default function AdminUsersPage() {
       }
       if (minLoginCount > 0 && user.loginCount < minLoginCount) return false;
       if (minGenCount > 0 && user.aiGenerationCount < minGenCount) return false;
+      if (monthFilter !== "all") {
+        const m = Number(monthFilter);
+        const inMarketer =
+          user.aiMarketer && parseMonths(user.marketerMonths).includes(m);
+        const inGenerator =
+          user.aiGenerator && parseMonths(user.generatorMonths).includes(m);
+        if (!inMarketer && !inGenerator) return false;
+      }
       return true;
     });
 
@@ -570,7 +1021,7 @@ export default function AdminUsersPage() {
         (sortField === "createdAt"
           ? u.createdAt
           : sortField === "firstAccessAt"
-            ? u.firstAccessAt
+            ? u.firstAccessAt ?? u.createdAt
             : u.lastActivityAt) ?? "";
       return dir * pick(a).localeCompare(pick(b));
     });
@@ -579,12 +1030,14 @@ export default function AdminUsersPage() {
     loadedAtMs,
     query,
     hostOrgFilter,
+    fieldFilter,
     signupStateFilter,
     serviceFilter,
     signupFilter,
     activityFilter,
     subscriptionFilter,
     marketerFilter,
+    monthFilter,
     creditFilter,
     inquiryFilter,
     minLogins,
@@ -633,24 +1086,49 @@ export default function AdminUsersPage() {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <div className="max-w-[1500px] mx-auto px-4 py-8 space-y-5">
+        <AdminNav current="users" />
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">전체 유저</h1>
             <p className="text-sm text-gray-500 mt-0.5">
+              가입·미가입 사용자를 검색하고 상세 정보·크레딧을 관리합니다.
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
               전체 {users.length.toLocaleString()}명 (미가입 포함) · 필터 결과{" "}
               {filtered.length.toLocaleString()}명
               {generatedAt &&
                 ` · 갱신 ${new Date(generatedAt).toLocaleTimeString("ko-KR")}`}
+              {" · "}미가입 = 아직 회원가입하지 않은 사전등록 사용자
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Link
-              href="/admin"
-              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+            <button
+              onClick={() =>
+                setViewMode((v) => (v === "capture" ? "normal" : "capture"))
+              }
+              title="켜면 구분·메모·가입등록일·접속·로그인·AI생성·무료·마케터제출 열을 숨깁니다 — 화면 캡쳐용"
+              className={`text-sm px-4 py-2 rounded-xl border transition-colors ${
+                cap
+                  ? "border-gray-900 bg-gray-900 text-white hover:bg-gray-700"
+                  : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              }`}
             >
-              ← 대시보드
-            </Link>
+              캡쳐용{cap ? " ✓" : ""}
+            </button>
+            <button
+              onClick={() =>
+                setViewMode((v) => (v === "marketer" ? "normal" : "marketer"))
+              }
+              title="사용자·구분·분야·회사·메모·멘토기관·생성기크레딧·마케터제출만 표시 — 마케터 검토용"
+              className={`text-sm px-4 py-2 rounded-xl border transition-colors ${
+                mkt
+                  ? "border-gray-900 bg-gray-900 text-white hover:bg-gray-700"
+                  : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              마케터 검토용{mkt ? " ✓" : ""}
+            </button>
             <button
               onClick={() => loadUsers(accessToken)}
               className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
@@ -658,11 +1136,19 @@ export default function AdminUsersPage() {
               새로고침
             </button>
             <button
-              onClick={() => void exportXlsx(filtered)}
+              onClick={() => void exportXlsx(filtered, viewMode)}
               disabled={filtered.length === 0}
+              title={
+                mkt
+                  ? "마케터 검토용 열 구성으로 내보내기"
+                  : cap
+                    ? "캡쳐용 열 구성으로 내보내기"
+                    : "전체 열로 내보내기"
+              }
               className="text-sm px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors disabled:opacity-40"
             >
-              엑셀 내보내기 ({filtered.length})
+              엑셀 내보내기 ({filtered.length}
+              {mkt ? " · 마케터" : cap ? " · 캡쳐용" : ""})
             </button>
           </div>
         </div>
@@ -707,7 +1193,7 @@ export default function AdminUsersPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
           <input
             type="text"
-            placeholder="이름 · 이메일 · 회사 · 브랜드 검색"
+            placeholder="이름 · 이메일 · 회사 · 브랜드 · 주관/멘토기관 검색"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className={inputCls}
@@ -731,6 +1217,15 @@ export default function AdminUsersPage() {
               <option value="free">무료 유저</option>
               <option value="marketer">AI 마케터 구독</option>
               <option value="generator">AI 생성기 구독</option>
+            </select>
+            <select
+              value={fieldFilter}
+              onChange={(e) => setFieldFilter(e.target.value)}
+              className={selectCls}
+            >
+              <option value="all">분야 전체</option>
+              <option value="local">로컬</option>
+              <option value="tech">기술</option>
             </select>
             <select
               value={hostOrgFilter}
@@ -794,6 +1289,18 @@ export default function AdminUsersPage() {
               <option value="unsubmitted">미제출</option>
             </select>
             <select
+              value={monthFilter}
+              onChange={(e) => setMonthFilter(e.target.value)}
+              className={selectCls}
+            >
+              <option value="all">기준 월 전체</option>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                <option key={m} value={String(m)}>
+                  {m}월 이용자
+                </option>
+              ))}
+            </select>
+            <select
               value={inquiryFilter}
               onChange={(e) => setInquiryFilter(e.target.value)}
               className={selectCls}
@@ -821,6 +1328,19 @@ export default function AdminUsersPage() {
           </div>
         </div>
 
+        {mkt && (
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <p className="text-gray-500">
+              인스타 팔로워·유튜브 구독자 칸에 숫자를 입력하고 <b>Enter</b> 또는 다른
+              곳 클릭 시 <b>오늘 날짜</b>로 저장됩니다. (다시 입력하면 오늘 값이 갱신,
+              날짜가 바뀌면 이력으로 쌓임)
+            </p>
+            {metricError && (
+              <p className="text-red-500 whitespace-nowrap">{metricError}</p>
+            )}
+          </div>
+        )}
+
         {/* Table */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-x-auto">
           <table className="w-full text-sm">
@@ -829,56 +1349,101 @@ export default function AdminUsersPage() {
                 <th className={headerCls} onClick={() => toggleSort("name")}>
                   사용자{sortIndicator("name")}
                 </th>
-                <th className={plainHeaderCls}>구분</th>
+                {!cap && <th className={plainHeaderCls}>구분</th>}
+                <th className={plainHeaderCls}>분야</th>
                 <th className={plainHeaderCls}>회사</th>
-                <th className={plainHeaderCls}>주관기관</th>
-                <th
-                  className={headerCls}
-                  onClick={() => toggleSort("createdAt")}
-                >
-                  가입/등록일{sortIndicator("createdAt")}
-                </th>
-                <th
-                  className={headerCls}
-                  onClick={() => toggleSort("firstAccessAt")}
-                >
-                  최초 접속일{sortIndicator("firstAccessAt")}
-                </th>
-                <th
-                  className={headerCls}
-                  onClick={() => toggleSort("lastActivityAt")}
-                >
-                  최근 활동{sortIndicator("lastActivityAt")}
-                </th>
-                <th
-                  className={`${headerCls} text-right`}
-                  onClick={() => toggleSort("accessCount")}
-                >
-                  접속 횟수{sortIndicator("accessCount")}
-                </th>
-                <th
-                  className={`${headerCls} text-right`}
-                  onClick={() => toggleSort("loginCount")}
-                >
-                  로그인{sortIndicator("loginCount")}
-                </th>
-                <th
-                  className={`${headerCls} text-right`}
-                  onClick={() => toggleSort("aiGenerationCount")}
-                >
-                  AI 생성{sortIndicator("aiGenerationCount")}
-                </th>
-                <th className={`${plainHeaderCls} text-center`}>무료</th>
-                <th className={`${plainHeaderCls} text-center`}>마케터</th>
-                <th className={`${plainHeaderCls} text-center`}>생성기</th>
+                {!cap && <th className={plainHeaderCls}>메모</th>}
+                {!cap && !mkt && <th className={plainHeaderCls}>토스</th>}
+                {!cap && !mkt && <th className={plainHeaderCls}>8월 마케팅</th>}
+                {!mkt && <th className={plainHeaderCls}>주관기관</th>}
+                <th className={plainHeaderCls}>멘토기관</th>
+                {!cap && !mkt && (
+                  <th
+                    className={headerCls}
+                    onClick={() => toggleSort("createdAt")}
+                  >
+                    가입/등록일{sortIndicator("createdAt")}
+                  </th>
+                )}
+                {!mkt && (
+                  <th
+                    className={headerCls}
+                    onClick={() => toggleSort("firstAccessAt")}
+                  >
+                    최초 접속일{sortIndicator("firstAccessAt")}
+                  </th>
+                )}
+                {!cap && !mkt && (
+                  <th
+                    className={headerCls}
+                    onClick={() => toggleSort("lastActivityAt")}
+                  >
+                    최근 활동{sortIndicator("lastActivityAt")}
+                  </th>
+                )}
+                {!cap && !mkt && (
+                  <>
+                    <th
+                      className={`${headerCls} text-right`}
+                      onClick={() => toggleSort("accessCount")}
+                    >
+                      접속 횟수{sortIndicator("accessCount")}
+                    </th>
+                    <th
+                      className={`${headerCls} text-right`}
+                      onClick={() => toggleSort("loginCount")}
+                    >
+                      로그인{sortIndicator("loginCount")}
+                    </th>
+                    <th
+                      className={`${headerCls} text-right`}
+                      onClick={() => toggleSort("aiGenerationCount")}
+                    >
+                      AI 생성{sortIndicator("aiGenerationCount")}
+                    </th>
+                    <th className={`${plainHeaderCls} text-center`}>무료</th>
+                  </>
+                )}
+                {!mkt && (
+                  <th className={`${plainHeaderCls} text-center`}>마케터</th>
+                )}
+                {!mkt && (
+                  <th className={`${plainHeaderCls} text-center`}>생성기</th>
+                )}
+                {!mkt && (
+                  <th className={`${plainHeaderCls} text-center`}>마케터 개월</th>
+                )}
+                {!mkt && (
+                  <th className={`${plainHeaderCls} text-center`}>생성기 개월</th>
+                )}
+                {!mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>마케터 크레딧</th>
+                )}
                 <th
                   className={`${headerCls} text-right`}
                   onClick={() => toggleSort("remainingCredits")}
                 >
-                  크레딧{sortIndicator("remainingCredits")}
+                  생성기 크레딧{sortIndicator("remainingCredits")}
                 </th>
-                <th className={plainHeaderCls}>마케터 제출</th>
-                <th className={`${plainHeaderCls} text-right`}>문의</th>
+                {!cap && <th className={plainHeaderCls}>마케터 제출</th>}
+                {mkt && <th className={plainHeaderCls}>인스타그램 주소</th>}
+                {mkt && <th className={plainHeaderCls}>게시물 주소</th>}
+                {mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>인스타 팔로워</th>
+                )}
+                {mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>유튜브 구독자</th>
+                )}
+                {mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>유튜브 조회수</th>
+                )}
+                {mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>게시물 좋아요</th>
+                )}
+                {mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>게시물 댓글</th>
+                )}
+                {!mkt && <th className={`${plainHeaderCls} text-right`}>문의</th>}
               </tr>
             </thead>
             <tbody>
@@ -896,92 +1461,358 @@ export default function AdminUsersPage() {
                       </p>
                       <p className="text-xs text-gray-400">{user.email}</p>
                     </td>
+                    {!cap && (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {user.signedUp ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                            가입
+                          </span>
+                        ) : (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                            미가입
+                          </span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-3 py-2.5 whitespace-nowrap">
-                      {user.signedUp ? (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                          가입
-                        </span>
-                      ) : (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-                          미가입
-                        </span>
-                      )}
+                      <span
+                        className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                          user.field === "local"
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-gray-100 text-gray-500"
+                        }`}
+                      >
+                        {fieldLabel(user.field)}
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
                       {user.companyName || user.brandName || "—"}
                     </td>
+                    {!cap && (
+                      <td
+                        className="px-3 py-2.5 text-gray-600 max-w-[16rem] truncate"
+                        title={user.note || undefined}
+                      >
+                        {user.note ? (
+                          <span className="text-amber-700">{user.note}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    )}
+                    {!cap && !mkt && (
+                      <td
+                        className="px-3 py-2.5 whitespace-nowrap"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {user.tossStatus === "in_progress" ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                              진행중
+                            </span>
+                            {tossConfirm[user.id] === "wait" ? (
+                              <>
+                                <span className="text-[11px] text-gray-500">
+                                  대기로?
+                                </span>
+                                <button
+                                  onClick={() => void saveToss(user, "wait")}
+                                  className="text-[11px] px-1.5 py-0.5 rounded bg-gray-900 text-white hover:bg-gray-700"
+                                >
+                                  예
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setTossConfirm((c) => {
+                                      const n = { ...c };
+                                      delete n[user.id];
+                                      return n;
+                                    })
+                                  }
+                                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50"
+                                >
+                                  아니오
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() =>
+                                  setTossConfirm((c) => ({
+                                    ...c,
+                                    [user.id]: "wait",
+                                  }))
+                                }
+                                className="text-[11px] text-gray-400 underline hover:text-gray-600"
+                              >
+                                되돌리기
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                              대기
+                            </span>
+                            {tossConfirm[user.id] === "in_progress" ? (
+                              <>
+                                <span className="text-[11px] text-amber-600">
+                                  진행중으로?
+                                </span>
+                                <button
+                                  onClick={() =>
+                                    void saveToss(user, "in_progress")
+                                  }
+                                  className="text-[11px] px-1.5 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-500"
+                                >
+                                  예
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setTossConfirm((c) => {
+                                      const n = { ...c };
+                                      delete n[user.id];
+                                      return n;
+                                    })
+                                  }
+                                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50"
+                                >
+                                  아니오
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() =>
+                                  setTossConfirm((c) => ({
+                                    ...c,
+                                    [user.id]: "in_progress",
+                                  }))
+                                }
+                                className="text-[11px] px-2 py-0.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
+                              >
+                                진행중으로
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    )}
+                    {!cap && !mkt && (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {user.augustMarketing === null ? (
+                          <span className="text-gray-300">—</span>
+                        ) : user.augustMarketing === "keep" ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                            유지
+                          </span>
+                        ) : user.augustMarketing === "change" ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                            변경
+                          </span>
+                        ) : (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                            미정
+                          </span>
+                        )}
+                      </td>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
+                        {user.hostOrg || "—"}
+                      </td>
+                    )}
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
-                      {user.hostOrg || "—"}
+                      {user.mentorOrg || "—"}
                     </td>
-                    <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
-                      {fmtDate(user.createdAt)}
-                    </td>
-                    <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
-                      {user.firstAccessAt ? fmtDate(user.firstAccessAt) : "-"}
-                    </td>
-                    <td
-                      className={`px-3 py-2.5 whitespace-nowrap ${activity.cls}`}
-                    >
-                      {activity.label}
-                    </td>
+                    {!cap && !mkt && (
+                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
+                        {fmtDate(user.createdAt)}
+                      </td>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
+                        {fmtDate(user.firstAccessAt ?? user.createdAt)}
+                      </td>
+                    )}
+                    {!cap && !mkt && (
+                      <td
+                        className={`px-3 py-2.5 whitespace-nowrap ${activity.cls}`}
+                      >
+                        {activity.label}
+                      </td>
+                    )}
+                    {!cap && !mkt && (
+                      <>
+                        <td className="px-3 py-2.5 text-right text-gray-600">
+                          {user.accessCount === null ? "-" : user.accessCount}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-gray-600">
+                          {user.loginCount}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-gray-600">
+                          {user.aiGenerationCount}
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <Dot on={user.freeUser} />
+                        </td>
+                      </>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-center">
+                        <Dot on={user.aiMarketerSub} />
+                      </td>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-center">
+                        <Dot on={user.aiGeneratorSub} />
+                      </td>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                        <MonthsCell
+                          months={user.marketerMonths}
+                          on={user.aiMarketer}
+                          highlight={monthFilter}
+                        />
+                      </td>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                        <MonthsCell
+                          months={user.generatorMonths}
+                          on={user.aiGenerator}
+                          highlight={monthFilter}
+                        />
+                      </td>
+                    )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-right text-gray-600">
+                        {user.marketerQuantity ?? "—"}
+                      </td>
+                    )}
                     <td className="px-3 py-2.5 text-right text-gray-600">
-                      {user.accessCount === null ? "-" : user.accessCount}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-gray-600">
-                      {user.loginCount}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-gray-600">
-                      {user.aiGenerationCount}
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <Dot on={user.freeUser} />
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <Dot on={user.aiMarketerSub} />
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <Dot on={user.aiGeneratorSub} />
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-gray-600">
-                      {user.remainingCredits ?? "—"}
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      {!user.aiMarketer ? (
-                        <span className="text-xs text-gray-300">대상 아님</span>
-                      ) : user.marketerSubmitted ? (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                          제출완료
+                      {user.remainingCredits !== null ? (
+                        user.remainingCredits
+                      ) : user.grantGeneratorCredits !== null ? (
+                        <span className="text-gray-400">
+                          {user.grantGeneratorCredits}{" "}
+                          <span className="text-[10px]">(부여)</span>
                         </span>
                       ) : (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                          미제출
-                        </span>
+                        "—"
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      {user.inquiryCount > 0 ? (
-                        <span
-                          className={
-                            user.openInquiryCount > 0
-                              ? "text-red-500 font-medium"
-                              : "text-gray-600"
-                          }
-                        >
-                          {user.inquiryCount}
-                          {user.openInquiryCount > 0 &&
-                            ` (미답변 ${user.openInquiryCount})`}
-                        </span>
-                      ) : (
-                        <span className="text-gray-300">—</span>
+                    {!cap && (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {!user.aiMarketer ? (
+                          <span className="text-xs text-gray-300">대상 아님</span>
+                        ) : user.marketerSubmitted ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                            제출완료
+                          </span>
+                        ) : (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                            미제출
+                          </span>
+                        )}
+                      </td>
+                    )}
+                    {mkt && (
+                      <td className="px-3 py-2.5">
+                        {user.instagramUrl ? (
+                          <a
+                            href={user.instagramUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title={user.instagramUrl}
+                            className="block max-w-[15rem] truncate text-blue-600 underline underline-offset-2 hover:text-blue-800"
+                          >
+                            {user.instagramUrl}
+                          </a>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
+                    {mkt && (
+                      <td className="px-3 py-2.5">
+                        {user.postUrl ? (
+                          <a
+                            href={user.postUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title={user.postUrl}
+                            className="block max-w-[15rem] truncate text-blue-600 underline underline-offset-2 hover:text-blue-800"
+                          >
+                            {user.postUrl}
+                          </a>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
+                    {mkt &&
+                      metricCell(
+                        user,
+                        "instagram",
+                        user.instaFollowerCount,
+                        user.instaFollowerDate
                       )}
-                    </td>
+                    {mkt &&
+                      metricCell(
+                        user,
+                        "youtube",
+                        user.youtubeSubCount,
+                        user.youtubeSubDate
+                      )}
+                    {mkt &&
+                      metricCell(
+                        user,
+                        "youtube_views",
+                        user.youtubeViewCount,
+                        user.youtubeViewDate
+                      )}
+                    {mkt &&
+                      metricCell(
+                        user,
+                        "post_likes",
+                        user.postLikesCount,
+                        user.postLikesDate
+                      )}
+                    {mkt &&
+                      metricCell(
+                        user,
+                        "post_comments",
+                        user.postCommentsCount,
+                        user.postCommentsDate
+                      )}
+                    {!mkt && (
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                        {user.inquiryCount > 0 ? (
+                          <span
+                            className={
+                              user.openInquiryCount > 0
+                                ? "text-red-500 font-medium"
+                                : "text-gray-600"
+                            }
+                          >
+                            {user.inquiryCount}
+                            {user.openInquiryCount > 0 &&
+                              ` (미답변 ${user.openInquiryCount})`}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={16}
+                    colSpan={cap ? 13 : mkt ? 15 : 24}
                     className="px-3 py-10 text-center text-gray-400"
                   >
                     조건에 맞는 사용자가 없습니다
@@ -1013,7 +1844,89 @@ export default function AdminUsersPage() {
                     </span>
                   )}
                 </h2>
-                <p className="text-sm text-gray-500">{selectedUser.email}</p>
+                {!emailEditing ? (
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-gray-500">{selectedUser.email}</p>
+                    <button
+                      onClick={() => {
+                        setEmailInput(selectedUser.email ?? "");
+                        setEmailResult(null);
+                        setEmailEditing(true);
+                      }}
+                      className="text-xs text-gray-400 hover:text-gray-700 underline"
+                    >
+                      이메일 수정
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <input
+                      type="email"
+                      value={emailInput}
+                      onChange={(e) => setEmailInput(e.target.value)}
+                      placeholder="새 이메일"
+                      className="px-2 py-1 text-sm bg-white text-gray-900 border border-gray-300 rounded-lg w-56 focus:outline-none focus:border-gray-500"
+                    />
+                    <button
+                      onClick={() => void saveEmail()}
+                      disabled={emailSaving}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-40"
+                    >
+                      {emailSaving ? "저장 중..." : "저장"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEmailEditing(false);
+                        setEmailResult(null);
+                      }}
+                      disabled={emailSaving}
+                      className="text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      취소
+                    </button>
+                  </div>
+                )}
+                {emailResult && (
+                  <p
+                    className={`text-xs mt-1 ${
+                      emailResult.startsWith("오류")
+                        ? "text-red-500"
+                        : "text-green-600"
+                    }`}
+                  >
+                    {emailResult}
+                  </p>
+                )}
+                {detail && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs text-gray-500">분야</span>
+                    <select
+                      value={(detail.grant?.field as string) ?? "tech"}
+                      onChange={(e) => void saveField(e.target.value)}
+                      disabled={fieldSaving || !detail.grant?.id}
+                      className="text-xs px-2 py-1 rounded-lg border border-gray-300 bg-white text-gray-800 disabled:opacity-50"
+                    >
+                      <option value="tech">기술</option>
+                      <option value="local">로컬</option>
+                    </select>
+                    {!detail.grant?.id && (
+                      <span className="text-[11px] text-gray-400">
+                        (사전등록 없음 — 저장 불가)
+                      </span>
+                    )}
+                    {fieldResult && (
+                      <span
+                        className={`text-[11px] ${
+                          fieldResult.startsWith("오류")
+                            ? "text-red-500"
+                            : "text-green-600"
+                        }`}
+                      >
+                        {fieldResult}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => setSelectedUser(null)}
@@ -1093,6 +2006,7 @@ export default function AdminUsersPage() {
                   {(
                     [
                       ["summary", "기본 정보"],
+                      ["memo", detail.note ? "메모 ●" : "메모"],
                       ["logins", `로그인 기록 (${detail.loginHistory.length})`],
                       ["posts", `AI 생성물 (${detail.posts.length})`],
                       ["genlogs", `생성 로그 (${detail.generationLogs.length})`],
@@ -1171,6 +2085,43 @@ export default function AdminUsersPage() {
                         </p>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Tab: memo (특이사항) */}
+                {detailTab === "memo" && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500">
+                      이 유저에 대한 특이사항을 적어두세요. 전체 유저 목록의 &lsquo;메모&rsquo;
+                      열에도 표시됩니다.
+                    </p>
+                    <textarea
+                      value={noteInput}
+                      onChange={(e) => setNoteInput(e.target.value)}
+                      rows={6}
+                      placeholder="예: 결제 확인 대기 / 인증메일 수동처리함 / 담당자 요청사항 등"
+                      className={`${inputCls} resize-none`}
+                    />
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={saveNote}
+                        disabled={noteSaving}
+                        className="text-sm px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors disabled:opacity-40"
+                      >
+                        {noteSaving ? "저장 중..." : "메모 저장"}
+                      </button>
+                      {noteResult && (
+                        <p
+                          className={`text-sm ${
+                            noteResult.startsWith("오류")
+                              ? "text-red-500"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {noteResult}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
 

@@ -68,6 +68,7 @@ export type Database = {
           marketing_channel: string | null;
           channel_url: string | null;
           main_content_url: string | null;
+          comments_included: boolean | null;
           account_direction: string | null;
           account_bio: string | null;
           account_concept: string | null;
@@ -191,6 +192,50 @@ export type Database = {
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;
       };
+      outreach_messages: {
+        Row: {
+          id: string;
+          channel: string;
+          category: string;
+          subject: string | null;
+          body: string;
+          created_by: string | null;
+          total: number;
+          sent: number;
+          failed: number;
+          skipped: number;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      outreach_sends: {
+        Row: {
+          id: string;
+          message_id: string;
+          channel: string;
+          recipient_email: string | null;
+          recipient_phone: string | null;
+          recipient_name: string | null;
+          status: string;
+          error: string | null;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      outreach_optouts: {
+        Row: {
+          id: string;
+          channel: string;
+          email: string | null;
+          phone: string | null;
+          source: string | null;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
       login_events: {
         Row: {
           id: string;
@@ -206,6 +251,59 @@ export type Database = {
           event_type?: string;
           occurred_at?: string;
         };
+        Update: Record<string, Json | undefined>;
+      };
+      admin_user_notes: {
+        Row: {
+          email: string;
+          note: string;
+          toss_status: string;
+          updated_by: string | null;
+          updated_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      marketing_confirmations: {
+        Row: {
+          id: string;
+          user_id: string;
+          email: string | null;
+          month: string;
+          choice: string;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      monthly_channel_info: {
+        Row: {
+          id: string;
+          user_id: string;
+          email: string | null;
+          month: string;
+          marketing_channel: string | null;
+          channel_url: string | null;
+          instagram_id: string | null;
+          main_content_url: string | null;
+          comments_included: boolean | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      follower_snapshots: {
+        Row: {
+          id: string;
+          email: string;
+          platform: string;
+          count: number;
+          recorded_on: string;
+          recorded_by: string | null;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;
       };
       service_grants: {

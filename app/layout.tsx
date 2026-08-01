@@ -43,6 +43,14 @@ export default function RootLayout({
             <p>© 2025 Qmeet. All rights reserved.</p>
             <p>큐밋(Qmeet)</p>
             <p>
+              <a
+                href="/pricing"
+                className="underline underline-offset-2 hover:text-gray-700 transition-colors font-medium text-gray-600"
+              >
+                가격 안내
+              </a>
+            </p>
+            <p>
               1:1 문의 (모두의창업 전용){" "}
               <a
                 href="https://open.kakao.com/o/s0Viuxzi"

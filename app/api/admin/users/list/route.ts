@@ -53,6 +53,11 @@ type GrantRow = {
   mentor_org: string | null;
   ai_marketer: boolean;
   ai_generator: boolean;
+  marketer_quantity: number | null;
+  marketer_months: string | null;
+  generator_months: string | null;
+  generator_credits: number | null;
+  field: string | null;
   created_at: string | null;
 };
 
@@ -78,6 +83,9 @@ export async function GET(request: NextRequest) {
       appsRes,
       paymentsRes,
       inquiriesRes,
+      notesRes,
+      metricsRes,
+      augMktRes,
     ] = await Promise.all([
       (db
         .from("profiles")
@@ -118,14 +126,16 @@ export async function GET(request: NextRequest) {
       (db
         .from("service_grants")
         .select(
-          "id, email, applicant_name, phone, host_org, mentor_org, ai_marketer, ai_generator, created_at"
+          "id, email, applicant_name, phone, host_org, mentor_org, ai_marketer, ai_generator, marketer_quantity, marketer_months, generator_months, generator_credits, field, created_at"
         ) as unknown) as Promise<{
         data: GrantRow[] | null;
         error: { message: string } | null;
       }>,
       (db
         .from("applications")
-        .select("id, user_id, email, main_content_url, created_at")
+        .select(
+          "id, user_id, email, main_content_url, channel_url, instagram_id, created_at"
+        )
         .order("created_at", { ascending: false })
         .limit(POSTS_CAP) as unknown) as Promise<{
         data: Array<{
@@ -133,6 +143,8 @@ export async function GET(request: NextRequest) {
           user_id: string | null;
           email: string | null;
           main_content_url: string | null;
+          channel_url: string | null;
+          instagram_id: string | null;
           created_at: string | null;
         }> | null;
         error: { message: string } | null;
@@ -151,6 +163,35 @@ export async function GET(request: NextRequest) {
         data: Array<{ user_id: string; status: string }> | null;
         error: { message: string } | null;
       }>,
+      // Admin memos (특이사항) + 토스 상태, keyed by lowercased email
+      (db
+        .from("admin_user_notes")
+        .select("email, note, toss_status") as unknown) as Promise<{
+        data: Array<{ email: string; note: string; toss_status: string }> | null;
+        error: { message: string } | null;
+      }>,
+      // Follower/subscriber snapshots — newest-first so first-seen per
+      // (email, platform) is the latest.
+      (db
+        .from("follower_snapshots")
+        .select("email, platform, count, recorded_on")
+        .order("recorded_on", { ascending: false }) as unknown) as Promise<{
+        data: Array<{
+          email: string;
+          platform: string;
+          count: number;
+          recorded_on: string;
+        }> | null;
+        error: { message: string } | null;
+      }>,
+      // 8월 마케팅 진행/변경 선택
+      (db
+        .from("marketing_confirmations")
+        .select("user_id, email, choice")
+        .eq("month", "2026-08") as unknown) as Promise<{
+        data: Array<{ user_id: string; email: string | null; choice: string }> | null;
+        error: { message: string } | null;
+      }>,
     ]);
 
     if (profilesRes.error) {
@@ -164,9 +205,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Auth metadata: last_sign_in_at is the authoritative latest login even
-    // before login_events accumulates history. Non-fatal if unavailable.
+    // Auth metadata:
+    //  - last_sign_in_at is the authoritative latest login even before
+    //    login_events accumulates history.
+    //  - created_at is the true 회원가입 date. profiles.created_at is set at
+    //    onboarding (often days later), so it must NOT be used as the signup
+    //    date — the auth timestamp is authoritative.
+    // Non-fatal if unavailable.
     const authLastSignIn = new Map<string, string | null>();
+    const authCreatedAt = new Map<string, string | null>();
     try {
       let page = 1;
       for (;;) {
@@ -177,6 +224,7 @@ export async function GET(request: NextRequest) {
         if (error || !data?.users?.length) break;
         for (const u of data.users) {
           authLastSignIn.set(u.id, u.last_sign_in_at ?? null);
+          authCreatedAt.set(u.id, u.created_at ?? null);
         }
         if (data.users.length < 1000) break;
         page += 1;
@@ -237,6 +285,13 @@ export async function GET(request: NextRequest) {
       string,
       { user_id: string | null; email: string | null }
     >();
+    // Marketer submission URLs (인스타그램 주소 / 게시물 주소). Prefer the most
+    // recent SUBMITTED application (has main_content_url), else the most recent.
+    type MkUrls = { ig: string | null; post: string | null };
+    const subUrlByUser = new Map<string, MkUrls>();
+    const subUrlByEmail = new Map<string, MkUrls>();
+    const anyUrlByUser = new Map<string, MkUrls>();
+    const anyUrlByEmail = new Map<string, MkUrls>();
     for (const app of appsRes.data ?? []) {
       appById.set(app.id, { user_id: app.user_id, email: app.email });
       const emailKey = app.email?.trim().toLowerCase();
@@ -244,6 +299,20 @@ export async function GET(request: NextRequest) {
       if (app.created_at) {
         if (app.user_id) firstAppByUser.set(app.user_id, app.created_at);
         if (emailKey) firstAppByEmail.set(emailKey, app.created_at);
+      }
+      // Resolve the instagram/channel URL: prefer channel_url, else build from id.
+      const igUrl =
+        app.channel_url ||
+        (app.instagram_id
+          ? `https://www.instagram.com/${app.instagram_id.replace(/^@/, "")}/`
+          : null);
+      const urls: MkUrls = { ig: igUrl, post: app.main_content_url || null };
+      // 첫 등장(=최신)만 저장.
+      if (app.user_id && !anyUrlByUser.has(app.user_id)) anyUrlByUser.set(app.user_id, urls);
+      if (emailKey && !anyUrlByEmail.has(emailKey)) anyUrlByEmail.set(emailKey, urls);
+      if (app.main_content_url) {
+        if (app.user_id && !subUrlByUser.has(app.user_id)) subUrlByUser.set(app.user_id, urls);
+        if (emailKey && !subUrlByEmail.has(emailKey)) subUrlByEmail.set(emailKey, urls);
       }
       if (!app.main_content_url) continue;
       if (app.user_id && !submittedByUser.has(app.user_id)) {
@@ -253,6 +322,16 @@ export async function GET(request: NextRequest) {
         submittedByEmail.set(emailKey, app.created_at);
       }
     }
+    // Resolve a user's marketer URLs: submitted(user) → any(user) → submitted(email) → any(email).
+    const resolveMkUrls = (userId: string | null, emailKey: string): MkUrls => {
+      const byUser = userId
+        ? subUrlByUser.get(userId) ?? anyUrlByUser.get(userId)
+        : undefined;
+      const byEmail = emailKey
+        ? subUrlByEmail.get(emailKey) ?? anyUrlByEmail.get(emailKey)
+        : undefined;
+      return byUser ?? byEmail ?? { ig: null, post: null };
+    };
 
     // Users/emails with a confirmed marketer payment
     const paidMarketerUsers = new Set<string>();
@@ -278,6 +357,65 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Admin memos + 토스 상태 keyed by lowercased email (signed-up + 미가입).
+    const notesByEmail = new Map<string, string>();
+    const tossByEmail = new Map<string, string>();
+    if (!notesRes.error) {
+      for (const n of notesRes.data ?? []) {
+        const key = (n.email || "").trim().toLowerCase();
+        if (!key) continue;
+        if (n.note) notesByEmail.set(key, n.note);
+        if (n.toss_status) tossByEmail.set(key, n.toss_status);
+      }
+    }
+
+    // Latest snapshot per email+metric (rows newest-first → first seen = latest).
+    // metric keys: instagram | youtube | post_likes | post_comments.
+    type Snap = { count: number; date: string };
+    const metricsByEmail = new Map<string, Record<string, Snap>>();
+    if (!metricsRes.error) {
+      for (const m of metricsRes.data ?? []) {
+        const key = (m.email || "").trim().toLowerCase();
+        if (!key) continue;
+        const entry = metricsByEmail.get(key) ?? {};
+        if (!entry[m.platform]) {
+          entry[m.platform] = { count: m.count, date: m.recorded_on };
+          metricsByEmail.set(key, entry);
+        }
+      }
+    }
+    const mget = (emailKey: string, metric: string) =>
+      emailKey ? metricsByEmail.get(emailKey)?.[metric] : undefined;
+
+    // 8월 마케팅 선택(keep/change) — user_id 및 email 양쪽으로 조회.
+    const augByUser = new Map<string, string>();
+    const augByEmail = new Map<string, string>();
+    if (!augMktRes.error) {
+      for (const c of augMktRes.data ?? []) {
+        if (c.user_id) augByUser.set(c.user_id, c.choice);
+        if (c.email) augByEmail.set(c.email.trim().toLowerCase(), c.choice);
+      }
+    }
+    // 8월 마케터 이용자인지 + 선택 결과 → "keep" | "change" | "pending" | null
+    const augMarketing = (
+      userId: string | null,
+      emailKey: string,
+      aiMarketer: boolean,
+      marketerMonths: string | null
+    ): string | null => {
+      const isAug =
+        aiMarketer &&
+        String(marketerMonths || "")
+          .split(",")
+          .map((s) => s.trim())
+          .includes("8");
+      if (!isAug) return null;
+      const choice =
+        (userId ? augByUser.get(userId) : undefined) ??
+        (emailKey ? augByEmail.get(emailKey) : undefined);
+      return choice ?? "pending";
+    };
+
     const profileEmails = new Set<string>();
     const users = (profilesRes.data ?? []).map((profile) => {
       const emailKey = profile.email?.trim().toLowerCase() ?? "";
@@ -295,6 +433,10 @@ export async function GET(request: NextRequest) {
         (grant?.ai_marketer ?? false) ||
         paidMarketerUsers.has(profile.id) ||
         (emailKey ? paidMarketerEmails.has(emailKey) : false);
+      // 생성기 구독: 사전등록으로 부여됐거나(grant) 활성 구독이 있으면 구독으로 본다.
+      // (마케터 구독과 동일하게 '부여 OR 활성' 기준 — 부여만 있고 미활성이어도 표시)
+      const aiGeneratorSub =
+        subscriptionActive || (grant?.ai_generator ?? false);
 
       const marketerSubmittedAt =
         submittedByUser.get(profile.id) ??
@@ -334,14 +476,45 @@ export async function GET(request: NextRequest) {
         mentorOrg: grant?.mentor_org ?? null,
         aiMarketer: grant?.ai_marketer ?? false,
         aiGenerator: grant?.ai_generator ?? false,
+        marketerQuantity: grant?.marketer_quantity ?? null,
+        marketerMonths: grant?.marketer_months ?? null,
+        generatorMonths: grant?.generator_months ?? null,
+        field: grant?.field ?? "tech",
+        note: emailKey ? (notesByEmail.get(emailKey) ?? "") : "",
+        tossStatus: emailKey ? (tossByEmail.get(emailKey) ?? "wait") : "wait",
+        augustMarketing: augMarketing(
+          profile.id,
+          emailKey,
+          grant?.ai_marketer ?? false,
+          grant?.marketer_months ?? null
+        ),
+        instagramUrl: resolveMkUrls(profile.id, emailKey).ig,
+        postUrl: resolveMkUrls(profile.id, emailKey).post,
+        instaFollowerCount: mget(emailKey, "instagram")?.count ?? null,
+        instaFollowerDate: mget(emailKey, "instagram")?.date ?? null,
+        youtubeSubCount: mget(emailKey, "youtube")?.count ?? null,
+        youtubeSubDate: mget(emailKey, "youtube")?.date ?? null,
+        youtubeViewCount: mget(emailKey, "youtube_views")?.count ?? null,
+        youtubeViewDate: mget(emailKey, "youtube_views")?.date ?? null,
+        postLikesCount: mget(emailKey, "post_likes")?.count ?? null,
+        postLikesDate: mget(emailKey, "post_likes")?.date ?? null,
+        postCommentsCount: mget(emailKey, "post_comments")?.count ?? null,
+        postCommentsDate: mget(emailKey, "post_comments")?.date ?? null,
         aiMarketerSub,
-        aiGeneratorSub: subscriptionActive,
-        freeUser: !aiMarketerSub && !subscriptionActive,
-        createdAt: profile.created_at,
+        aiGeneratorSub,
+        freeUser: !aiMarketerSub && !aiGeneratorSub,
+        // 가입/등록일 = 실제 회원가입일(auth). profiles.created_at은 온보딩 시점이라
+        // 뒤로 밀릴 수 있어 auth 타임스탬프를 우선 사용한다.
+        createdAt: authCreatedAt.get(profile.id) ?? profile.created_at,
         onboardedAt: profile.account_onboarded_at,
         subscriptionActive,
         subscriptionEndDate: sub?.end_date ?? null,
         remainingCredits: subscriptionActive ? sub!.remaining_credits : null,
+        // 사전등록으로 부여된 생성기 크레딧(부여량). 활성 구독이 없을 때
+        // "N (부여)"로 보여주기 위함.
+        grantGeneratorCredits: grant?.ai_generator
+          ? (grant.generator_credits ?? null)
+          : null,
         aiGenerationCount: posts?.total ?? 0,
         freeTrialCount: posts?.free ?? 0,
         lastGeneratedAt: posts?.last ?? null,
@@ -379,14 +552,45 @@ export async function GET(request: NextRequest) {
         mentorOrg: grant.mentor_org,
         aiMarketer: grant.ai_marketer,
         aiGenerator: grant.ai_generator,
+        marketerQuantity: grant.marketer_quantity ?? null,
+        marketerMonths: grant.marketer_months ?? null,
+        generatorMonths: grant.generator_months ?? null,
+        field: grant.field ?? "tech",
+        note: notesByEmail.get(emailKey) ?? "",
+        tossStatus: tossByEmail.get(emailKey) ?? "wait",
+        augustMarketing: augMarketing(
+          null,
+          emailKey,
+          grant.ai_marketer,
+          grant.marketer_months
+        ),
+        instagramUrl: resolveMkUrls(null, emailKey).ig,
+        postUrl: resolveMkUrls(null, emailKey).post,
+        instaFollowerCount: mget(emailKey, "instagram")?.count ?? null,
+        instaFollowerDate: mget(emailKey, "instagram")?.date ?? null,
+        youtubeSubCount: mget(emailKey, "youtube")?.count ?? null,
+        youtubeSubDate: mget(emailKey, "youtube")?.date ?? null,
+        youtubeViewCount: mget(emailKey, "youtube_views")?.count ?? null,
+        youtubeViewDate: mget(emailKey, "youtube_views")?.date ?? null,
+        postLikesCount: mget(emailKey, "post_likes")?.count ?? null,
+        postLikesDate: mget(emailKey, "post_likes")?.date ?? null,
+        postCommentsCount: mget(emailKey, "post_comments")?.count ?? null,
+        postCommentsDate: mget(emailKey, "post_comments")?.date ?? null,
         aiMarketerSub: grant.ai_marketer || paidMarketerEmails.has(emailKey),
-        aiGeneratorSub: false,
-        freeUser: !grant.ai_marketer && !paidMarketerEmails.has(emailKey),
+        // 미가입도 사전등록으로 생성기가 부여됐으면 구독으로 표시 (마케터와 동일 기준).
+        aiGeneratorSub: grant.ai_generator,
+        freeUser:
+          !grant.ai_marketer &&
+          !paidMarketerEmails.has(emailKey) &&
+          !grant.ai_generator,
         createdAt: grant.created_at,
         onboardedAt: null,
         subscriptionActive: false,
         subscriptionEndDate: null,
         remainingCredits: null,
+        grantGeneratorCredits: grant.ai_generator
+          ? (grant.generator_credits ?? null)
+          : null,
         aiGenerationCount: 0,
         freeTrialCount: 0,
         lastGeneratedAt: null,

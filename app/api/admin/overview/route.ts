@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
       db
         .from("service_grants")
         .select(
-          "id, email, applicant_name, phone, host_org, mentor_org, ai_marketer, ai_generator, marketer_quantity, marketer_months, generator_months, generator_credits, status, applied_user_id, applied_at, created_at"
+          "id, email, applicant_name, phone, host_org, mentor_org, ai_marketer, ai_generator, marketer_quantity, marketer_months, generator_months, generator_credits, field, status, applied_user_id, applied_at, created_at"
         )
         .order("created_at", { ascending: true }) as unknown
     )) as {
@@ -87,6 +87,7 @@ export async function GET(request: NextRequest) {
         marketer_months: string | null;
         generator_months: string | null;
         generator_credits: number;
+        field: string | null;
         status: string;
         applied_user_id: string | null;
         applied_at: string | null;
@@ -160,11 +161,13 @@ export async function GET(request: NextRequest) {
     // 4. Applications — marketer state + submission detail
     //    Ordered newest-first so the first row seen per email = most recent.
     type AppRow = {
+      id: string;
       email: string | null;
       created_at: string | null;
       marketing_channel: string | null;
       channel_url: string | null;
       main_content_url: string | null;
+      comments_included: boolean | null;
       industry: string | null;
       product_service: string | null;
       selected_plan: number | null;
@@ -184,7 +187,7 @@ export async function GET(request: NextRequest) {
       db
         .from("applications")
         .select(
-          "email, created_at, marketing_channel, channel_url, main_content_url, industry, product_service, selected_plan, selected_duration, instagram_id, account_direction, account_bio, account_concept, manager_name, phone"
+          "id, email, created_at, marketing_channel, channel_url, main_content_url, comments_included, industry, product_service, selected_plan, selected_duration, instagram_id, account_direction, account_bio, account_concept, manager_name, phone"
         )
         .in("email", normalizedGrantEmails)
         .order("created_at", { ascending: false }) as unknown
@@ -197,6 +200,46 @@ export async function GET(request: NextRequest) {
       const key = row.email.trim().toLowerCase();
       if (!anyAppMap.has(key)) anyAppMap.set(key, row);
       if (row.main_content_url && !submittedAppMap.has(key)) submittedAppMap.set(key, row);
+    }
+
+    // 8월 채널/게시물 (monthly_channel_info) — email 기준, 7월 신청서와 별개.
+    const augByEmail = new Map<
+      string,
+      {
+        channel: string | null;
+        channelUrl: string | null;
+        mainUrl: string | null;
+        commentsIncluded: boolean | null;
+      }
+    >();
+    const augRes = (await (
+      db
+        .from("monthly_channel_info")
+        .select(
+          "email, marketing_channel, channel_url, main_content_url, comments_included"
+        )
+        .eq("month", "2026-08") as unknown
+    )) as {
+      data: Array<{
+        email: string | null;
+        marketing_channel: string | null;
+        channel_url: string | null;
+        main_content_url: string | null;
+        comments_included: boolean | null;
+      }> | null;
+      error: { message: string } | null;
+    };
+    if (!augRes.error) {
+      for (const r of augRes.data ?? []) {
+        const k = (r.email || "").trim().toLowerCase();
+        if (k)
+          augByEmail.set(k, {
+            channel: r.marketing_channel,
+            channelUrl: r.channel_url,
+            mainUrl: r.main_content_url,
+            commentsIncluded: r.comments_included,
+          });
+      }
     }
 
     // Shape response — return only the fields the admin UI needs
@@ -224,6 +267,7 @@ export async function GET(request: NextRequest) {
         marketer_months: grant.marketer_months,
         generator_months: grant.generator_months,
         generator_credits: grant.generator_credits,
+        field: grant.field ?? "tech",
         status: grant.status,
         applied_user_id: grant.applied_user_id,
         applied_at: grant.applied_at,
@@ -243,12 +287,15 @@ export async function GET(request: NextRequest) {
           currentMonth
         ),
         marketer_submitted_at: submittedApp?.created_at ?? null,
+        august_channel: augByEmail.get(emailKey) ?? null,
         marketer_detail: bestApp
           ? {
+              id: bestApp.id,
               created_at: bestApp.created_at,
               marketing_channel: bestApp.marketing_channel,
               channel_url: bestApp.channel_url,
               main_content_url: bestApp.main_content_url,
+              comments_included: bestApp.comments_included,
               industry: bestApp.industry,
               product_service: bestApp.product_service,
               selected_plan: bestApp.selected_plan,

@@ -18,6 +18,7 @@ import {
 } from "@/lib/supabase/persistence";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
 import { CreditGrantPopup } from "@/lib/ui/credit-grant-popup";
+import { AugustMarketingPopup } from "@/lib/ui/august-marketing-popup";
 import {
   clearTestAccountAccess,
   fetchTestAccountAccess,
@@ -234,6 +235,75 @@ function buildDisplayUrl(url: string): string {
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
+// 월(m)이 현재월 기준으로 진행중/예정/종료인지.
+function monthStatusBadge(m: number, currentMonth: number) {
+  if (m === currentMonth)
+    return { label: "진행중", cls: "bg-emerald-50 text-emerald-700" };
+  if (m > currentMonth)
+    return { label: "진행 예정", cls: "bg-amber-50 text-amber-700" };
+  return { label: "종료", cls: "bg-gray-100 text-gray-500" };
+}
+
+// 월별 마케팅 정보(채널·메인 게시물) 한 블록. 마이페이지 마케터 카드에서
+// 7월·8월을 각각 표기하기 위해 재사용한다.
+function MonthMarketingBlock({
+  title,
+  badge,
+  accountLabel,
+  accountUrl,
+  contentLabel,
+  contentUrl,
+  emptyNote,
+}: {
+  title: string;
+  badge: { label: string; cls: string } | null;
+  accountLabel: string;
+  accountUrl: string | null;
+  contentLabel: string;
+  contentUrl: string | null;
+  emptyNote: string;
+}) {
+  const hasAny = Boolean(accountUrl || contentUrl);
+  const row = (label: string, url: string | null) => (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span className="w-20 shrink-0 text-sm text-gray-500">{label}</span>
+      {url ? (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={url}
+          className="min-w-0 flex-1 truncate text-right text-sm font-medium text-blue-600 hover:underline"
+        >
+          {buildDisplayUrl(url)}
+        </a>
+      ) : (
+        <span className="ml-auto text-sm text-gray-400">-</span>
+      )}
+    </div>
+  );
+  return (
+    <div className="overflow-hidden rounded-2xl border border-gray-100">
+      <div className="flex items-center justify-between bg-gray-50 px-4 py-2.5">
+        <span className="text-sm font-semibold text-gray-700">{title}</span>
+        {badge && (
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${badge.cls}`}>
+            {badge.label}
+          </span>
+        )}
+      </div>
+      {hasAny ? (
+        <div className="divide-y divide-gray-100">
+          {row(accountLabel, accountUrl)}
+          {row(contentLabel, contentUrl)}
+        </div>
+      ) : (
+        <p className="px-4 py-3 text-sm text-gray-400">{emptyNote}</p>
+      )}
+    </div>
+  );
+}
+
 function getCompletionDateText(
   completionDate: string | null | undefined,
   currentMonth: number,
@@ -274,6 +344,13 @@ export default function MyPage() {
         channelUrl: string | null;
         instagramId: string | null;
         currentMonth: number;
+        // 8월 마케팅 변경 폼(monthly_channel_info)으로 따로 입력한 8월 정보.
+        // 없으면(그대로 진행/신규 8월 신청자) 신청서(applications) 정보로 대체한다.
+        august: {
+          channel: string | null;
+          channelUrl: string | null;
+          mainContentUrl: string | null;
+        } | null;
       }
   >({ status: "idle" });
   const isTestAccountAuthenticated =
@@ -658,6 +735,19 @@ export default function MyPage() {
         appRow = pickGrantRow(emailCandidates);
       }
 
+      // 8월 마케팅 변경 폼으로 따로 입력한 8월 채널·게시물 (있을 때만).
+      const { data: rawAug } = await supabase
+        .from("monthly_channel_info")
+        .select("marketing_channel, channel_url, main_content_url")
+        .eq("user_id", authUserId)
+        .eq("month", "2026-08")
+        .maybeSingle();
+      const augRow = rawAug as {
+        marketing_channel: string | null;
+        channel_url: string | null;
+        main_content_url: string | null;
+      } | null;
+
       if (!active) return;
 
       const koreaDate = getKoreaDateString();
@@ -677,6 +767,13 @@ export default function MyPage() {
         channelUrl: appRow?.channel_url ?? null,
         instagramId: appRow?.instagram_id ?? null,
         currentMonth,
+        august: augRow
+          ? {
+              channel: augRow.marketing_channel,
+              channelUrl: augRow.channel_url,
+              mainContentUrl: augRow.main_content_url,
+            }
+          : null,
       });
     };
 
@@ -783,12 +880,7 @@ export default function MyPage() {
             {serviceGrantState.status === "ready" ? (
               // ─── GRANTED-USER LAYOUT ───────────────────────────────────────
               (() => {
-                const { grant, mainContentUrl, marketingChannel, channelUrl, instagramId, currentMonth } = serviceGrantState;
-
-                const channelLabel =
-                  marketingChannel === "instagram" ? "인스타그램"
-                  : marketingChannel === "youtube" ? "유튜브"
-                  : marketingChannel ?? "-";
+                const { grant, mainContentUrl, marketingChannel, channelUrl, instagramId, currentMonth, august } = serviceGrantState;
 
                 const marketerMonths = parseMonthsList(grant.marketer_months);
                 const generatorMonths = parseMonthsList(grant.generator_months);
@@ -798,6 +890,9 @@ export default function MyPage() {
 
                 const marketerActive = grant.ai_marketer && marketerMonths.includes(currentMonth);
                 const marketerFuture = grant.ai_marketer && Boolean(marketerFutureMonth);
+                // 마케터 이용 종료: 신청했지만 이용 월이 모두 지나감(현재/미래 월 없음).
+                // 예) 7월만 이용자는 8월이 되면 종료로 표시.
+                const marketerEnded = grant.ai_marketer && !marketerActive && !marketerFuture;
 
                 // Last day of the active service month for the "진행중" message
                 const [currentYear] = getKoreaDateString().split("-").map(Number);
@@ -813,11 +908,13 @@ export default function MyPage() {
 
                 const marketerBadge = marketerFuture
                   ? { label: `${marketerFutureMonth}월 예정`, cls: "bg-amber-50 text-amber-700" }
-                  : mainContentUrl
-                    ? { label: "진행중", cls: "bg-emerald-50 text-emerald-700" }
-                    : marketerActive
-                      ? { label: "할 일", cls: "bg-orange-50 text-orange-700" }
-                      : { label: "신청하지 않음", cls: "bg-gray-100 text-gray-500" };
+                  : marketerEnded
+                    ? { label: "이용 종료", cls: "bg-gray-100 text-gray-500" }
+                    : mainContentUrl
+                      ? { label: "진행중", cls: "bg-emerald-50 text-emerald-700" }
+                      : marketerActive
+                        ? { label: "할 일", cls: "bg-orange-50 text-orange-700" }
+                        : { label: "신청하지 않음", cls: "bg-gray-100 text-gray-500" };
 
                 const generatorBadge = generatorActive
                   ? { label: "이용 가능", cls: "bg-emerald-50 text-emerald-700" }
@@ -827,8 +924,82 @@ export default function MyPage() {
 
                 const creditsTotal = snapshot.usage.totalPostLimit || POST_GENERATOR_MONTHLY_CREDITS;
 
+                // 월별 마케팅 정보(채널·메인 게시물). 이용 월(marketer_months)에 든
+                // 달만 표기 — 8월만 이용하는 고객은 8월만 뜬다.
+                // · 7월: 신청서(applications) 정보.
+                // · 8월: 8월 변경 폼(monthly_channel_info)이 있으면 그것을, 없으면
+                //   (그대로 진행/신규 8월 신청자) 신청서 정보로 대체.
+                const showJuly = grant.ai_marketer && marketerMonths.includes(7);
+                const showAugust = grant.ai_marketer && marketerMonths.includes(8);
+                const julyIsYoutube = marketingChannel === "youtube";
+                const augChannel = august?.channel ?? marketingChannel;
+                const augIsYoutube = augChannel === "youtube";
+                const augAccountUrl =
+                  august?.channelUrl ??
+                  buildAccountUrl(marketingChannel, channelUrl, instagramId);
+                const augContentUrl = august?.mainContentUrl ?? mainContentUrl;
+                const monthlyInfoSection =
+                  showJuly || showAugust ? (
+                    <div className="space-y-3">
+                      <p className="text-xs font-medium text-gray-400">
+                        마케팅 정보 (월별)
+                      </p>
+                      {showJuly && (
+                        <MonthMarketingBlock
+                          title="7월 마케팅 정보"
+                          badge={monthStatusBadge(7, currentMonth)}
+                          accountLabel={julyIsYoutube ? "채널 주소" : "계정 주소"}
+                          accountUrl={buildAccountUrl(
+                            marketingChannel,
+                            channelUrl,
+                            instagramId
+                          )}
+                          contentLabel={julyIsYoutube ? "메인 영상" : "메인 게시물"}
+                          contentUrl={mainContentUrl}
+                          emptyNote="아직 7월 정보를 입력하지 않았습니다."
+                        />
+                      )}
+                      {showAugust && (
+                        <MonthMarketingBlock
+                          title="8월 마케팅 정보"
+                          badge={monthStatusBadge(8, currentMonth)}
+                          accountLabel={augIsYoutube ? "채널 주소" : "계정 주소"}
+                          accountUrl={augAccountUrl}
+                          contentLabel={augIsYoutube ? "메인 영상" : "메인 게시물"}
+                          contentUrl={augContentUrl}
+                          emptyNote="아직 8월 정보를 입력하지 않았습니다."
+                        />
+                      )}
+                    </div>
+                  ) : null;
+
                 return (
                   <>
+                    {/* 8월 마케터 이용자: 진행/변경 선택 팝업 (1회성).
+                        7월(8월 이전 달)부터 이어온 기존 이용자만 대상 — 신규 8월
+                        구독자는 지난달 정보가 없으므로 신청 폼에서 바로 입력한다. */}
+                    {authUserId &&
+                      grant.ai_marketer &&
+                      marketerMonths.includes(8) &&
+                      marketerMonths.some((m) => m < 8) && (
+                        <AugustMarketingPopup
+                          userId={authUserId}
+                          email={authEmail || null}
+                          channelUrl={buildAccountUrl(
+                            marketingChannel,
+                            channelUrl,
+                            instagramId
+                          )}
+                          channelLabel={
+                            marketingChannel === "youtube"
+                              ? "채널 주소"
+                              : "계정 주소"
+                          }
+                          mainContentUrl={mainContentUrl}
+                          onChange={() => router.push("/marketing-august")}
+                        />
+                      )}
+
                     {/* 신청 서비스 요약 */}
                     <Card className="py-4">
                       <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
@@ -874,16 +1045,10 @@ export default function MyPage() {
                     </Card>
 
                     {/* AI 마케터 card */}
-                    {grant.ai_marketer && mainContentUrl && !marketerFuture ? (
+                    {grant.ai_marketer && mainContentUrl && !marketerFuture && !marketerEnded ? (
                       // ── 진행중 rich card ──────────────────────────────────
                       (() => {
                         const isYoutube = marketingChannel === "youtube";
-                        const accountUrl = buildAccountUrl(marketingChannel, channelUrl, instagramId);
-                        const accountLabel = isYoutube ? "채널 주소" : "계정 주소";
-                        const contentLabel = isYoutube ? "메인 영상" : "메인 게시물";
-                        const channelBadgeCls = isYoutube
-                          ? "bg-red-50 text-red-600"
-                          : "bg-rose-50 text-rose-600";
                         const outcomes = getExpectedOutcome(
                           snapshot.application?.selectedPlan ?? null,
                           snapshot.application?.selectedDuration ?? null
@@ -1000,49 +1165,8 @@ export default function MyPage() {
                                 })}
                               </div>
 
-                              {/* 제출 정보 */}
-                              <div className="mt-7">
-                                <p className="mb-3 text-xs font-medium text-gray-400">제출 정보</p>
-                                <div className="divide-y divide-gray-100 overflow-hidden rounded-2xl border border-gray-100">
-                                  <div className="flex items-center gap-3 px-4 py-3.5">
-                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500">
-                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                                        <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" />
-                                      </svg>
-                                    </span>
-                                    <span className="w-20 shrink-0 text-sm text-gray-500">선택한 채널</span>
-                                    <span className={`ml-auto rounded-full px-3 py-1 text-xs font-medium ${channelBadgeCls}`}>
-                                      {channelLabel}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-3 px-4 py-3.5">
-                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500">
-                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                                        <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" /><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
-                                      </svg>
-                                    </span>
-                                    <span className="w-20 shrink-0 text-sm text-gray-500">{accountLabel}</span>
-                                    {accountUrl ? (
-                                      <a href={accountUrl} target="_blank" rel="noopener noreferrer" title={accountUrl} className="min-w-0 flex-1 truncate text-right text-sm font-medium text-blue-600 hover:underline">
-                                        {buildDisplayUrl(accountUrl)}
-                                      </a>
-                                    ) : (
-                                      <span className="ml-auto text-sm text-gray-400">-</span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-3 px-4 py-3.5">
-                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500">
-                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                                        <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" />
-                                      </svg>
-                                    </span>
-                                    <span className="w-20 shrink-0 text-sm text-gray-500">{contentLabel}</span>
-                                    <a href={mainContentUrl} target="_blank" rel="noopener noreferrer" title={mainContentUrl} className="min-w-0 flex-1 truncate text-right text-sm font-medium text-blue-600 hover:underline">
-                                      {buildDisplayUrl(mainContentUrl)}
-                                    </a>
-                                  </div>
-                                </div>
-                              </div>
+                              {/* 제출 정보 (월별: 7월·8월) */}
+                              <div className="mt-7">{monthlyInfoSection}</div>
 
                               {/* 변경 불가 안내 */}
                               <div className="mt-4 flex gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3.5">
@@ -1134,6 +1258,8 @@ export default function MyPage() {
                           </div>
                         )}
 
+                        {monthlyInfoSection}
+
                         {grant.ai_marketer && marketerActive && !mainContentUrl && (
                           <div className="rounded-xl bg-orange-50 border border-orange-100 px-4 py-4 space-y-3">
                             <p className="text-sm text-orange-700 leading-relaxed">
@@ -1152,6 +1278,18 @@ export default function MyPage() {
                           <p className="text-sm text-gray-500 leading-relaxed">
                             서비스 시작 전입니다. 시작 월이 되면 진행됩니다.
                           </p>
+                        )}
+
+                        {grant.ai_marketer && marketerEnded && (
+                          <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-4 space-y-1.5">
+                            <p className="text-sm font-semibold text-gray-700">
+                              AI 마케터 이용이 종료되었습니다.
+                            </p>
+                            <p className="text-sm text-gray-500 leading-relaxed">
+                              그동안 이용해 주셔서 감사합니다. 추가 이용 또는 연장을
+                              원하시면 1:1 문의로 요청해 주세요.
+                            </p>
+                          </div>
                         )}
                       </Card>
                     )}

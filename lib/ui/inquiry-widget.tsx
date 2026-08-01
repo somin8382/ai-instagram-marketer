@@ -46,9 +46,12 @@ export function InquiryWidget() {
     });
   }, [pathname]);
 
-  async function loadInquiries() {
+  // Returns the fresh rows so callers can act on them immediately — reading
+  // the `inquiries` state right after awaiting this would see the stale
+  // pre-refetch list (setState hasn't re-rendered this closure yet).
+  async function loadInquiries(): Promise<InquiryRow[]> {
     const supabase = getSupabaseBrowserClientOrNull();
-    if (!supabase || !userId) return;
+    if (!supabase || !userId) return [];
     const { data } = (await (supabase
       .from("inquiries" as never)
       .select("id, message, status, admin_reply, replied_at, reply_read_at, created_at")
@@ -57,7 +60,9 @@ export function InquiryWidget() {
       data: InquiryRow[] | null;
       error: { message: string } | null;
     }>)) as { data: InquiryRow[] | null };
-    setInquiries(data ?? []);
+    const rows = data ?? [];
+    setInquiries(rows);
+    return rows;
   }
 
   useEffect(() => {
@@ -76,9 +81,11 @@ export function InquiryWidget() {
     setOpen(true);
     setResult(null);
     if (!userId) return;
-    await loadInquiries();
-    // Mark replies as read when the panel opens
-    const unread = inquiries.filter(
+    // Mark replies as read from the FRESH list returned by the refetch —
+    // filtering the state variable here would use the stale pre-refetch list
+    // and leave newly arrived replies unread until a second open.
+    const fresh = await loadInquiries();
+    const unread = fresh.filter(
       (inquiry) => inquiry.admin_reply && !inquiry.reply_read_at
     );
     if (unread.length > 0) {

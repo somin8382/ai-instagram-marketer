@@ -468,6 +468,12 @@ function ToolsHeader({
             <div className="h-5" aria-hidden="true" />
           )}
           <div className="flex items-center gap-2">
+            <a
+              href="/pricing"
+              className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors border border-violet-100 rounded-full px-3 py-1.5 bg-violet-50"
+            >
+              가격 안내
+            </a>
             <button
               onClick={onHome}
               className="text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors border border-gray-200 rounded-full px-3 py-1.5 bg-white"

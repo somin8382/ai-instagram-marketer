@@ -653,6 +653,12 @@ function StepUtilityHeader({
             <div className="h-5" aria-hidden="true" />
           )}
           <div className="flex items-center gap-2">
+            <a
+              href="/pricing"
+              className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors border border-violet-100 rounded-full px-3 py-1.5 bg-violet-50"
+            >
+              가격 안내
+            </a>
             <button
               onClick={onHome}
               className="text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors border border-gray-200 rounded-full px-3 py-1.5 bg-white"
@@ -704,6 +710,8 @@ export default function Home() {
   );
   const [channelUrl, setChannelUrl] = useState("");
   const [mainContentUrl, setMainContentUrl] = useState("");
+  // 댓글 이벤트 포함 여부(기본 포함). 마케터 신청 시 사용자가 선택.
+  const [commentsIncluded, setCommentsIncluded] = useState(true);
 
   // Input
   const [instagramId, setInstagramId] = useState("");
@@ -2750,6 +2758,7 @@ export default function Home() {
         marketingChannel,
         channelUrl: resolvedChannelUrl,
         mainContentUrl,
+        commentsIncluded,
         accountDirection: aiResult?.accountPlan.direction,
         accountBio: aiResult?.accountPlan.bio,
         accountConcept: aiResult?.accountPlan.concept,
@@ -2807,6 +2816,7 @@ export default function Home() {
         marketingChannel,
         channelUrl: resolvedChannelUrl,
         mainContentUrl,
+        commentsIncluded,
         accountDirection: aiResult?.accountPlan.direction,
         accountBio: aiResult?.accountPlan.bio,
         accountConcept: aiResult?.accountPlan.concept,
@@ -4244,6 +4254,41 @@ export default function Home() {
               </div>
             </Card>
 
+            {/* 댓글 이벤트 포함/미포함 선택 */}
+            <Card className="space-y-3">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-gray-900">댓글 이벤트</p>
+                <p className="text-xs leading-relaxed text-gray-500">
+                  댓글은 <span className="font-semibold">하루 이벤트</span>로
+                  진행됩니다. 실제로는 불특정 다수가 참여해 직접 작성하기 때문에{" "}
+                  <span className="font-semibold">특정 댓글 내용은 지정할 수
+                  없습니다.</span> 원치 않으시면 댓글 대신{" "}
+                  <span className="font-semibold">좋아요·팔로우 등으로 대체</span>
+                  해 마저 진행해 드립니다.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {(
+                  [
+                    [true, "댓글 포함"],
+                    [false, "미포함 (좋아요·팔로우로 대체)"],
+                  ] as const
+                ).map(([val, label]) => (
+                  <button
+                    key={String(val)}
+                    onClick={() => setCommentsIncluded(val)}
+                    className={`flex-1 rounded-xl border py-2.5 text-sm font-medium transition-colors ${
+                      commentsIncluded === val
+                        ? "border-rose-400 bg-rose-50 text-rose-600"
+                        : "border-gray-200 bg-white text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </Card>
+
             {/* 실행 전 경고 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG), warning(red) 톤 */}
             <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
               <div className="mb-4 flex items-center gap-3">
@@ -4358,8 +4403,7 @@ export default function Home() {
                     <polyline points="12 6 12 12 16 14" />
                   </svg>
                   <p className="text-sm leading-relaxed text-gray-800">
-                    7월 20일까지 업로드가 어려운 경우(예: MVP 개발 지연, 서비스
-                    제작 일정)에는{" "}
+                    업로드가 어려운 경우(예: MVP 개발 지연, 서비스 제작 일정)에는{" "}
                     <span className="text-gray-500">미리 말씀해 주세요.</span>
                   </p>
                 </div>

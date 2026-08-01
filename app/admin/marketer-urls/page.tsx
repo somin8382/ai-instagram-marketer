@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { AdminNav } from "@/lib/ui/admin-nav";
 
 type PageState = "loading" | "no_session" | "forbidden" | "error" | "ready";
 
@@ -103,29 +103,27 @@ export default function AdminMarketerUrlsPage() {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-5">
+        <AdminNav current="marketer-urls" />
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">잘못된 URL 모아보기</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              마케터 제출 내역 중 형식 오류 URL {items.length.toLocaleString()}건 · 검사한 제출 {scanned.toLocaleString()}건
+              마케터 제출 내역 중 형식이 잘못된 URL을 모아 사용자에게 수정을
+              안내하기 위한 점검 목록입니다.
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              형식 오류 URL {items.length.toLocaleString()}건 · 검사한 제출{" "}
+              {scanned.toLocaleString()}건
               {generatedAt &&
                 ` · 갱신 ${new Date(generatedAt).toLocaleTimeString("ko-KR")}`}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/admin"
-              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              ← 대시보드
-            </Link>
-            <button
-              onClick={() => load(accessToken)}
-              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              새로고침
-            </button>
-          </div>
+          <button
+            onClick={() => load(accessToken)}
+            className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            새로고침
+          </button>
         </div>
 
         {items.length === 0 ? (

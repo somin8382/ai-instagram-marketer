@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { AdminNav } from "@/lib/ui/admin-nav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,7 @@ type OverviewRow = {
   marketer_months: string | null;
   generator_months: string | null;
   generator_credits: number;
+  field: string; // "local" | "tech"
   status: string;
   applied_user_id: string | null;
   applied_at: string | null;
@@ -27,13 +29,37 @@ type OverviewRow = {
   marketerState: string | null;
   marketer_submitted_at: string | null;
   marketer_detail: MarketerDetail | null;
+  august_channel: {
+    channel: string | null;
+    channelUrl: string | null;
+    mainUrl: string | null;
+    commentsIncluded: boolean | null;
+  } | null;
+};
+
+// 관리자가 마케터 제출 내역에서 수정 가능한 필드 (백엔드 EDITABLE_FIELDS와 일치)
+type MarketerEditState = {
+  id: string;
+  marketing_channel: string;
+  channel_url: string;
+  main_content_url: string;
+  instagram_id: string;
+  industry: string;
+  product_service: string;
+  manager_name: string;
+  phone: string;
+  account_direction: string;
+  account_bio: string;
+  account_concept: string;
 };
 
 type MarketerDetail = {
+  id: string;
   created_at: string | null;
   marketing_channel: string | null;
   channel_url: string | null;
   main_content_url: string | null;
+  comments_included: boolean | null;
   industry: string | null;
   product_service: string | null;
   selected_plan: number | null;
@@ -46,12 +72,64 @@ type MarketerDetail = {
   phone: string | null;
 };
 
+type BulkField =
+  | "email"
+  | "applicant_name"
+  | "phone"
+  | "host_org"
+  | "mentor_org"
+  | "ai_marketer"
+  | "marketer_quantity"
+  | "marketer_months"
+  | "ai_generator"
+  | "generator_months"
+  | "generator_credits";
+
+const BULK_FIELD_LABELS: Record<BulkField, string> = {
+  email: "이메일",
+  applicant_name: "이름",
+  phone: "전화",
+  host_org: "주관기관",
+  mentor_org: "멘토기관",
+  ai_marketer: "AI마케터(Y/N)",
+  marketer_quantity: "마케터 수량",
+  marketer_months: "마케터 개월",
+  ai_generator: "AI생성기(Y/N)",
+  generator_months: "생성기 개월",
+  generator_credits: "생성기 크레딧",
+};
+
+type BulkColumn = {
+  index: number;
+  header: string;
+  detected: BulkField | null;
+  samples: string[];
+};
+
+type BulkParse = {
+  rows: string[][];
+  columns: BulkColumn[];
+  hasHeader: boolean;
+  delimiter: string;
+  rowCount: number;
+};
+
+type BulkChange = { label: string; from: string; to: string };
+
 type BulkPreviewRow = {
   rowIndex: number;
   email: string;
   applicant_name: string | null;
+  host_org: string | null;
+  mentor_org: string | null;
+  phone: string | null;
+  ai_marketer: boolean;
+  ai_generator: boolean;
+  generator_credits: number;
   action: "신규 등록" | "기존 수정" | "오류";
   reason?: string;
+  matchedBy?: "이름+전화";
+  changes?: BulkChange[];
 };
 
 type BulkTotals = { new: number; update: number; error: number };
@@ -69,6 +147,7 @@ type EditFormData = {
   ai_generator: boolean;
   generator_months: string;
   generator_credits: string;
+  field: string; // "local" | "tech"
 };
 
 type AdminPageState = "loading" | "no_session" | "forbidden" | "error" | "ready";
@@ -429,6 +508,7 @@ function rowToEditForm(row: OverviewRow): EditFormData {
     ai_generator: row.ai_generator,
     generator_months: row.generator_months ?? "",
     generator_credits: String(row.generator_credits ?? 40),
+    field: row.field ?? "tech",
   };
 }
 
@@ -608,8 +688,12 @@ export default function AdminPage() {
   const [filter, setFilter] = useState<"all" | "unsigned" | "marketer_unsubmitted">("all");
   const [sortMode, setSortMode] = useState<"default" | "submitted_asc">("default");
 
-  // Bulk registration
+  // Bulk registration (3 phases: 분석 → 미리보기 → 적용)
   const [bulkText, setBulkText] = useState("");
+  const [bulkParse, setBulkParse] = useState<BulkParse | null>(null);
+  const [bulkMapping, setBulkMapping] = useState<Record<number, BulkField | "ignore">>({});
+  const [bulkHasHeader, setBulkHasHeader] = useState(true);
+  const [bulkParseLoading, setBulkParseLoading] = useState(false);
   const [bulkPreview, setBulkPreview] = useState<{
     rows: BulkPreviewRow[];
     totals: BulkTotals;
@@ -635,6 +719,10 @@ export default function AdminPage() {
 
   // Detail view modal
   const [viewDetailRow, setViewDetailRow] = useState<OverviewRow | null>(null);
+  // 마케터 제출 내역 인라인 수정 (viewDetailRow 모달 안에서). null이면 보기 모드.
+  const [marketerEdit, setMarketerEdit] = useState<MarketerEditState | null>(null);
+  const [marketerEditSaving, setMarketerEditSaving] = useState(false);
+  const [marketerEditError, setMarketerEditError] = useState<string | null>(null);
 
   // Operations metrics
   const [ops, setOps] = useState<OpsMetrics | null>(null);
@@ -738,7 +826,65 @@ export default function AdminPage() {
 
   // ── Bulk handlers ─────────────────────────────────────────────────────────
 
+  // Phase 1 — analyze pasted text: detect delimiter/header + auto-map columns.
+  async function handleBulkParse() {
+    setBulkParseLoading(true);
+    setBulkParse(null);
+    setBulkPreview(null);
+    setBulkHeaderError(null);
+    setBulkResult(null);
+    try {
+      const res = await adminFetch("/api/admin/grants/bulk", accessToken, {
+        method: "POST",
+        body: JSON.stringify({ action: "parse", text: bulkText }),
+      });
+      if (!res.ok) {
+        setBulkHeaderError("분석에 실패했습니다. 다시 시도해주세요.");
+        return;
+      }
+      const data = (await res.json()) as BulkParse;
+      if (!data.rows || data.rows.length === 0) {
+        setBulkHeaderError("붙여넣은 데이터가 없습니다.");
+        return;
+      }
+      const mapping: Record<number, BulkField | "ignore"> = {};
+      for (const col of data.columns) {
+        mapping[col.index] = col.detected ?? "ignore";
+      }
+      setBulkParse(data);
+      setBulkMapping(mapping);
+      setBulkHasHeader(data.hasHeader);
+    } finally {
+      setBulkParseLoading(false);
+    }
+  }
+
+  // Build the request payload from the current mapping (excluding 무시 columns).
+  function bulkPayload(dryRun: boolean) {
+    const mapping: Record<number, BulkField> = {};
+    for (const [col, field] of Object.entries(bulkMapping)) {
+      if (field && field !== "ignore") mapping[Number(col)] = field;
+    }
+    return {
+      rows: bulkParse?.rows ?? [],
+      mapping,
+      hasHeader: bulkHasHeader,
+      dryRun,
+    };
+  }
+
+  // Submittable when an email column is mapped (신규 등록 가능), OR 이름+전화 are
+  // both mapped (이메일 없이 기존 항목 변경만 가능).
+  const bulkMappedFields = Object.values(bulkMapping);
+  const bulkEmailMapped = bulkMappedFields.includes("email");
+  const bulkNamePhoneMapped =
+    bulkMappedFields.includes("applicant_name") &&
+    bulkMappedFields.includes("phone");
+  const bulkCanSubmit = bulkEmailMapped || bulkNamePhoneMapped;
+
+  // Phase 2 — preview against the DB using the (possibly edited) mapping.
   async function handleBulkPreview() {
+    if (!bulkParse) return;
     setBulkPreviewLoading(true);
     setBulkPreview(null);
     setBulkHeaderError(null);
@@ -746,40 +892,33 @@ export default function AdminPage() {
     try {
       const res = await adminFetch("/api/admin/grants/bulk", accessToken, {
         method: "POST",
-        body: JSON.stringify({ rows: bulkText, dryRun: true }),
+        body: JSON.stringify(bulkPayload(true)),
       });
-      if (res.status === 400) {
-        const data = (await res.json()) as { headerError?: string };
-        if (data.headerError) {
-          setBulkHeaderError(data.headerError);
-          return;
-        }
-      }
       if (!res.ok) {
-        setBulkHeaderError("미리보기 요청이 실패했습니다.");
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setBulkHeaderError(data.error ?? "미리보기 요청이 실패했습니다.");
         return;
       }
-      const data = (await res.json()) as {
-        rows: BulkPreviewRow[];
-        totals: BulkTotals;
-      };
+      const data = (await res.json()) as { rows: BulkPreviewRow[]; totals: BulkTotals };
       setBulkPreview(data);
     } finally {
       setBulkPreviewLoading(false);
     }
   }
 
+  // Phase 3 — apply (write).
   async function handleBulkConfirm() {
+    if (!bulkParse) return;
     setBulkConfirmLoading(true);
     setBulkResult(null);
     try {
       const res = await adminFetch("/api/admin/grants/bulk", accessToken, {
         method: "POST",
-        body: JSON.stringify({ rows: bulkText, dryRun: false }),
+        body: JSON.stringify(bulkPayload(false)),
       });
       if (!res.ok) {
-        const data = (await res.json()) as { error?: string; headerError?: string };
-        setBulkResult(`오류: ${data.error ?? data.headerError ?? "알 수 없는 오류"}`);
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setBulkResult(`오류: ${data.error ?? "알 수 없는 오류"}`);
         return;
       }
       const data = (await res.json()) as {
@@ -791,6 +930,7 @@ export default function AdminPage() {
         `완료 — 신규 ${data.inserted}건, 수정 ${data.updated}건, 오류 ${data.skipped}건`
       );
       setBulkPreview(null);
+      setBulkParse(null);
       setBulkText("");
       await loadOverview(accessToken);
     } finally {
@@ -855,6 +995,68 @@ export default function AdminPage() {
 
   // ── Edit handlers ─────────────────────────────────────────────────────────
 
+  function startMarketerEdit(d: MarketerDetail) {
+    setMarketerEditError(null);
+    setMarketerEdit({
+      id: d.id,
+      marketing_channel: d.marketing_channel ?? "",
+      channel_url: d.channel_url ?? "",
+      main_content_url: d.main_content_url ?? "",
+      instagram_id: d.instagram_id ?? "",
+      industry: d.industry ?? "",
+      product_service: d.product_service ?? "",
+      manager_name: d.manager_name ?? "",
+      phone: d.phone ?? "",
+      account_direction: d.account_direction ?? "",
+      account_bio: d.account_bio ?? "",
+      account_concept: d.account_concept ?? "",
+    });
+  }
+
+  async function saveMarketerDetail() {
+    if (!marketerEdit) return;
+    setMarketerEditSaving(true);
+    setMarketerEditError(null);
+    try {
+      const res = await adminFetch("/api/admin/users/application", accessToken, {
+        method: "PATCH",
+        body: JSON.stringify(marketerEdit),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        setMarketerEditError(data.error ?? "저장에 실패했습니다.");
+        return;
+      }
+      const e = marketerEdit;
+      // Reflect the edit in the open modal immediately, then refresh the list.
+      setViewDetailRow((prev) =>
+        prev && prev.marketer_detail
+          ? {
+              ...prev,
+              marketer_detail: {
+                ...prev.marketer_detail,
+                marketing_channel: e.marketing_channel || null,
+                channel_url: e.channel_url || null,
+                main_content_url: e.main_content_url || null,
+                instagram_id: e.instagram_id || null,
+                industry: e.industry || null,
+                product_service: e.product_service || null,
+                manager_name: e.manager_name || null,
+                phone: e.phone || null,
+                account_direction: e.account_direction || null,
+                account_bio: e.account_bio || null,
+                account_concept: e.account_concept || null,
+              },
+            }
+          : prev
+      );
+      setMarketerEdit(null);
+      await loadOverview(accessToken);
+    } finally {
+      setMarketerEditSaving(false);
+    }
+  }
+
   async function handleEditSave() {
     if (!editForm) return;
     setEditLoading(true);
@@ -876,6 +1078,7 @@ export default function AdminPage() {
           marketer_months: editForm.marketer_months || null,
           generator_months: editForm.generator_months || null,
           generator_credits: Number(editForm.generator_credits) || 40,
+          field: editForm.field === "local" ? "local" : "tech",
         }),
       });
       if (!res.ok) {
@@ -975,35 +1178,26 @@ export default function AdminPage() {
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
 
+        <AdminNav current="dashboard" />
+
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">관리자 대시보드</h1>
-            <p className="text-sm text-gray-500 mt-0.5">서비스 권한 사전등록 관리</p>
+            <p className="text-sm text-gray-500 mt-0.5">
+              운영 지표·문의·사전등록을 한 곳에서 관리합니다. 처음이시면 상단
+              📖 사용설명서를 참고하세요.
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            <a
-              href="/admin/users"
-              className="text-sm px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors"
-            >
-              전체 사용자
-            </a>
-            <a
-              href="/admin/marketer-urls"
-              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              잘못된 URL
-            </a>
-            <button
-              onClick={() => {
-                loadOverview(accessToken);
-                loadOps(accessToken);
-              }}
-              className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              새로고침
-            </button>
-          </div>
+          <button
+            onClick={() => {
+              loadOverview(accessToken);
+              loadOps(accessToken);
+            }}
+            className="text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            새로고침
+          </button>
         </div>
 
         <OpsPanel ops={ops} error={opsError} />
@@ -1179,49 +1373,155 @@ export default function AdminPage() {
           <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
             일괄 등록 (스프레드시트 붙여넣기)
           </p>
+          <p className="text-xs text-gray-400 -mt-2">
+            어떤 기관의 양식이든 그대로 붙여넣으세요. 열 순서·헤더·구분자(탭/쉼표
+            등)를 자동으로 인식합니다. <b>분석 → 열 매핑 확인 → 미리보기 → 적용</b>
+            순으로 진행하며, <b>적용을 누르기 전에는 저장되지 않습니다.</b>
+            <br />
+            <b>신규 등록은 이메일이 필요</b>하지만, 이메일 없이 <b>이름+전화</b>만 있으면
+            일치하는 기존 사전등록을 <b>변경</b>할 수 있습니다.
+          </p>
 
           <textarea
             className="w-full h-36 px-4 py-3 bg-white text-gray-900 border border-gray-200 rounded-xl text-sm font-mono placeholder:text-gray-400 focus:outline-none focus:border-gray-400 resize-none"
-            placeholder={`이메일\t이름\t전화\t주관기관\tai_marketer\tai_generator\tgenerator_months\n(스프레드시트에서 복사한 행을 그대로 붙여넣으세요)`}
+            placeholder={`이메일\t이름\t전화\t주관기관\tai_marketer\tai_generator\tgenerator_months\n(엑셀·구글시트에서 복사한 행을 그대로 붙여넣으세요. 헤더 순서가 달라도 됩니다.)`}
             value={bulkText}
             onChange={(e) => {
               setBulkText(e.target.value);
+              setBulkParse(null);
               setBulkPreview(null);
               setBulkHeaderError(null);
               setBulkResult(null);
             }}
           />
 
-          {bulkHeaderError && (
-            <p className="text-sm text-red-500">{bulkHeaderError}</p>
-          )}
-
+          {bulkHeaderError && <p className="text-sm text-red-500">{bulkHeaderError}</p>}
           {bulkResult && (
             <p className={`text-sm ${bulkResult.startsWith("오류") ? "text-red-500" : "text-green-600"}`}>
               {bulkResult}
             </p>
           )}
 
+          {/* Phase 1 — analyze */}
           <div className="flex gap-2">
             <button
-              onClick={handleBulkPreview}
-              disabled={!bulkText.trim() || bulkPreviewLoading}
+              onClick={handleBulkParse}
+              disabled={!bulkText.trim() || bulkParseLoading}
               className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 transition-colors"
             >
-              {bulkPreviewLoading ? "미리보는 중..." : "미리보기"}
+              {bulkParseLoading ? "분석 중..." : "1. 분석"}
             </button>
-            {bulkPreview && (
-              <button
-                onClick={handleBulkConfirm}
-                disabled={bulkConfirmLoading}
-                className="px-4 py-2 rounded-xl text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-40 transition-colors"
-              >
-                {bulkConfirmLoading ? "등록 중..." : "등록 확정"}
-              </button>
-            )}
           </div>
 
-          {/* Preview table */}
+          {/* Phase 1 result — column mapping panel */}
+          {bulkParse && (
+            <div className="space-y-3 rounded-xl border border-gray-200 p-4 bg-gray-50/50">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-gray-700">
+                  열 → 항목 매핑 확인{" "}
+                  <span className="font-normal text-gray-400">
+                    (구분자: {bulkParse.delimiter} · 데이터 {bulkParse.rowCount}행)
+                  </span>
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={bulkHasHeader}
+                    onChange={(e) => {
+                      setBulkHasHeader(e.target.checked);
+                      setBulkPreview(null);
+                    }}
+                  />
+                  첫 줄은 헤더(제목 행)입니다
+                </label>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                각 열이 올바른 항목으로 인식됐는지 확인하고, 틀리면 드롭다운으로
+                바꾸거나 <b>무시</b>로 제외하세요. 아래 샘플로 값이 맞는지 볼 수 있습니다.
+              </p>
+              <div className="overflow-x-auto">
+                <div className="flex gap-2 min-w-full">
+                  {bulkParse.columns.map((col) => {
+                    const value = bulkMapping[col.index] ?? "ignore";
+                    const ignored = value === "ignore";
+                    return (
+                      <div
+                        key={col.index}
+                        className={`shrink-0 w-44 rounded-xl border p-2.5 space-y-2 ${
+                          ignored ? "border-gray-100 bg-gray-50 opacity-70" : "border-gray-200 bg-white"
+                        }`}
+                      >
+                        <p className="text-[11px] text-gray-400 truncate" title={col.header}>
+                          {bulkHasHeader && col.header ? col.header : `열 ${col.index + 1}`}
+                        </p>
+                        <select
+                          value={value}
+                          onChange={(e) => {
+                            setBulkMapping((prev) => ({
+                              ...prev,
+                              [col.index]: e.target.value as BulkField | "ignore",
+                            }));
+                            setBulkPreview(null);
+                          }}
+                          className="w-full px-2 py-1.5 bg-white text-gray-900 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-gray-400"
+                        >
+                          <option value="ignore">무시</option>
+                          {(Object.keys(BULK_FIELD_LABELS) as BulkField[]).map((f) => (
+                            <option key={f} value={f}>
+                              {BULK_FIELD_LABELS[f]}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="space-y-0.5">
+                          {col.samples.length === 0 ? (
+                            <p className="text-[11px] text-gray-300">(빈 값)</p>
+                          ) : (
+                            col.samples.map((s, i) => (
+                              <p key={i} className="text-[11px] text-gray-500 truncate" title={s}>
+                                {s}
+                              </p>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {!bulkCanSubmit && (
+                <p className="text-xs text-red-500">
+                  이메일 열, 또는 이름+전화 열을 지정해주세요. (신규 등록은 이메일 필요, 이메일 없이
+                  이름+전화만 있으면 기존 항목 변경만 가능)
+                </p>
+              )}
+              {!bulkEmailMapped && bulkNamePhoneMapped && (
+                <p className="text-xs text-amber-600">
+                  이메일 열이 없어 <strong>기존 항목 변경만</strong> 됩니다. 이름+전화가 일치하는 기존
+                  사전등록만 수정되고, 일치 항목이 없으면 오류로 표시됩니다(신규 등록은 이메일 필요).
+                </p>
+              )}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleBulkPreview}
+                  disabled={!bulkCanSubmit || bulkPreviewLoading}
+                  className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                >
+                  {bulkPreviewLoading ? "미리보는 중..." : "2. 미리보기"}
+                </button>
+                {bulkPreview && (
+                  <button
+                    onClick={handleBulkConfirm}
+                    disabled={bulkConfirmLoading}
+                    className="px-4 py-2 rounded-xl text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-40 transition-colors"
+                  >
+                    {bulkConfirmLoading ? "적용 중..." : "3. 적용 (저장)"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Phase 2 — preview table */}
           {bulkPreview && (
             <div className="space-y-2">
               <div className="flex gap-3 text-xs text-gray-600">
@@ -1232,22 +1532,51 @@ export default function AdminPage() {
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-gray-50 text-left text-xs text-gray-600 border-b border-gray-200">
-                      <th className="px-3 py-2 font-medium">행</th>
+                    <tr className="bg-gray-50 text-left text-xs text-gray-600 border-b border-gray-200 whitespace-nowrap">
+                      <th className="px-3 py-2 font-medium">구분</th>
                       <th className="px-3 py-2 font-medium">이메일</th>
                       <th className="px-3 py-2 font-medium">이름</th>
-                      <th className="px-3 py-2 font-medium">구분</th>
-                      <th className="px-3 py-2 font-medium">비고</th>
+                      <th className="px-3 py-2 font-medium">주관기관</th>
+                      <th className="px-3 py-2 font-medium">멘토기관</th>
+                      <th className="px-3 py-2 font-medium">전화</th>
+                      <th className="px-3 py-2 font-medium">마케터</th>
+                      <th className="px-3 py-2 font-medium">생성기</th>
+                      <th className="px-3 py-2 font-medium">크레딧</th>
+                      <th className="px-3 py-2 font-medium">변경/비고</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {bulkPreview.rows.map((r) => (
                       <tr key={r.rowIndex} className={r.action === "오류" ? "bg-red-50" : ""}>
-                        <td className="px-3 py-2 text-gray-500">{r.rowIndex}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{previewActionBadge(r.action)}</td>
                         <td className="px-3 py-2 font-mono text-xs text-gray-800">{r.email || "-"}</td>
-                        <td className="px-3 py-2 text-gray-700">{r.applicant_name ?? "-"}</td>
-                        <td className="px-3 py-2">{previewActionBadge(r.action)}</td>
-                        <td className="px-3 py-2 text-xs text-red-500">{r.reason ?? ""}</td>
+                        <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{r.applicant_name ?? "-"}</td>
+                        <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{r.host_org ?? "-"}</td>
+                        <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{r.mentor_org ?? "-"}</td>
+                        <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{r.phone ?? "-"}</td>
+                        <td className="px-3 py-2 text-center">{r.ai_marketer ? "✓" : "-"}</td>
+                        <td className="px-3 py-2 text-center">{r.ai_generator ? "✓" : "-"}</td>
+                        <td className="px-3 py-2 text-gray-700">{r.action === "오류" ? "-" : r.generator_credits}</td>
+                        <td className="px-3 py-2 text-xs">
+                          {r.matchedBy && (
+                            <span className="inline-block mr-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 text-[10px] align-middle">
+                              {r.matchedBy}로 매칭
+                            </span>
+                          )}
+                          {r.reason ? (
+                            <span className="text-red-500">{r.reason}</span>
+                          ) : r.changes && r.changes.length > 0 ? (
+                            <span className="text-amber-600">
+                              {r.changes
+                                .map((c) => `${c.label}: ${c.from}→${c.to}`)
+                                .join(", ")}
+                            </span>
+                          ) : r.action === "기존 수정" ? (
+                            <span className="text-gray-400">변경 없음</span>
+                          ) : (
+                            ""
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1568,6 +1897,20 @@ export default function AdminPage() {
                   </div>
                 ))}
 
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600">분야</label>
+                  <select
+                    value={editForm.field}
+                    onChange={(e) =>
+                      setEditForm((f) => f && { ...f, field: e.target.value })
+                    }
+                    className={inputCls}
+                  >
+                    <option value="tech">기술</option>
+                    <option value="local">로컬</option>
+                  </select>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4 pt-1">
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
@@ -1678,7 +2021,10 @@ export default function AdminPage() {
           return (
             <div
               className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
-              onClick={() => setViewDetailRow(null)}
+              onClick={() => {
+                setViewDetailRow(null);
+                setMarketerEdit(null);
+              }}
             >
               <div
                 className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto"
@@ -1686,13 +2032,28 @@ export default function AdminPage() {
               >
                 {/* Header */}
                 <div className="flex items-center justify-between">
-                  <h2 className="text-base font-semibold text-gray-900">마케터 제출 내역</h2>
-                  <button
-                    onClick={() => setViewDetailRow(null)}
-                    className="text-gray-400 hover:text-gray-700 text-sm transition-colors"
-                  >
-                    닫기
-                  </button>
+                  <h2 className="text-base font-semibold text-gray-900">
+                    마케터 제출 내역{marketerEdit ? " 수정" : ""}
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    {!marketerEdit && (
+                      <button
+                        onClick={() => startMarketerEdit(detail)}
+                        className="text-xs px-2.5 py-1 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        수정
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setViewDetailRow(null);
+                        setMarketerEdit(null);
+                      }}
+                      className="text-gray-400 hover:text-gray-700 text-sm transition-colors"
+                    >
+                      닫기
+                    </button>
+                  </div>
                 </div>
 
                 {/* Email */}
@@ -1701,6 +2062,67 @@ export default function AdminPage() {
                 </p>
 
                 {/* Fields */}
+                {marketerEdit ? (
+                  <div className="space-y-3">
+                    {marketerEditError && (
+                      <p className="text-sm text-red-500">{marketerEditError}</p>
+                    )}
+                    {(
+                      [
+                        ["marketing_channel", "채널"],
+                        ["channel_url", "채널 URL"],
+                        ["main_content_url", "대표 게시물/영상 URL"],
+                        ["instagram_id", "인스타그램 ID"],
+                        ["industry", "업종"],
+                        ["product_service", "상품/서비스"],
+                        ["manager_name", "담당자"],
+                        ["phone", "연락처"],
+                      ] as Array<[keyof MarketerEditState, string]>
+                    ).map(([f, label]) => (
+                      <div key={f} className="space-y-1">
+                        <label className="text-xs font-medium text-gray-600">
+                          {label}
+                        </label>
+                        <input
+                          type="text"
+                          value={marketerEdit[f]}
+                          onChange={(ev) =>
+                            setMarketerEdit((m) =>
+                              m ? { ...m, [f]: ev.target.value } : m
+                            )
+                          }
+                          className={inputCls}
+                        />
+                      </div>
+                    ))}
+                    {(
+                      [
+                        ["account_direction", "계정 방향"],
+                        ["account_bio", "계정 소개"],
+                        ["account_concept", "계정 컨셉"],
+                      ] as Array<[keyof MarketerEditState, string]>
+                    ).map(([f, label]) => (
+                      <div key={f} className="space-y-1">
+                        <label className="text-xs font-medium text-gray-600">
+                          {label}
+                        </label>
+                        <textarea
+                          value={marketerEdit[f]}
+                          onChange={(ev) =>
+                            setMarketerEdit((m) =>
+                              m ? { ...m, [f]: ev.target.value } : m
+                            )
+                          }
+                          rows={2}
+                          className={`${inputCls} resize-none`}
+                        />
+                      </div>
+                    ))}
+                    <p className="text-xs text-gray-400">
+                      수량·기간·제출일은 여기서 수정할 수 없습니다.
+                    </p>
+                  </div>
+                ) : (
                 <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-3 text-sm">
 
                   <dt className="text-gray-500 pt-px">채널</dt>
@@ -1736,6 +2158,15 @@ export default function AdminPage() {
                     ) : (
                       <span className="text-gray-400 italic text-xs">미제출 (임시저장)</span>
                     )}
+                  </dd>
+
+                  <dt className="text-gray-500 pt-px">댓글 이벤트</dt>
+                  <dd className="text-gray-900">
+                    {detail.comments_included === false
+                      ? "미포함 (좋아요·팔로우로 대체)"
+                      : detail.comments_included === true
+                        ? "포함"
+                        : "-"}
                   </dd>
 
                   <dt className="text-gray-500 pt-px">업종</dt>
@@ -1775,14 +2206,95 @@ export default function AdminPage() {
                   <dd className="text-gray-900">{formatSeoulDate(viewDetailRow.marketer_submitted_at)}</dd>
 
                 </dl>
+                )}
+
+                {viewDetailRow.august_channel && !marketerEdit && (
+                  <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2 text-sm">
+                    <p className="text-xs font-semibold text-emerald-600">
+                      8월 변경 정보 (유저가 새로 입력)
+                    </p>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">채널</span>
+                      <span className="text-gray-900">
+                        {viewDetailRow.august_channel.channel === "youtube"
+                          ? "유튜브"
+                          : viewDetailRow.august_channel.channel === "instagram"
+                            ? "인스타그램"
+                            : "-"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">채널 URL</span>
+                      {viewDetailRow.august_channel.channelUrl ? (
+                        <a
+                          href={viewDetailRow.august_channel.channelUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-w-0 truncate text-right text-blue-600 underline"
+                        >
+                          {viewDetailRow.august_channel.channelUrl}
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">메인 게시물</span>
+                      {viewDetailRow.august_channel.mainUrl ? (
+                        <a
+                          href={viewDetailRow.august_channel.mainUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-w-0 truncate text-right text-blue-600 underline"
+                        >
+                          {viewDetailRow.august_channel.mainUrl}
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">댓글 이벤트</span>
+                      <span className="text-gray-900">
+                        {viewDetailRow.august_channel.commentsIncluded === false
+                          ? "미포함 (좋아요·팔로우로 대체)"
+                          : viewDetailRow.august_channel.commentsIncluded === true
+                            ? "포함"
+                            : "-"}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="pt-2">
-                  <button
-                    onClick={() => setViewDetailRow(null)}
-                    className="w-full py-2 rounded-xl text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 transition-colors"
-                  >
-                    닫기
-                  </button>
+                  {marketerEdit ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={saveMarketerDetail}
+                        disabled={marketerEditSaving}
+                        className="flex-1 py-2 rounded-xl text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-40 transition-colors"
+                      >
+                        {marketerEditSaving ? "저장 중..." : "저장"}
+                      </button>
+                      <button
+                        onClick={() => setMarketerEdit(null)}
+                        disabled={marketerEditSaving}
+                        className="px-4 py-2 rounded-xl text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                      >
+                        취소
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setViewDetailRow(null);
+                        setMarketerEdit(null);
+                      }}
+                      className="w-full py-2 rounded-xl text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 transition-colors"
+                    >
+                      닫기
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

@@ -55,6 +55,7 @@ const OPTIONAL_APPLICATION_FIELDS = new Set([
   "account_concept",
   "channel_url",
   "main_content_url",
+  "comments_included",
   "tax_invoice_requested",
   "business_number",
   "company_name",

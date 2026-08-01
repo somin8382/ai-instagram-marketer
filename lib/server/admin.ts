@@ -18,6 +18,17 @@ export function getSupabaseServiceRoleClient() {
 }
 
 /**
+ * Neutralize characters that would break a value interpolated into a PostgREST
+ * `.or()` / filter string: the list separators and grouping (`,` `(` `)`) and
+ * the LIKE / PostgREST wildcards (`%` `_` `*` `\`). Names and emails never
+ * legitimately contain these, so replacing them with spaces keeps search
+ * literal and prevents malformed-filter 500s or unintended wildcard matches.
+ */
+export function escapePostgrestFilterValue(value: string): string {
+  return value.replace(/[,()%_*\\]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
  * Propagate an admin-side change of grant credits to the user's live
  * subscription. Grant credits are copied into subscriptions.remaining_credits
  * only at redeem time, so editing a grant after the user has an active

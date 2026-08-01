@@ -22,6 +22,42 @@ const IMAGE_STORAGE_BUCKET = "post-images";
 const TEXT_MODEL = "openai/gpt-4o-mini";
 const IMAGE_MODEL = "google/gemini-3-pro-image-preview";
 
+// Persist one generation attempt for admin support tooling. Awaited by callers
+// so the row is committed before the serverless function returns (a
+// fire-and-forget insert can be cut off when the function freezes). Never
+// throws — a logging failure must not affect the user response.
+async function writeGenerationLog(input: {
+  userId: string | null;
+  usageMode: string;
+  outcome: string;
+  durationMs: number;
+  userPrompt?: string | null;
+  imageCount?: number;
+  imageModel?: string | null;
+  textModel?: string | null;
+}): Promise<void> {
+  try {
+    const db = getSupabaseServiceRoleClient();
+    const res = (await (
+      db.from("generation_logs").insert({
+        user_id: input.userId,
+        usage_mode: input.usageMode,
+        outcome: input.outcome,
+        duration_ms: input.durationMs,
+        user_prompt: (input.userPrompt ?? "").slice(0, 2000) || null,
+        image_count: input.imageCount ?? 0,
+        image_model: input.imageModel ?? null,
+        text_model: input.textModel ?? null,
+      } as never) as unknown
+    )) as { error: { message: string } | null };
+    if (res.error) {
+      console.warn("[/api/ai] generation log insert failed:", res.error.message);
+    }
+  } catch {
+    // Service role not configured (e.g. local dev): console log only.
+  }
+}
+
 type AccountPlanResult = {
   accountNames: Array<{ name: string; meaning: string }>;
   accountPlan: {
@@ -342,7 +378,7 @@ async function handlePostImageGeneration(
     userPrompt: string;
     imageCount: number;
   } = { userId: null, userPrompt: "", imageCount: 0 };
-  const logOutcome = (
+  const logOutcome = async (
     outcome: "success" | "plan_failed" | "image_failed" | "no_image_output",
     extra: Record<string, unknown> = {}
   ) => {
@@ -356,30 +392,18 @@ async function handlePostImageGeneration(
         ...extra,
       })
     );
-    // Persist for admin support tooling; never blocks or fails the response.
-    try {
-      const db = getSupabaseServiceRoleClient();
-      void (
-        db.from("generation_logs").insert({
-          user_id: logContext.userId,
-          usage_mode: usageMode,
-          outcome,
-          duration_ms: durationMs,
-          user_prompt: logContext.userPrompt.slice(0, 2000) || null,
-          image_count: logContext.imageCount,
-          image_model: (extra.imageModel as string) ?? null,
-          text_model: (extra.planningModel as string) ?? null,
-        } as never) as unknown as Promise<{
-          error: { message: string } | null;
-        }>
-      ).then(({ error }) => {
-        if (error) {
-          console.warn("[/api/ai] generation log insert failed:", error.message);
-        }
-      });
-    } catch {
-      // Service role not configured (local dev): console log only
-    }
+    // Awaited so the row is committed before the serverless function returns
+    // (a fire-and-forget insert can be cut off on freeze). Never throws.
+    await writeGenerationLog({
+      userId: logContext.userId,
+      usageMode,
+      outcome,
+      durationMs,
+      userPrompt: logContext.userPrompt,
+      imageCount: logContext.imageCount,
+      imageModel: (extra.imageModel as string) ?? null,
+      textModel: (extra.planningModel as string) ?? null,
+    });
   };
   const premiumAccess = await verifyPremiumGenerationAccess({
     usageMode,
@@ -512,7 +536,7 @@ async function handlePostImageGeneration(
   });
 
   if (!postPlan.ok) {
-    logOutcome("plan_failed");
+    await logOutcome("plan_failed");
     return Response.json(
       {
         error: "게시물 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
@@ -582,7 +606,7 @@ Requirements:
   });
 
   if (!imageResponse.ok) {
-    logOutcome("image_failed");
+    await logOutcome("image_failed");
     return Response.json(
       { error: "이미지 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
       { status: 502 }
@@ -600,7 +624,7 @@ Requirements:
       "[/api/ai] Available image response keys:",
       getImageResponseDebugSummary(imageResponse.data)
     );
-    logOutcome("no_image_output");
+    await logOutcome("no_image_output");
     return Response.json(
       { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
       { status: 502 }
@@ -633,7 +657,7 @@ Requirements:
     result.imageModelText = imageModelText;
   }
 
-  logOutcome("success", { imageModel: IMAGE_MODEL, planningModel: TEXT_MODEL });
+  await logOutcome("success", { imageModel: IMAGE_MODEL, planningModel: TEXT_MODEL });
 
   return Response.json(
     { ...result, source: "api" },
@@ -1630,6 +1654,7 @@ function getPlanningValidationIssues(result: AccountPlanResult) {
 }
 
 async function handleImageOnly(body: AiRequestBody, apiKey: string, request: Request) {
+  const startedAt = Date.now();
   const premiumAccess = await verifyPremiumGenerationAccess({
     usageMode: "premium",
     accessToken: String(body.accessToken ?? "").trim(),
@@ -1640,6 +1665,19 @@ async function handleImageOnly(body: AiRequestBody, apiKey: string, request: Req
   if (!premiumAccess.ok) {
     return Response.json({ error: premiumAccess.error }, { status: premiumAccess.statusCode });
   }
+
+  const logUserId =
+    "userId" in premiumAccess ? (premiumAccess.userId ?? null) : null;
+  const logImageOnly = (outcome: string, prompt: string) =>
+    writeGenerationLog({
+      userId: logUserId,
+      usageMode: "premium",
+      outcome,
+      durationMs: Date.now() - startedAt,
+      userPrompt: `[재생성] ${prompt}`.trim(),
+      imageCount: 1,
+      imageModel: IMAGE_MODEL,
+    });
 
   const imageBase64 = String(body.imageEditBase64 ?? "").trim();
   const visualPromptRaw = String(body.visualPrompt ?? "").trim();
@@ -1695,6 +1733,7 @@ Output a polished square 1:1 Instagram feed post image.`;
   });
 
   if (!imageResponse.ok) {
+    await logImageOnly("image_failed", suffix);
     return Response.json(
       { error: "이미지 재생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
       { status: 502 }
@@ -1704,6 +1743,7 @@ Output a polished square 1:1 Instagram feed post image.`;
   const imageOutputs = extractImageOutputs(imageResponse.data);
 
   if (!imageOutputs.length) {
+    await logImageOnly("no_image_output", suffix);
     return Response.json(
       { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
       { status: 502 }
@@ -1720,10 +1760,12 @@ Output a polished square 1:1 Instagram feed post image.`;
     );
   }
 
+  await logImageOnly("success", suffix);
   return Response.json({ generatedImageUrl, source: "api" });
 }
 
 async function handleImageEdit(body: AiRequestBody, apiKey: string, request: Request) {
+  const startedAt = Date.now();
   const premiumAccess = await verifyPremiumGenerationAccess({
     usageMode: "premium",
     accessToken: String(body.accessToken ?? "").trim(),
@@ -1734,6 +1776,19 @@ async function handleImageEdit(body: AiRequestBody, apiKey: string, request: Req
   if (!premiumAccess.ok) {
     return Response.json({ error: premiumAccess.error }, { status: premiumAccess.statusCode });
   }
+
+  const logUserId =
+    "userId" in premiumAccess ? (premiumAccess.userId ?? null) : null;
+  const logImageEdit = (outcome: string, prompt: string) =>
+    writeGenerationLog({
+      userId: logUserId,
+      usageMode: "premium",
+      outcome,
+      durationMs: Date.now() - startedAt,
+      userPrompt: `[AI수정] ${prompt}`.trim(),
+      imageCount: 1,
+      imageModel: IMAGE_MODEL,
+    });
 
   const imageBase64 = String(body.imageEditBase64 ?? "").trim();
   const editPromptRaw = String(body.editPrompt ?? "").trim();
@@ -1785,6 +1840,7 @@ Rules:
   });
 
   if (!imageResponse.ok) {
+    await logImageEdit("image_failed", editPromptRaw);
     return Response.json(
       { error: "이미지 수정에 실패했습니다. 잠시 후 다시 시도해주세요." },
       { status: 502 }
@@ -1794,6 +1850,7 @@ Rules:
   const imageOutputs = extractImageOutputs(imageResponse.data);
 
   if (!imageOutputs.length) {
+    await logImageEdit("no_image_output", editPromptRaw);
     return Response.json(
       { error: "수정된 이미지를 불러오지 못했습니다. 다시 시도해주세요." },
       { status: 502 }
@@ -1810,5 +1867,6 @@ Rules:
     );
   }
 
+  await logImageEdit("success", editPromptRaw);
   return Response.json({ generatedImageUrl, source: "api" });
 }
