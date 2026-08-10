@@ -35,20 +35,6 @@ import {
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
 const APP_STORAGE_KEY = "qmeet-app-state";
 const APPLICATION_STAGES = ["접수됨", "입금 확인중", "진행중", "완료"] as const;
-type OutcomeMetricKey = "followers" | "likes" | "comments";
-type ExpectedOutcome = Record<OutcomeMetricKey, number>;
-
-const EXPECTED_OUTCOME_DATA: Record<1 | 2, Record<1 | 2, ExpectedOutcome>> = {
-  1: {
-    1: { followers: 500, likes: 100, comments: 30 },
-    2: { followers: 1000, likes: 200, comments: 60 },
-  },
-  2: {
-    1: { followers: 1000, likes: 200, comments: 60 },
-    2: { followers: 2000, likes: 400, comments: 120 },
-  },
-};
-
 const EMPTY_SNAPSHOT: MyPageSnapshot = {
   application: null,
   payment: null,
@@ -210,18 +196,36 @@ function getEarliestFutureMonth(months: number[], currentMonth: number) {
 
 // ── 마케터 카드 헬퍼 ──────────────────────────────────────────────────────────
 
-function getExpectedOutcome(plan: number | null, duration: number | null) {
-  const safePlan: 1 | 2 = plan === 2 ? 2 : 1;
-  const safeDuration: 1 | 2 = duration === 2 ? 2 : 1;
-  return EXPECTED_OUTCOME_DATA[safePlan][safeDuration];
-}
+// 월 1개월·수량 1개 기준 목표치. 실제 목표는 여기에 신청 수량을 곱한다.
+// 랜딩/마케터 카드의 '예상 성과'와 같은 기준(인스타 +500·100·30, 유튜브 +200·1,000·10).
+const MONTHLY_GOAL_BASE = {
+  instagram: { followers: 500, engagement: 100, comments: 30 },
+  youtube: { followers: 200, engagement: 1000, comments: 10 },
+} as const;
 
-function formatOutcomeValue(metric: OutcomeMetricKey, value: number): string {
-  if (metric === "followers") {
-    return `${value.toLocaleString()}명`;
-  }
-
-  return `${value.toLocaleString()}개 이상`;
+// 해당 월 1개월분 예상 성과. 성과 카드의 목표치와 같은 기준을 쓴다
+// (MONTHLY_GOAL_BASE × 신청 수량). 이용 개월 수는 곱하지 않는다.
+function getMonthlyOutcome(
+  platform: "instagram" | "youtube",
+  quantity: number
+): Array<{ label: string; text: string }> {
+  const base = MONTHLY_GOAL_BASE[platform];
+  const multiplier = quantity > 0 ? quantity : 1;
+  const isYoutube = platform === "youtube";
+  return [
+    {
+      label: isYoutube ? "구독자" : "팔로워",
+      text: `${(base.followers * multiplier).toLocaleString()}명`,
+    },
+    {
+      label: isYoutube ? "조회수" : "좋아요",
+      text: `${(base.engagement * multiplier).toLocaleString()}${isYoutube ? "회" : "개"} 이상`,
+    },
+    {
+      label: "댓글",
+      text: `${(base.comments * multiplier).toLocaleString()}개 이상`,
+    },
+  ];
 }
 
 function buildAccountUrl(
@@ -319,13 +323,6 @@ function formatPerformanceMonth(month: string): string {
     ? `${monthNumber}월`
     : `${year}년 ${monthNumber}월`;
 }
-
-// 월 1개월·수량 1개 기준 목표치. 실제 목표는 여기에 신청 수량을 곱한다.
-// 랜딩/마케터 카드의 '예상 성과'와 같은 기준(인스타 +500·100·30, 유튜브 +200·1,000·10).
-const MONTHLY_GOAL_BASE = {
-  instagram: { followers: 500, engagement: 100, comments: 30 },
-  youtube: { followers: 200, engagement: 1000, comments: 10 },
-} as const;
 
 type PerformanceRow = {
   label: string;
@@ -1305,9 +1302,15 @@ export default function MyPage() {
                       // ── 진행중 rich card ──────────────────────────────────
                       (() => {
                         const isYoutube = marketingChannel === "youtube";
-                        const outcomes = getExpectedOutcome(
-                          snapshot.application?.selectedPlan ?? null,
-                          snapshot.application?.selectedDuration ?? null
+                        // 예상 성과는 '이번 달 1개월분'만 보여준다. 이용 개월이
+                        // 여러 달이어도 곱하지 않는다(달마다 따로 표시).
+                        const outcomeQuantity =
+                          grant.marketer_quantity ??
+                          snapshot.application?.selectedPlan ??
+                          1;
+                        const outcomes = getMonthlyOutcome(
+                          isYoutube ? "youtube" : "instagram",
+                          outcomeQuantity
                         );
                         return (
                           <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-white p-6">
@@ -1357,20 +1360,23 @@ export default function MyPage() {
 
                               {/* 예상 성과 */}
                               <div className="mt-6">
-                                <p className="mb-2 text-xs font-medium text-gray-400">예상 성과</p>
+                                <p className="mb-2 text-xs font-medium text-gray-400">
+                                  {currentMonth}월 예상 성과
+                                </p>
                                 <div className="grid grid-cols-3 gap-2">
-                                  <div className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center">
-                                    <p className="text-[11px] text-emerald-700">예상 팔로워</p>
-                                    <p className="text-base font-bold text-emerald-900">{formatOutcomeValue("followers", outcomes.followers)}</p>
-                                  </div>
-                                  <div className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center">
-                                    <p className="text-[11px] text-emerald-700">예상 좋아요</p>
-                                    <p className="text-base font-bold text-emerald-900">{formatOutcomeValue("likes", outcomes.likes)}</p>
-                                  </div>
-                                  <div className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center">
-                                    <p className="text-[11px] text-emerald-700">예상 댓글</p>
-                                    <p className="text-base font-bold text-emerald-900">{formatOutcomeValue("comments", outcomes.comments)}</p>
-                                  </div>
+                                  {outcomes.map((outcome) => (
+                                    <div
+                                      key={outcome.label}
+                                      className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center"
+                                    >
+                                      <p className="text-[11px] text-emerald-700">
+                                        예상 {outcome.label}
+                                      </p>
+                                      <p className="text-base font-bold text-emerald-900">
+                                        {outcome.text}
+                                      </p>
+                                    </div>
+                                  ))}
                                 </div>
                                 {!isYoutube && (
                                   <p className="mt-2.5 text-[11px] leading-relaxed text-gray-400">
