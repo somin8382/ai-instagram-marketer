@@ -26,6 +26,19 @@ function earliestIso(...values: Array<string | null | undefined>): string | null
 const POSTS_CAP = 20000;
 const LOGIN_EVENTS_CAP = 50000;
 
+// 7월 마케팅 실행 여부 판정 기준 월.
+const JULY_MONTH = "2026-07";
+const AUGUST_MONTH = "2026-08";
+const JULY_MONTH_NUMBER = "7";
+
+// "7,8" 형태의 이용 월 문자열에 해당 월이 포함되는지.
+function includesMonth(months: string | null, month: string): boolean {
+  return String(months || "")
+    .split(",")
+    .map((s) => s.trim())
+    .includes(month);
+}
+
 type ProfileRow = {
   id: string;
   email: string | null;
@@ -86,6 +99,8 @@ export async function GET(request: NextRequest) {
       notesRes,
       metricsRes,
       augMktRes,
+      julyPerfRes,
+      monthlyTossRes,
     ] = await Promise.all([
       (db
         .from("profiles")
@@ -190,6 +205,23 @@ export async function GET(request: NextRequest) {
         .select("user_id, email, choice")
         .eq("month", "2026-08") as unknown) as Promise<{
         data: Array<{ user_id: string; email: string | null; choice: string }> | null;
+        error: { message: string } | null;
+      }>,
+      // 7월 마케팅 실행 결과 (있으면 '완료'). 테이블이 없어도(마이그레이션 전)
+      // 목록 조회는 계속 동작해야 하므로 error는 무시하고 빈 값으로 취급한다.
+      (db
+        .from("monthly_performance")
+        .select("user_id, email")
+        .eq("month", JULY_MONTH) as unknown) as Promise<{
+        data: Array<{ user_id: string | null; email: string | null }> | null;
+        error: { message: string } | null;
+      }>,
+      // 월별 토스 상태 (7월/8월 각각). 테이블 미생성 시에도 무시하고 진행.
+      (db
+        .from("monthly_toss_status")
+        .select("email, month, status")
+        .in("month", [JULY_MONTH, AUGUST_MONTH]) as unknown) as Promise<{
+        data: Array<{ email: string; month: string; status: string }> | null;
         error: { message: string } | null;
       }>,
     ]);
@@ -403,17 +435,63 @@ export async function GET(request: NextRequest) {
       aiMarketer: boolean,
       marketerMonths: string | null
     ): string | null => {
-      const isAug =
-        aiMarketer &&
-        String(marketerMonths || "")
-          .split(",")
-          .map((s) => s.trim())
-          .includes("8");
+      const isAug = aiMarketer && includesMonth(marketerMonths, "8");
       if (!isAug) return null;
       const choice =
         (userId ? augByUser.get(userId) : undefined) ??
         (emailKey ? augByEmail.get(emailKey) : undefined);
       return choice ?? "pending";
+    };
+
+    // 월별 토스 상태 — email+month 키. 없으면 'wait'(대기)로 본다.
+    const tossByEmailMonth = new Map<string, string>();
+    if (!monthlyTossRes.error) {
+      for (const t of monthlyTossRes.data ?? []) {
+        const key = (t.email || "").trim().toLowerCase();
+        if (key) tossByEmailMonth.set(`${key}|${t.month}`, t.status);
+      }
+    }
+    const monthlyToss = (emailKey: string, month: string) =>
+      (emailKey ? tossByEmailMonth.get(`${emailKey}|${month}`) : undefined) ??
+      "wait";
+
+    // 7월 마케팅 실행 완료(=성과 기록 있음) — user_id / email 양쪽으로 조회.
+    const julyDoneUsers = new Set<string>();
+    const julyDoneEmails = new Set<string>();
+    if (!julyPerfRes.error) {
+      for (const p of julyPerfRes.data ?? []) {
+        if (p.user_id) julyDoneUsers.add(p.user_id);
+        if (p.email) julyDoneEmails.add(p.email.trim().toLowerCase());
+      }
+    }
+
+    // 7월 마케팅 진행 상태 → "done"(완료) | "pending"(미완료) | null(7월 대상 아님)
+    //  - 대상: 7월 마케터 이용자(사전등록 marketer_months에 7 포함) 또는 7월 중
+    //    마케터를 결제/신청한 사람.
+    //  - 성과 기록(monthly_performance 2026-07)이 있으면 완료로 본다.
+    const julyMarketing = (
+      userId: string | null,
+      emailKey: string,
+      aiMarketer: boolean,
+      marketerMonths: string | null,
+      marketerSubmittedAt: string | null
+    ): string | null => {
+      const done =
+        (userId ? julyDoneUsers.has(userId) : false) ||
+        (emailKey ? julyDoneEmails.has(emailKey) : false);
+      if (done) return "done";
+
+      const grantedForJuly =
+        aiMarketer && includesMonth(marketerMonths, JULY_MONTH_NUMBER);
+      // 사전등록 월 정보가 없는 결제 이용자는 제출 시점으로 7월 신청을 판단한다.
+      const submittedAt = marketerSubmittedAt
+        ? new Date(marketerSubmittedAt)
+        : null;
+      const submittedInJuly =
+        !!submittedAt &&
+        Number.isFinite(submittedAt.getTime()) &&
+        getKoreaDateString(submittedAt).startsWith(JULY_MONTH);
+      return grantedForJuly || submittedInJuly ? "pending" : null;
     };
 
     const profileEmails = new Set<string>();
@@ -488,6 +566,15 @@ export async function GET(request: NextRequest) {
           grant?.ai_marketer ?? false,
           grant?.marketer_months ?? null
         ),
+        julyMarketing: julyMarketing(
+          profile.id,
+          emailKey,
+          grant?.ai_marketer ?? false,
+          grant?.marketer_months ?? null,
+          marketerSubmittedAt
+        ),
+        julyToss: monthlyToss(emailKey, JULY_MONTH),
+        augustToss: monthlyToss(emailKey, AUGUST_MONTH),
         instagramUrl: resolveMkUrls(profile.id, emailKey).ig,
         postUrl: resolveMkUrls(profile.id, emailKey).post,
         instaFollowerCount: mget(emailKey, "instagram")?.count ?? null,
@@ -564,6 +651,15 @@ export async function GET(request: NextRequest) {
           grant.ai_marketer,
           grant.marketer_months
         ),
+        julyMarketing: julyMarketing(
+          null,
+          emailKey,
+          grant.ai_marketer,
+          grant.marketer_months,
+          marketerSubmittedAt
+        ),
+        julyToss: monthlyToss(emailKey, JULY_MONTH),
+        augustToss: monthlyToss(emailKey, AUGUST_MONTH),
         instagramUrl: resolveMkUrls(null, emailKey).ig,
         postUrl: resolveMkUrls(null, emailKey).post,
         instaFollowerCount: mget(emailKey, "instagram")?.count ?? null,

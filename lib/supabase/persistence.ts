@@ -95,12 +95,26 @@ export type UsageSnapshot = {
   dailyUsageCount: number;
 };
 
+// 월별 마케팅 달성 성과(증가분). monthly_performance 1행 = 한 달 운영 결과.
+export type MonthlyPerformance = {
+  month: string; // 'YYYY-MM'
+  platform: "instagram" | "youtube";
+  channelUrl: string | null;
+  postUrl: string | null;
+  followers: number | null; // 인스타 팔로워 / 유튜브 구독자
+  likes: number | null; // 인스타 게시물 좋아요
+  views: number | null; // 유튜브 조회수
+  comments: number | null;
+  note: string | null;
+};
+
 export type MyPageSnapshot = {
   application: SavedApplication | null;
   payment: SavedPayment | null;
   subscription: SavedSubscription | null;
   posts: SavedGeneratedPost[];
   usage: UsageSnapshot;
+  performances: MonthlyPerformance[]; // 최신 월 우선
 };
 
 type ApplicationPersistenceInput = {
@@ -1633,6 +1647,69 @@ export async function persistAccountProfile({
   return { error: result.error };
 }
 
+type MonthlyPerformanceRow = {
+  month: string | null;
+  platform: string | null;
+  channel_url: string | null;
+  post_url: string | null;
+  followers_gained: number | null;
+  likes_gained: number | null;
+  views_gained: number | null;
+  comments_gained: number | null;
+  note: string | null;
+  user_id: string | null;
+  email: string | null;
+};
+
+// 월별 달성 성과. RLS(monthly_performance_select_own)가 본인 행만 돌려주지만,
+// applications와 동일하게 코드에서도 소유권을 한 번 더 확인한다.
+async function fetchMonthlyPerformances({
+  userId,
+  email,
+}: {
+  userId?: string | null;
+  email?: string | null;
+}): Promise<{ performances: MonthlyPerformance[]; error: string | null }> {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = (await supabase
+    .from("monthly_performance")
+    .select(
+      "month, platform, channel_url, post_url, followers_gained, likes_gained, views_gained, comments_gained, note, user_id, email"
+    )
+    .order("month", { ascending: false })) as unknown as {
+    data: MonthlyPerformanceRow[] | null;
+    error: { message: string } | null;
+  };
+
+  if (error) {
+    // 테이블 미생성(마이그레이션 전) 환경에서도 마이페이지는 정상 동작해야 한다.
+    return { performances: [], error: error.message };
+  }
+
+  const normEmail = normalizeEmail(email);
+  const performances = (data ?? [])
+    .filter((row) => {
+      const rowEmail = normalizeEmail(row.email);
+      if (row.user_id && userId && row.user_id !== userId) return false;
+      if (normEmail && rowEmail && rowEmail !== normEmail) return false;
+      return true;
+    })
+    .map((row) => ({
+      month: String(row.month ?? ""),
+      platform: row.platform === "youtube" ? ("youtube" as const) : ("instagram" as const),
+      channelUrl: row.channel_url,
+      postUrl: row.post_url,
+      followers: row.followers_gained,
+      likes: row.likes_gained,
+      views: row.views_gained,
+      comments: row.comments_gained,
+      note: row.note,
+    }))
+    .filter((row) => row.month);
+
+  return { performances, error: null };
+}
+
 export async function fetchMyPageSnapshot({
   userId,
   email,
@@ -1659,6 +1736,7 @@ export async function fetchMyPageSnapshot({
         subscription: null,
         posts: [] as SavedGeneratedPost[],
         usage: emptyUsage,
+        performances: [] as MonthlyPerformance[],
       },
       error: "Supabase 환경 변수가 설정되지 않았습니다.",
     };
@@ -1810,6 +1888,14 @@ export async function fetchMyPageSnapshot({
     subscription,
   });
 
+  const performanceResult = await fetchMonthlyPerformances({
+    userId,
+    email: emailCandidates[0] || email || null,
+  });
+  if (performanceResult.error) {
+    errors.push(performanceResult.error);
+  }
+
   console.info(
     "[MyPage] 조회 결과:",
     JSON.stringify({
@@ -1820,6 +1906,7 @@ export async function fetchMyPageSnapshot({
       subscriptionId: subscription?.id ?? null,
       postCount: posts.length,
       remainingPostCount: usage.remainingPostCount,
+      performanceCount: performanceResult.performances.length,
       hasError: errors.length > 0,
     })
   );
@@ -1831,6 +1918,7 @@ export async function fetchMyPageSnapshot({
       subscription,
       posts,
       usage,
+      performances: performanceResult.performances,
     },
     error: errors.length ? errors.join(" / ") : null,
   };

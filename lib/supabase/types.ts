@@ -306,6 +306,27 @@ export type Database = {
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;
       };
+      monthly_performance: {
+        Row: {
+          id: string;
+          email: string;
+          user_id: string | null;
+          month: string;
+          platform: string;
+          channel_url: string | null;
+          post_url: string | null;
+          followers_gained: number | null;
+          likes_gained: number | null;
+          views_gained: number | null;
+          comments_gained: number | null;
+          note: string | null;
+          recorded_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
       service_grants: {
         Row: {
           id: string;

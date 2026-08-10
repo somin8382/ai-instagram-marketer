@@ -26,8 +26,11 @@ type UserRow = {
   generatorMonths: string | null; // 생성기 이용 월 목록 ("7,8")
   field: string; // "local" | "tech"
   note: string; // 관리자 메모(특이사항)
-  tossStatus: string; // 토스 진행 상태: "wait"(대기) | "in_progress"(진행중)
+  tossStatus: string; // (레거시) 월 구분 없는 토스 상태 — 표시는 julyToss/augustToss 사용
   augustMarketing: string | null; // 8월 마케팅: "keep"|"change"|"pending"|null(미해당)
+  julyMarketing: string | null; // 7월 마케팅 실행: "done"|"pending"|null(7월 대상 아님)
+  julyToss: string; // 7월 토스: "wait"|"in_progress"|"done"
+  augustToss: string; // 8월 토스: "wait"|"in_progress"|"done"
   instagramUrl: string | null; // 마케터 제출 채널(인스타그램) 주소
   postUrl: string | null; // 마케터 제출 대표 게시물 주소
   instaFollowerCount: number | null; // 최근 기록된 인스타 팔로워 수
@@ -214,6 +217,20 @@ type MetricKey =
 
 // 각 열이 어느 보기 모드에서 내보내지는지(modes)를 화면 표의 열 노출과 일치시킨다.
 // 엑셀 내려받기는 "지금 보는 표"의 열만 나가도록 현재 모드로 필터링한다.
+// 월별 토스 상태 표시값. 저장값은 wait | in_progress | done.
+const TOSS_LABEL: Record<string, string> = {
+  wait: "대기",
+  in_progress: "진행중",
+  done: "완료",
+};
+const TOSS_CLS: Record<string, string> = {
+  wait: "bg-gray-100 text-gray-500",
+  in_progress: "bg-blue-100 text-blue-700",
+  done: "bg-green-100 text-green-700",
+};
+const JULY_MONTH = "2026-07";
+const AUGUST_MONTH = "2026-08";
+
 const EXPORT_COLUMNS: Array<{
   header: string;
   modes: ViewMode[];
@@ -225,9 +242,24 @@ const EXPORT_COLUMNS: Array<{
   { header: "분야", modes: ALL_MODES, get: (u) => fieldLabel(u.field) },
   { header: "메모", modes: ["normal", "marketer"], get: (u) => u.note ?? "" },
   {
-    header: "토스",
-    modes: ["normal"],
-    get: (u) => (u.tossStatus === "in_progress" ? "진행중" : "대기"),
+    header: "7월 토스",
+    modes: ["normal", "marketer"],
+    get: (u) => TOSS_LABEL[u.julyToss] ?? "대기",
+  },
+  {
+    header: "8월 토스",
+    modes: ["normal", "marketer"],
+    get: (u) => TOSS_LABEL[u.augustToss] ?? "대기",
+  },
+  {
+    header: "7월 마케팅",
+    modes: ["normal", "marketer"],
+    get: (u) =>
+      u.julyMarketing === null
+        ? ""
+        : u.julyMarketing === "done"
+          ? "완료"
+          : "미완료",
   },
   {
     header: "8월 마케팅",
@@ -458,9 +490,6 @@ export default function AdminUsersPage() {
     Record<string, Record<string, string>>
   >({});
   const [metricError, setMetricError] = useState<string | null>(null);
-
-  // 토스 상태 변경 2단계 확인: tossConfirm[userId] = 확인 대기 중인 목표 상태
-  const [tossConfirm, setTossConfirm] = useState<Record<string, string>>({});
 
   // Detail
   const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
@@ -765,25 +794,61 @@ export default function AdminUsersPage() {
     );
   }
 
-  // 토스 상태 저장 (2단계 확인 후). users 낙관적 갱신.
-  async function saveToss(user: UserRow, status: string) {
-    setTossConfirm((c) => {
-      const next = { ...c };
-      delete next[user.id];
-      return next;
-    });
+  // 월별 토스 상태 저장 (7월/8월 각각 독립). users 낙관적 갱신.
+  async function saveMonthlyToss(
+    user: UserRow,
+    month: string,
+    status: string
+  ) {
+    const field = month === JULY_MONTH ? "julyToss" : "augustToss";
+    const previous = month === JULY_MONTH ? user.julyToss : user.augustToss;
+    if (previous === status) return;
+
+    setUsers((prev) =>
+      prev.map((u) => (u.id === user.id ? { ...u, [field]: status } : u))
+    );
     try {
-      const res = await adminFetch("/api/admin/users/toss", accessToken, {
+      const res = await adminFetch("/api/admin/users/monthly-toss", accessToken, {
         method: "PUT",
-        body: JSON.stringify({ email: user.email, status }),
+        body: JSON.stringify({ email: user.email, month, status }),
       });
-      if (!res.ok) return;
-      setUsers((prev) =>
-        prev.map((u) => (u.id === user.id ? { ...u, tossStatus: status } : u))
-      );
+      if (!res.ok) throw new Error("save failed");
     } catch {
-      // 무시: 실패 시 상태 유지
+      // 실패 시 원래 값으로 되돌린다.
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, [field]: previous } : u))
+      );
+      setMetricError("토스 상태 저장에 실패했습니다.");
     }
+  }
+
+  // 월별 토스 셀 (뱃지 + 변경 셀렉트)
+  function tossCell(user: UserRow, month: string) {
+    const value = month === JULY_MONTH ? user.julyToss : user.augustToss;
+    return (
+      <td
+        className="px-3 py-2.5 whitespace-nowrap"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-1.5">
+          <span
+            className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${TOSS_CLS[value] ?? TOSS_CLS.wait}`}
+          >
+            {TOSS_LABEL[value] ?? "대기"}
+          </span>
+          <select
+            value={value}
+            onChange={(e) => void saveMonthlyToss(user, month, e.target.value)}
+            className="text-[11px] rounded border border-gray-200 bg-white px-1 py-0.5 text-gray-600"
+            aria-label={`${month} 토스 상태 변경`}
+          >
+            <option value="wait">대기</option>
+            <option value="in_progress">진행중</option>
+            <option value="done">완료</option>
+          </select>
+        </div>
+      </td>
+    );
   }
 
   async function saveNote() {
@@ -1353,7 +1418,9 @@ export default function AdminUsersPage() {
                 <th className={plainHeaderCls}>분야</th>
                 <th className={plainHeaderCls}>회사</th>
                 {!cap && <th className={plainHeaderCls}>메모</th>}
-                {!cap && !mkt && <th className={plainHeaderCls}>토스</th>}
+                {!cap && <th className={plainHeaderCls}>7월 토스</th>}
+                {!cap && <th className={plainHeaderCls}>8월 토스</th>}
+                {!cap && <th className={plainHeaderCls}>7월 마케팅</th>}
                 {!cap && !mkt && <th className={plainHeaderCls}>8월 마케팅</th>}
                 {!mkt && <th className={plainHeaderCls}>주관기관</th>}
                 <th className={plainHeaderCls}>멘토기관</th>
@@ -1500,99 +1567,20 @@ export default function AdminUsersPage() {
                         )}
                       </td>
                     )}
-                    {!cap && !mkt && (
-                      <td
-                        className="px-3 py-2.5 whitespace-nowrap"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {user.tossStatus === "in_progress" ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                              진행중
-                            </span>
-                            {tossConfirm[user.id] === "wait" ? (
-                              <>
-                                <span className="text-[11px] text-gray-500">
-                                  대기로?
-                                </span>
-                                <button
-                                  onClick={() => void saveToss(user, "wait")}
-                                  className="text-[11px] px-1.5 py-0.5 rounded bg-gray-900 text-white hover:bg-gray-700"
-                                >
-                                  예
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    setTossConfirm((c) => {
-                                      const n = { ...c };
-                                      delete n[user.id];
-                                      return n;
-                                    })
-                                  }
-                                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50"
-                                >
-                                  아니오
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() =>
-                                  setTossConfirm((c) => ({
-                                    ...c,
-                                    [user.id]: "wait",
-                                  }))
-                                }
-                                className="text-[11px] text-gray-400 underline hover:text-gray-600"
-                              >
-                                되돌리기
-                              </button>
-                            )}
-                          </div>
+                    {!cap && tossCell(user, JULY_MONTH)}
+                    {!cap && tossCell(user, AUGUST_MONTH)}
+                    {!cap && (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {user.julyMarketing === null ? (
+                          <span className="text-gray-300">—</span>
+                        ) : user.julyMarketing === "done" ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                            완료
+                          </span>
                         ) : (
-                          <div className="flex items-center gap-1.5">
-                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-                              대기
-                            </span>
-                            {tossConfirm[user.id] === "in_progress" ? (
-                              <>
-                                <span className="text-[11px] text-amber-600">
-                                  진행중으로?
-                                </span>
-                                <button
-                                  onClick={() =>
-                                    void saveToss(user, "in_progress")
-                                  }
-                                  className="text-[11px] px-1.5 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-500"
-                                >
-                                  예
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    setTossConfirm((c) => {
-                                      const n = { ...c };
-                                      delete n[user.id];
-                                      return n;
-                                    })
-                                  }
-                                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50"
-                                >
-                                  아니오
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() =>
-                                  setTossConfirm((c) => ({
-                                    ...c,
-                                    [user.id]: "in_progress",
-                                  }))
-                                }
-                                className="text-[11px] px-2 py-0.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
-                              >
-                                진행중으로
-                              </button>
-                            )}
-                          </div>
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                            미완료
+                          </span>
                         )}
                       </td>
                     )}

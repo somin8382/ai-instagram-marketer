@@ -13,6 +13,7 @@ import {
 import {
   fetchMyPageSnapshot,
   syncProfileAndLinkData,
+  type MonthlyPerformance,
   type MyPageSnapshot,
   type SavedGeneratedPost,
 } from "@/lib/supabase/persistence";
@@ -63,6 +64,7 @@ const EMPTY_SNAPSHOT: MyPageSnapshot = {
     dailyRemainingCount: 0,
     dailyUsageCount: 0,
   },
+  performances: [],
 };
 
 function Card({
@@ -187,6 +189,9 @@ type ServiceGrantData = {
   ai_generator: boolean;
   marketer_months: string | null;
   generator_months: string | null;
+  // 기관이 부여한 마케터 수량. 성과 목표치의 기준이 된다
+  // (미결제 신청서의 selected_plan보다 이 값이 우선).
+  marketer_quantity: number | null;
 };
 
 function parseMonthsList(months: string | null | undefined): number[] {
@@ -301,6 +306,240 @@ function MonthMarketingBlock({
         <p className="px-4 py-3 text-sm text-gray-400">{emptyNote}</p>
       )}
     </div>
+  );
+}
+
+// "2026-07" → "7월" (연도가 올해와 다르면 "2026년 7월")
+function formatPerformanceMonth(month: string): string {
+  const [year, rawMonth] = month.split("-");
+  const monthNumber = Number(rawMonth);
+  if (!year || !Number.isFinite(monthNumber) || monthNumber < 1) return month;
+  const thisYear = Number(getKoreaDateString().split("-")[0]);
+  return Number(year) === thisYear
+    ? `${monthNumber}월`
+    : `${year}년 ${monthNumber}월`;
+}
+
+// 월 1개월·수량 1개 기준 목표치. 실제 목표는 여기에 신청 수량을 곱한다.
+// 랜딩/마케터 카드의 '예상 성과'와 같은 기준(인스타 +500·100·30, 유튜브 +200·1,000·10).
+const MONTHLY_GOAL_BASE = {
+  instagram: { followers: 500, engagement: 100, comments: 30 },
+  youtube: { followers: 200, engagement: 1000, comments: 10 },
+} as const;
+
+type PerformanceRow = {
+  label: string;
+  value: number | null;
+  goal: number;
+  unit: string;
+};
+
+// 월별 달성 성과 카드. 목표 대비 실적을 나란히 보여준다.
+// 인스타는 팔로워/좋아요/댓글, 유튜브는 구독자/조회수/댓글.
+function MonthlyPerformanceCard({
+  performances,
+  quantity,
+}: {
+  performances: MonthlyPerformance[];
+  quantity: number;
+}) {
+  if (!performances.length) return null;
+
+  const multiplier = quantity > 0 ? quantity : 1;
+
+  return (
+    <Card className="space-y-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+          마케팅 성과
+        </p>
+        <p className="mt-1 text-sm text-gray-500">
+          운영이 완료된 달의 목표 대비 결과입니다.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {performances.map((performance) => {
+          const isYoutube = performance.platform === "youtube";
+          const base = isYoutube
+            ? MONTHLY_GOAL_BASE.youtube
+            : MONTHLY_GOAL_BASE.instagram;
+          const monthLabel = formatPerformanceMonth(performance.month);
+
+          const rows: PerformanceRow[] = [
+            {
+              label: isYoutube ? "구독자" : "팔로워",
+              value: performance.followers,
+              goal: base.followers * multiplier,
+              unit: "명",
+            },
+            {
+              label: isYoutube ? "조회수" : "좋아요",
+              value: isYoutube ? performance.views : performance.likes,
+              goal: base.engagement * multiplier,
+              unit: isYoutube ? "회" : "개",
+            },
+            {
+              label: "댓글",
+              value: performance.comments,
+              goal: base.comments * multiplier,
+              unit: "개",
+            },
+          ];
+
+          const recorded = rows.filter((row) => row.value !== null);
+          const achievedAll =
+            recorded.length > 0 &&
+            recorded.every((row) => (row.value as number) >= row.goal);
+          const exceededCount = recorded.filter(
+            (row) => (row.value as number) > row.goal
+          ).length;
+
+          const headline = achievedAll
+            ? exceededCount > 0
+              ? "목표를 초과 달성했어요"
+              : "목표를 모두 달성했어요"
+            : `${monthLabel} 운영 결과입니다`;
+
+          return (
+            <div
+              key={`${performance.month}-${performance.platform}`}
+              className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-semibold text-white">
+                  {monthLabel} 성과
+                </span>
+                <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                  {isYoutube ? "유튜브" : "인스타그램"}
+                </span>
+                {achievedAll && (
+                  <span className="ml-auto rounded-full bg-emerald-600/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
+                    {exceededCount > 0 ? "초과 달성" : "목표 달성"}
+                  </span>
+                )}
+              </div>
+
+              <p className="mt-3 text-[15px] font-bold text-gray-900">
+                {headline}
+              </p>
+
+              <div className="mt-3 space-y-2.5">
+                {rows.map((row) => {
+                  const value = row.value;
+                  const over = value !== null && value > row.goal;
+                  const met = value !== null && value >= row.goal;
+                  // 막대 전체 길이는 '목표'와 '실적' 중 큰 값을 기준으로 잡는다.
+                  // 목표를 넘겼으면 목표 지점에 눈금이 서고, 그 오른쪽이 초과분이 된다.
+                  const scale = Math.max(value ?? 0, row.goal);
+                  const goalPct = (row.goal / scale) * 100;
+                  const valuePct = ((value ?? 0) / scale) * 100;
+                  const percent =
+                    value === null ? null : Math.round((value / row.goal) * 100);
+
+                  return (
+                    <div key={row.label}>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-xs text-gray-500">{row.label}</span>
+                        <span className="text-xs tabular-nums text-gray-500">
+                          <b className="text-sm font-bold text-emerald-900">
+                            {value === null
+                              ? "-"
+                              : value.toLocaleString("ko-KR")}
+                          </b>
+                          <span className="mx-0.5">/</span>
+                          {row.goal.toLocaleString("ko-KR")}
+                          {row.unit}
+                        </span>
+                      </div>
+
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <div className="relative h-2.5 flex-1 rounded-full bg-white">
+                          {/* 목표까지의 구간 */}
+                          <div
+                            className={`absolute inset-y-0 left-0 rounded-full ${met ? "bg-emerald-500" : "bg-emerald-300"}`}
+                            style={{ width: `${Math.min(valuePct, goalPct)}%` }}
+                          />
+                          {/* 목표를 넘어선 구간 — 더 진하게 */}
+                          {over && (
+                            <div
+                              className="absolute inset-y-0 rounded-r-full bg-emerald-700"
+                              style={{
+                                left: `${goalPct}%`,
+                                width: `${valuePct - goalPct}%`,
+                              }}
+                            />
+                          )}
+                          {/* 목표 지점 눈금 */}
+                          {over && (
+                            <span
+                              className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white"
+                              style={{ left: `${goalPct}%` }}
+                              aria-hidden="true"
+                            />
+                          )}
+                        </div>
+                        {percent !== null && (
+                          <span
+                            className={`shrink-0 text-[11px] font-bold tabular-nums ${over ? "text-emerald-700" : "text-gray-400"}`}
+                          >
+                            {percent}%
+                          </span>
+                        )}
+                      </div>
+
+                      {over && (
+                        <p className="mt-1 text-[11px] font-semibold tabular-nums text-emerald-700">
+                          목표 대비 +{(value - row.goal).toLocaleString("ko-KR")}
+                          {row.unit} 초과 달성
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {performance.note && (
+                <p className="mt-3 rounded-lg bg-white/70 px-3 py-2 text-xs leading-relaxed text-gray-600">
+                  {performance.note}
+                </p>
+              )}
+
+              {(performance.channelUrl || performance.postUrl) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {performance.channelUrl && (
+                    <a
+                      href={performance.channelUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-50"
+                    >
+                      채널 보기
+                    </a>
+                  )}
+                  {performance.postUrl && (
+                    <a
+                      href={performance.postUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-50"
+                    >
+                      게시물 보기
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="text-[11px] leading-relaxed text-gray-400">
+        ※ 성과는 기록 시점을 기준으로 보수적으로 집계되어, 실제 수치는 기재된
+        것보다 높을 수 있습니다. 팔로워·좋아요 등은 실시간으로 변동되므로
+        접속하신 시점에 보이는 수치와 다르더라도 양해 부탁드립니다.
+      </p>
+    </Card>
   );
 }
 
@@ -553,6 +792,7 @@ export default function MyPage() {
                 dailyRemainingCount: 0,
                 dailyUsageCount: 0,
               },
+              performances: [],
             });
             setErrorMessage(null);
             setLoading(false);
@@ -670,7 +910,9 @@ export default function MyPage() {
       // RLS restricts to own row: lower(email) = lower(auth.email())
       const { data: rawGrant } = await supabase
         .from("service_grants")
-        .select("ai_marketer, ai_generator, marketer_months, generator_months")
+        .select(
+          "ai_marketer, ai_generator, marketer_months, generator_months, marketer_quantity"
+        )
         .maybeSingle();
       // Supabase Insert/Update typed as Record<string,Json> causes select inference
       // to collapse to never — cast explicitly to the fields we need.
@@ -761,6 +1003,7 @@ export default function MyPage() {
           ai_generator: grant.ai_generator,
           marketer_months: grant.marketer_months,
           generator_months: grant.generator_months,
+          marketer_quantity: grant.marketer_quantity ?? null,
         },
         mainContentUrl: appRow?.main_content_url ?? null,
         marketingChannel: appRow?.marketing_channel ?? null,
@@ -876,6 +1119,19 @@ export default function MyPage() {
                 </a>
               </Card>
             )}
+
+            {/* 월별 마케팅 성과 (기관 지원/일반 결제 유저 공통).
+                목표치는 신청 수량(=selected_plan)에 비례한다. */}
+            <MonthlyPerformanceCard
+              performances={snapshot.performances}
+              quantity={
+                (serviceGrantState.status === "ready"
+                  ? serviceGrantState.grant.marketer_quantity
+                  : null) ??
+                snapshot.application?.selectedPlan ??
+                1
+              }
+            />
 
             {serviceGrantState.status === "ready" ? (
               // ─── GRANTED-USER LAYOUT ───────────────────────────────────────
