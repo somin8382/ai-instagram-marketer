@@ -45,7 +45,7 @@ export function AdminNav({ current }: { current: AdminTab }) {
 
 // Small inline "ⓘ" with a plain-Korean explanation on hover/focus (native title
 // tooltip — works without JS and on touch via long-press/label). Use next to
-// non-obvious terms (미가입, 주관기관, 크레딧 지급 등).
+// non-obvious terms (미가입, 주관기관, 생성 횟수 지급 등).
 export function InfoTip({ text }: { text: string }) {
   return (
     <span

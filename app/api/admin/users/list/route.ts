@@ -101,6 +101,8 @@ export async function GET(request: NextRequest) {
       augMktRes,
       julyPerfRes,
       monthlyTossRes,
+      augChannelRes,
+      prepaidRes,
     ] = await Promise.all([
       (db
         .from("profiles")
@@ -149,7 +151,7 @@ export async function GET(request: NextRequest) {
       (db
         .from("applications")
         .select(
-          "id, user_id, email, main_content_url, channel_url, instagram_id, created_at"
+          "id, user_id, email, main_content_url, channel_url, instagram_id, marketing_channel, comments_included, created_at"
         )
         .order("created_at", { ascending: false })
         .limit(POSTS_CAP) as unknown) as Promise<{
@@ -160,6 +162,8 @@ export async function GET(request: NextRequest) {
           main_content_url: string | null;
           channel_url: string | null;
           instagram_id: string | null;
+          marketing_channel: string | null;
+          comments_included: boolean | null;
           created_at: string | null;
         }> | null;
         error: { message: string } | null;
@@ -202,9 +206,14 @@ export async function GET(request: NextRequest) {
       // 8월 마케팅 진행/변경 선택
       (db
         .from("marketing_confirmations")
-        .select("user_id, email, choice")
-        .eq("month", "2026-08") as unknown) as Promise<{
-        data: Array<{ user_id: string; email: string | null; choice: string }> | null;
+        .select("user_id, email, choice, created_at")
+        .eq("month", AUGUST_MONTH) as unknown) as Promise<{
+        data: Array<{
+          user_id: string;
+          email: string | null;
+          choice: string;
+          created_at: string | null;
+        }> | null;
         error: { message: string } | null;
       }>,
       // 7월 마케팅 실행 결과 (있으면 '완료'). 테이블이 없어도(마이그레이션 전)
@@ -222,6 +231,32 @@ export async function GET(request: NextRequest) {
         .select("email, month, status")
         .in("month", [JULY_MONTH, AUGUST_MONTH]) as unknown) as Promise<{
         data: Array<{ email: string; month: string; status: string }> | null;
+        error: { message: string } | null;
+      }>,
+      // 8월 채널/게시물 정보 변경 제출분
+      (db
+        .from("monthly_channel_info")
+        .select(
+          "user_id, email, marketing_channel, channel_url, instagram_id, main_content_url, comments_included, created_at"
+        )
+        .eq("month", AUGUST_MONTH) as unknown) as Promise<{
+        data: Array<{
+          user_id: string | null;
+          email: string | null;
+          marketing_channel: string | null;
+          channel_url: string | null;
+          instagram_id: string | null;
+          main_content_url: string | null;
+          comments_included: boolean | null;
+          created_at: string | null;
+        }> | null;
+        error: { message: string } | null;
+      }>,
+      // 선결제 크레딧 원장 (1원=1크레딧). 테이블 미생성 시 무시.
+      (db
+        .from("prepaid_credit_entries")
+        .select("email, user_id, amount") as unknown) as Promise<{
+        data: Array<{ email: string; user_id: string | null; amount: number }> | null;
         error: { message: string } | null;
       }>,
     ]);
@@ -354,6 +389,37 @@ export async function GET(request: NextRequest) {
         submittedByEmail.set(emailKey, app.created_at);
       }
     }
+    // 7월 제출분만 따로 모은다. 기존 "인스타그램 주소/게시물 주소"는 월 구분 없이
+    // '최신 신청서'를 쓰기 때문에, 8월에 새로 신청한 사람은 8월 값이 들어간다.
+    // 7월 열과 8월 열을 나란히 놓으려면 월별로 분리해야 한다.
+    const julyUrlByUser = new Map<string, MkUrls>();
+    const julyUrlByEmail = new Map<string, MkUrls>();
+    const julyCommentsByUser = new Map<string, boolean | null>();
+    const julyCommentsByEmail = new Map<string, boolean | null>();
+    for (const app of appsRes.data ?? []) {
+      if (!app.main_content_url || !app.created_at) continue;
+      if (!getKoreaDateString(new Date(app.created_at)).startsWith(JULY_MONTH))
+        continue;
+      const igUrl =
+        app.channel_url ||
+        (app.instagram_id
+          ? `https://www.instagram.com/${app.instagram_id.replace(/^@/, "")}/`
+          : null);
+      const urls: MkUrls = { ig: igUrl, post: app.main_content_url };
+      if (app.user_id && !julyCommentsByUser.has(app.user_id))
+        julyCommentsByUser.set(app.user_id, app.comments_included ?? null);
+      const ck = app.email?.trim().toLowerCase();
+      if (ck && !julyCommentsByEmail.has(ck))
+        julyCommentsByEmail.set(ck, app.comments_included ?? null);
+      // rows are newest-first → 첫 등장이 그 달의 최신 제출
+      if (app.user_id && !julyUrlByUser.has(app.user_id)) julyUrlByUser.set(app.user_id, urls);
+      const key = app.email?.trim().toLowerCase();
+      if (key && !julyUrlByEmail.has(key)) julyUrlByEmail.set(key, urls);
+    }
+    const resolveJulyUrls = (userId: string | null, emailKey: string): MkUrls =>
+      (userId ? julyUrlByUser.get(userId) : undefined) ??
+      (emailKey ? julyUrlByEmail.get(emailKey) : undefined) ?? { ig: null, post: null };
+
     // Resolve a user's marketer URLs: submitted(user) → any(user) → submitted(email) → any(email).
     const resolveMkUrls = (userId: string | null, emailKey: string): MkUrls => {
       const byUser = userId
@@ -422,10 +488,19 @@ export async function GET(request: NextRequest) {
     // 8월 마케팅 선택(keep/change) — user_id 및 email 양쪽으로 조회.
     const augByUser = new Map<string, string>();
     const augByEmail = new Map<string, string>();
+    const augChoiceAtByUser = new Map<string, string>();
+    const augChoiceAtByEmail = new Map<string, string>();
     if (!augMktRes.error) {
       for (const c of augMktRes.data ?? []) {
-        if (c.user_id) augByUser.set(c.user_id, c.choice);
-        if (c.email) augByEmail.set(c.email.trim().toLowerCase(), c.choice);
+        if (c.user_id) {
+          augByUser.set(c.user_id, c.choice);
+          if (c.created_at) augChoiceAtByUser.set(c.user_id, c.created_at);
+        }
+        if (c.email) {
+          const k = c.email.trim().toLowerCase();
+          augByEmail.set(k, c.choice);
+          if (c.created_at) augChoiceAtByEmail.set(k, c.created_at);
+        }
       }
     }
     // 8월 마케터 이용자인지 + 선택 결과 → "keep" | "change" | "pending" | null
@@ -442,6 +517,16 @@ export async function GET(request: NextRequest) {
         (emailKey ? augByEmail.get(emailKey) : undefined);
       return choice ?? "pending";
     };
+
+    // 선결제 크레딧 잔액 = 원장 합계 (email 기준).
+    const prepaidByEmail = new Map<string, number>();
+    if (!prepaidRes.error) {
+      for (const e of prepaidRes.data ?? []) {
+        const key = (e.email || "").trim().toLowerCase();
+        if (!key) continue;
+        prepaidByEmail.set(key, (prepaidByEmail.get(key) ?? 0) + (e.amount ?? 0));
+      }
+    }
 
     // 월별 토스 상태 — email+month 키. 없으면 'wait'(대기)로 본다.
     const tossByEmailMonth = new Map<string, string>();
@@ -494,6 +579,173 @@ export async function GET(request: NextRequest) {
       return grantedForJuly || submittedInJuly ? "pending" : null;
     };
 
+    // ── 8월 마케터 정보 제출 현황 ────────────────────────────────────────
+    // 제출 경로가 셋으로 나뉘어 있어 하나로 합친다.
+    //   changed : monthly_channel_info(2026-08) — 채널/게시물을 새로 제출
+    //   kept    : marketing_confirmations(2026-08) choice=keep — 7월 정보 그대로 진행
+    //   new     : 8월에 새로 낸 신청서(신규 회원 포함)
+    //   pending : 8월 마케터 대상인데 위 어느 것도 없음
+    //   null    : 8월 대상 아님
+    type AugInfo = {
+      channel: string | null;
+      post: string | null;
+      at: string | null; // 제출 시각(ISO)
+      comments: boolean | null; // 댓글 이벤트 포함 여부 (null=미지정)
+    };
+    const augChangedByUser = new Map<string, AugInfo>();
+    const augChangedByEmail = new Map<string, AugInfo>();
+    if (!augChannelRes.error) {
+      for (const c of augChannelRes.data ?? []) {
+        const url =
+          c.channel_url ||
+          (c.instagram_id
+            ? `https://www.instagram.com/${c.instagram_id.replace(/^@/, "")}/`
+            : null);
+        const info: AugInfo = {
+          channel: url,
+          post: c.main_content_url ?? null,
+          at: c.created_at ?? null,
+          comments: c.comments_included ?? null,
+        };
+        if (c.user_id) augChangedByUser.set(c.user_id, info);
+        if (c.email) augChangedByEmail.set(c.email.trim().toLowerCase(), info);
+      }
+    }
+
+    // 8월에 제출된 신청서(신규 신청). 최신 1건만 본다.
+    const augAppByUser = new Map<string, AugInfo>();
+    const augAppByEmail = new Map<string, AugInfo>();
+    for (const app of appsRes.data ?? []) {
+      if (!app.main_content_url || !app.created_at) continue;
+      if (!getKoreaDateString(new Date(app.created_at)).startsWith(AUGUST_MONTH))
+        continue;
+      const url =
+        app.channel_url ||
+        (app.instagram_id
+          ? `https://www.instagram.com/${app.instagram_id.replace(/^@/, "")}/`
+          : null);
+      const info: AugInfo = {
+        channel: url,
+        post: app.main_content_url,
+        at: app.created_at,
+        comments: app.comments_included ?? null,
+      };
+      if (app.user_id && !augAppByUser.has(app.user_id)) augAppByUser.set(app.user_id, info);
+      const key = app.email?.trim().toLowerCase();
+      if (key && !augAppByEmail.has(key)) augAppByEmail.set(key, info);
+    }
+
+    const augustSubmission = (
+      userId: string | null,
+      emailKey: string,
+      aiMarketer: boolean,
+      marketerMonths: string | null
+    ): {
+      status: string | null;
+      channelUrl: string | null;
+      postUrl: string | null;
+      submittedAt: string | null;
+      commentsIncluded: boolean | null;
+    } => {
+      const changed =
+        (userId ? augChangedByUser.get(userId) : undefined) ??
+        (emailKey ? augChangedByEmail.get(emailKey) : undefined);
+      if (changed) {
+        return {
+          status: "changed",
+          channelUrl: changed.channel,
+          postUrl: changed.post,
+          submittedAt: changed.at,
+          commentsIncluded: changed.comments,
+        };
+      }
+      const newApp =
+        (userId ? augAppByUser.get(userId) : undefined) ??
+        (emailKey ? augAppByEmail.get(emailKey) : undefined);
+      if (newApp) {
+        return {
+          status: "new",
+          channelUrl: newApp.channel,
+          postUrl: newApp.post,
+          submittedAt: newApp.at,
+          commentsIncluded: newApp.comments,
+        };
+      }
+      const choice =
+        (userId ? augByUser.get(userId) : undefined) ??
+        (emailKey ? augByEmail.get(emailKey) : undefined);
+      if (choice === "keep") {
+        // 7월 정보를 그대로 쓰겠다고 선택한 경우 — 기존 제출 정보를 보여준다.
+        const prev = resolveMkUrls(userId, emailKey);
+        return {
+          status: "kept",
+          channelUrl: prev.ig,
+          postUrl: prev.post,
+          submittedAt:
+            (userId ? augChoiceAtByUser.get(userId) : undefined) ??
+            (emailKey ? augChoiceAtByEmail.get(emailKey) : undefined) ??
+            null,
+          // 유지 선택자는 7월 설정을 그대로 이어받는다.
+          commentsIncluded:
+            (userId ? julyCommentsByUser.get(userId) : undefined) ??
+            (emailKey ? julyCommentsByEmail.get(emailKey) : undefined) ??
+            null,
+        };
+      }
+      const targetsAugust = aiMarketer && includesMonth(marketerMonths, "8");
+      return {
+        status: targetsAugust || choice ? "pending" : null,
+        channelUrl: null,
+        postUrl: null,
+        submittedAt: null,
+        commentsIncluded: null,
+      };
+    };
+
+    // 운영 플랫폼(instagram | youtube). 8월 정보 → 최신 신청서 순으로 보고,
+    // 값이 없으면 채널 주소로 추정한다. 엑셀 정렬·표시에 쓴다.
+    const channelByUser = new Map<string, string>();
+    const channelByEmail = new Map<string, string>();
+    for (const c of augChannelRes.data ?? []) {
+      if (!c.marketing_channel) continue;
+      if (c.user_id) channelByUser.set(c.user_id, c.marketing_channel);
+      if (c.email) channelByEmail.set(c.email.trim().toLowerCase(), c.marketing_channel);
+    }
+    const appChannelByUser = new Map<string, string>();
+    const appChannelByEmail = new Map<string, string>();
+    for (const app of appsRes.data ?? []) {
+      if (!app.marketing_channel) continue;
+      if (app.user_id && !appChannelByUser.has(app.user_id))
+        appChannelByUser.set(app.user_id, app.marketing_channel);
+      const key = app.email?.trim().toLowerCase();
+      if (key && !appChannelByEmail.has(key))
+        appChannelByEmail.set(key, app.marketing_channel);
+    }
+    const guessFromUrl = (url: string | null): string | null => {
+      if (!url) return null;
+      const u = url.toLowerCase();
+      if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+      if (u.includes("instagram.com")) return "instagram";
+      return null;
+    };
+    const resolveChannel = (
+      userId: string | null,
+      emailKey: string,
+      ...urls: Array<string | null>
+    ): string | null => {
+      const direct =
+        (userId ? channelByUser.get(userId) : undefined) ??
+        (emailKey ? channelByEmail.get(emailKey) : undefined) ??
+        (userId ? appChannelByUser.get(userId) : undefined) ??
+        (emailKey ? appChannelByEmail.get(emailKey) : undefined);
+      if (direct === "instagram" || direct === "youtube") return direct;
+      for (const url of urls) {
+        const guessed = guessFromUrl(url);
+        if (guessed) return guessed;
+      }
+      return null;
+    };
+
     const profileEmails = new Set<string>();
     const users = (profilesRes.data ?? []).map((profile) => {
       const emailKey = profile.email?.trim().toLowerCase() ?? "";
@@ -541,6 +793,13 @@ export async function GET(request: NextRequest) {
       // has no events for this user.
       const accessCount = logins ? logins.count : null;
 
+      const augSub = augustSubmission(
+        profile.id,
+        emailKey,
+        grant?.ai_marketer ?? false,
+        grant?.marketer_months ?? null
+      );
+
       return {
         id: profile.id,
         signedUp: true,
@@ -575,6 +834,21 @@ export async function GET(request: NextRequest) {
         ),
         julyToss: monthlyToss(emailKey, JULY_MONTH),
         augustToss: monthlyToss(emailKey, AUGUST_MONTH),
+        augustSubmission: augSub.status,
+        augustChannelUrl: augSub.channelUrl,
+        augustPostUrl: augSub.postUrl,
+        augustSubmittedAt: augSub.submittedAt,
+        augustCommentsIncluded: augSub.commentsIncluded,
+        prepaidBalance: emailKey ? (prepaidByEmail.get(emailKey) ?? 0) : 0,
+        julyChannelUrl: resolveJulyUrls(profile.id, emailKey).ig,
+        julyPostUrl: resolveJulyUrls(profile.id, emailKey).post,
+        marketingChannel: resolveChannel(
+          profile.id,
+          emailKey,
+          augSub.channelUrl,
+          resolveJulyUrls(profile.id, emailKey).ig,
+          resolveMkUrls(profile.id, emailKey).ig
+        ),
         instagramUrl: resolveMkUrls(profile.id, emailKey).ig,
         postUrl: resolveMkUrls(profile.id, emailKey).post,
         instaFollowerCount: mget(emailKey, "instagram")?.count ?? null,
@@ -597,7 +871,7 @@ export async function GET(request: NextRequest) {
         subscriptionActive,
         subscriptionEndDate: sub?.end_date ?? null,
         remainingCredits: subscriptionActive ? sub!.remaining_credits : null,
-        // 사전등록으로 부여된 생성기 크레딧(부여량). 활성 구독이 없을 때
+        // 사전등록으로 부여된 생성기 횟수(부여량). 활성 구독이 없을 때
         // "N (부여)"로 보여주기 위함.
         grantGeneratorCredits: grant?.ai_generator
           ? (grant.generator_credits ?? null)
@@ -626,6 +900,12 @@ export async function GET(request: NextRequest) {
       // 미가입 users never logged in; their only access evidence is an
       // application submission (if any).
       const preFirstAccessAt = firstAppByEmail.get(emailKey) ?? null;
+      const augSubPre = augustSubmission(
+        null,
+        emailKey,
+        grant.ai_marketer,
+        grant.marketer_months
+      );
       users.push({
         id: `grant_${grant.id}`,
         signedUp: false,
@@ -660,6 +940,21 @@ export async function GET(request: NextRequest) {
         ),
         julyToss: monthlyToss(emailKey, JULY_MONTH),
         augustToss: monthlyToss(emailKey, AUGUST_MONTH),
+        augustSubmission: augSubPre.status,
+        augustChannelUrl: augSubPre.channelUrl,
+        augustPostUrl: augSubPre.postUrl,
+        augustSubmittedAt: augSubPre.submittedAt,
+        augustCommentsIncluded: augSubPre.commentsIncluded,
+        prepaidBalance: emailKey ? (prepaidByEmail.get(emailKey) ?? 0) : 0,
+        julyChannelUrl: resolveJulyUrls(null, emailKey).ig,
+        julyPostUrl: resolveJulyUrls(null, emailKey).post,
+        marketingChannel: resolveChannel(
+          null,
+          emailKey,
+          augSubPre.channelUrl,
+          resolveJulyUrls(null, emailKey).ig,
+          resolveMkUrls(null, emailKey).ig
+        ),
         instagramUrl: resolveMkUrls(null, emailKey).ig,
         postUrl: resolveMkUrls(null, emailKey).post,
         instaFollowerCount: mget(emailKey, "instagram")?.count ?? null,

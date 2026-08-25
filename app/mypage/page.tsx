@@ -15,6 +15,8 @@ import {
   syncProfileAndLinkData,
   type MonthlyPerformance,
   type MyPageSnapshot,
+  type PrepaidEntry,
+  type UserNotice,
   type SavedGeneratedPost,
 } from "@/lib/supabase/persistence";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
@@ -51,6 +53,9 @@ const EMPTY_SNAPSHOT: MyPageSnapshot = {
     dailyUsageCount: 0,
   },
   performances: [],
+  notices: [],
+  prepaidBalance: null,
+  prepaidEntries: [],
 };
 
 function Card({
@@ -196,35 +201,36 @@ function getEarliestFutureMonth(months: number[], currentMonth: number) {
 
 // ── 마케터 카드 헬퍼 ──────────────────────────────────────────────────────────
 
-// 월 1개월·수량 1개 기준 목표치. 실제 목표는 여기에 신청 수량을 곱한다.
-// 랜딩/마케터 카드의 '예상 성과'와 같은 기준(인스타 +500·100·30, 유튜브 +200·1,000·10).
+// 마케터 1명 · 1개월 기준 목표치. 이용 개월 수는 곱하지 않는다.
+// 한 채널에 마케터가 여러 명 붙으면 그 수만큼 목표가 올라간다
+// (인스타 1계정에 2명 → 팔로워 1,000).
+//   인스타그램 팔로워 500 · 좋아요 100 · 댓글 30
+//   유튜브     구독자 200 · 조회수 1,000 · 댓글 10
 const MONTHLY_GOAL_BASE = {
   instagram: { followers: 500, engagement: 100, comments: 30 },
   youtube: { followers: 200, engagement: 1000, comments: 10 },
 } as const;
 
-// 해당 월 1개월분 예상 성과. 성과 카드의 목표치와 같은 기준을 쓴다
-// (MONTHLY_GOAL_BASE × 신청 수량). 이용 개월 수는 곱하지 않는다.
+// 해당 월 예상 성과. 목표는 '채널 1개당 고정'이다 — 인스타 팔로워 500,
+// 유튜브 구독자 200. 신청 수량이나 이용 개월 수를 곱하지 않는다.
+// (수량이 2면 채널이 2개인 것이고, 각 채널이 이 기준을 따른다.)
 function getMonthlyOutcome(
   platform: "instagram" | "youtube",
-  quantity: number
+  marketerCount = 1
 ): Array<{ label: string; text: string }> {
   const base = MONTHLY_GOAL_BASE[platform];
-  const multiplier = quantity > 0 ? quantity : 1;
+  const n = marketerCount > 0 ? marketerCount : 1;
   const isYoutube = platform === "youtube";
   return [
     {
       label: isYoutube ? "구독자" : "팔로워",
-      text: `${(base.followers * multiplier).toLocaleString()}명`,
+      text: `${(base.followers * n).toLocaleString()}명`,
     },
     {
       label: isYoutube ? "조회수" : "좋아요",
-      text: `${(base.engagement * multiplier).toLocaleString()}${isYoutube ? "회" : "개"} 이상`,
+      text: `${(base.engagement * n).toLocaleString()}${isYoutube ? "회" : "개"} 이상`,
     },
-    {
-      label: "댓글",
-      text: `${(base.comments * multiplier).toLocaleString()}개 이상`,
-    },
+    { label: "댓글", text: `${(base.comments * n).toLocaleString()}개 이상` },
   ];
 }
 
@@ -255,27 +261,30 @@ function monthStatusBadge(m: number, currentMonth: number) {
 
 // 월별 마케팅 정보(채널·메인 게시물) 한 블록. 마이페이지 마케터 카드에서
 // 7월·8월을 각각 표기하기 위해 재사용한다.
+type PlatformInfo = {
+  platform: "youtube" | "instagram";
+  accountUrl: string | null;
+  contentUrl: string | null;
+};
+
+// 한 달의 마케팅 정보. 유튜브·인스타그램을 함께 운영하면 두 묶음이 나란히 뜬다.
+// 신청은 했지만 아직 주소가 없는 플랫폼은 "준비 중"으로 표시한다.
 function MonthMarketingBlock({
   title,
   badge,
-  accountLabel,
-  accountUrl,
-  contentLabel,
-  contentUrl,
+  platforms,
   emptyNote,
 }: {
   title: string;
   badge: { label: string; cls: string } | null;
-  accountLabel: string;
-  accountUrl: string | null;
-  contentLabel: string;
-  contentUrl: string | null;
+  platforms: PlatformInfo[];
   emptyNote: string;
 }) {
-  const hasAny = Boolean(accountUrl || contentUrl);
+  const shown = platforms.filter((p) => p.accountUrl || p.contentUrl);
+  const pending = platforms.filter((p) => !p.accountUrl && !p.contentUrl);
   const row = (label: string, url: string | null) => (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <span className="w-20 shrink-0 text-sm text-gray-500">{label}</span>
+    <div key={label} className="flex items-center gap-3 px-4 py-3">
+      <span className="w-24 shrink-0 text-sm text-gray-500">{label}</span>
       {url ? (
         <a
           href={url}
@@ -291,6 +300,7 @@ function MonthMarketingBlock({
       )}
     </div>
   );
+
   return (
     <div className="overflow-hidden rounded-2xl border border-gray-100">
       <div className="flex items-center justify-between bg-gray-50 px-4 py-2.5">
@@ -301,10 +311,33 @@ function MonthMarketingBlock({
           </span>
         )}
       </div>
-      {hasAny ? (
+      {shown.length ? (
         <div className="divide-y divide-gray-100">
-          {row(accountLabel, accountUrl)}
-          {row(contentLabel, contentUrl)}
+          {shown.map((p) => {
+            const isYoutube = p.platform === "youtube";
+            return (
+              <div key={p.platform}>
+                {platforms.length > 1 && (
+                  <p className="bg-gray-50/60 px-4 py-1.5 text-[11px] font-semibold text-gray-500">
+                    {isYoutube ? "유튜브" : "인스타그램"}
+                  </p>
+                )}
+                {row(isYoutube ? "채널 주소" : "계정 주소", p.accountUrl)}
+                {row(isYoutube ? "메인 영상" : "메인 게시물", p.contentUrl)}
+              </div>
+            );
+          })}
+          {pending.map((p) => (
+            <div
+              key={p.platform}
+              className="flex items-center gap-3 px-4 py-3"
+            >
+              <span className="w-24 shrink-0 text-sm text-gray-500">
+                {p.platform === "youtube" ? "유튜브" : "인스타그램"}
+              </span>
+              <span className="ml-auto text-sm text-amber-600">준비 중</span>
+            </div>
+          ))}
         </div>
       ) : (
         <p className="px-4 py-3 text-sm text-gray-400">{emptyNote}</p>
@@ -313,7 +346,6 @@ function MonthMarketingBlock({
   );
 }
 
-// "2026-07" → "7월" (연도가 올해와 다르면 "2026년 7월")
 function formatPerformanceMonth(month: string): string {
   const [year, rawMonth] = month.split("-");
   const monthNumber = Number(rawMonth);
@@ -335,14 +367,10 @@ type PerformanceRow = {
 // 인스타는 팔로워/좋아요/댓글, 유튜브는 구독자/조회수/댓글.
 function MonthlyPerformanceCard({
   performances,
-  quantity,
 }: {
   performances: MonthlyPerformance[];
-  quantity: number;
 }) {
   if (!performances.length) return null;
-
-  const multiplier = quantity > 0 ? quantity : 1;
 
   return (
     <Card className="space-y-4">
@@ -367,19 +395,19 @@ function MonthlyPerformanceCard({
             {
               label: isYoutube ? "구독자" : "팔로워",
               value: performance.followers,
-              goal: base.followers * multiplier,
+              goal: base.followers,
               unit: "명",
             },
             {
               label: isYoutube ? "조회수" : "좋아요",
               value: isYoutube ? performance.views : performance.likes,
-              goal: base.engagement * multiplier,
+              goal: base.engagement,
               unit: isYoutube ? "회" : "개",
             },
             {
               label: "댓글",
               value: performance.comments,
-              goal: base.comments * multiplier,
+              goal: base.comments,
               unit: "개",
             },
           ];
@@ -540,6 +568,153 @@ function MonthlyPerformanceCard({
   );
 }
 
+const NOTICE_TONE: Record<
+  UserNotice["tone"],
+  { card: string; badge: string }
+> = {
+  success: {
+    card: "border-emerald-100 bg-emerald-50/40",
+    badge: "bg-emerald-600 text-white",
+  },
+  warn: {
+    card: "border-amber-100 bg-amber-50/50",
+    badge: "bg-amber-500 text-white",
+  },
+  info: {
+    card: "border-blue-100 bg-blue-50/40",
+    badge: "bg-blue-600 text-white",
+  },
+};
+
+// 선결제 크레딧 잔액 카드. 1원 = 1크레딧 충전 잔액이며,
+// AI 생성기의 '생성 횟수'와는 다른 개념이라 문구로 구분해 준다.
+// '결제 이력 보기'로 충전·차감 내역을 펼쳐 볼 수 있다.
+const PREPAID_METHOD_LABEL: Record<string, string> = {
+  bank_transfer: "계좌이체",
+  card: "카드결제",
+  other: "기타",
+};
+
+function PrepaidBalanceCard({
+  balance,
+  entries,
+}: {
+  balance: number | null;
+  entries: PrepaidEntry[];
+}) {
+  const [open, setOpen] = useState(false);
+  if (balance === null) return null;
+
+  return (
+    <Card className="space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+            선결제 크레딧
+          </p>
+          <p className="mt-1 text-2xl font-extrabold tabular-nums text-violet-700">
+            {balance.toLocaleString("ko-KR")}
+            <span className="ml-1 text-sm font-semibold text-violet-500">
+              크레딧
+            </span>
+          </p>
+        </div>
+        {entries.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="shrink-0 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50"
+          >
+            결제 이력 {open ? "닫기" : `보기 (${entries.length})`}
+          </button>
+        )}
+      </div>
+
+      <p className="text-sm leading-relaxed text-gray-500">
+        충전해 두신 잔액입니다. 1원 = 1크레딧이며, 서비스 이용 시 여기서
+        차감됩니다. AI 생성기의 생성 횟수와는 별개예요.
+      </p>
+
+      {open && (
+        <div className="overflow-hidden rounded-xl border border-gray-100">
+          {entries.map((entry, index) => (
+            <div
+              key={`${entry.occurredOn}-${index}`}
+              className="flex items-start justify-between gap-3 border-t border-gray-100 px-3.5 py-2.5 first:border-t-0"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-800">
+                  {entry.kind === "charge"
+                    ? "충전"
+                    : entry.kind === "deduct"
+                      ? "차감"
+                      : "조정"}
+                  {entry.method && (
+                    <span className="ml-1.5 text-xs font-normal text-gray-400">
+                      {PREPAID_METHOD_LABEL[entry.method] ?? entry.method}
+                    </span>
+                  )}
+                </p>
+                {entry.memo && (
+                  <p className="mt-0.5 truncate text-xs text-gray-500">
+                    {entry.memo}
+                  </p>
+                )}
+                <p className="mt-0.5 text-[11px] text-gray-400">
+                  {entry.occurredOn}
+                </p>
+              </div>
+              <span
+                className={`shrink-0 text-sm font-bold tabular-nums ${entry.amount >= 0 ? "text-violet-700" : "text-red-600"}`}
+              >
+                {entry.amount >= 0 ? "+" : ""}
+                {entry.amount.toLocaleString("ko-KR")}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// 관리자가 넣은 상시 안내 카드 (결제 확인, 진행 보류 등).
+function UserNoticeCards({ notices }: { notices: UserNotice[] }) {
+  if (!notices.length) return null;
+  return (
+    <div className="space-y-3">
+      {notices.map((notice, index) => {
+        const tone = NOTICE_TONE[notice.tone];
+        return (
+          <div
+            key={`${notice.title}-${index}`}
+            className={`rounded-2xl border p-4 ${tone.card}`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${tone.badge}`}
+              >
+                {notice.title}
+              </span>
+              {notice.month && (
+                <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                  {formatPerformanceMonth(notice.month)}
+                </span>
+              )}
+            </div>
+            {notice.body && (
+              <p className="mt-2.5 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+                {notice.body}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function getCompletionDateText(
   completionDate: string | null | undefined,
   currentMonth: number,
@@ -586,6 +761,13 @@ export default function MyPage() {
           channel: string | null;
           channelUrl: string | null;
           mainContentUrl: string | null;
+          // 한 달에 두 플랫폼을 함께 운영하는 경우를 위해 플랫폼별로 따로 둔다.
+          youtubeChannelUrl: string | null;
+          youtubeContentUrl: string | null;
+          instagramChannelUrl: string | null;
+          instagramContentUrl: string | null;
+          youtubeMarketerCount: number | null;
+          instagramMarketerCount: number | null;
         } | null;
       }
   >({ status: "idle" });
@@ -790,6 +972,9 @@ export default function MyPage() {
                 dailyUsageCount: 0,
               },
               performances: [],
+              notices: [],
+              prepaidBalance: null,
+              prepaidEntries: [],
             });
             setErrorMessage(null);
             setLoading(false);
@@ -975,16 +1160,40 @@ export default function MyPage() {
       }
 
       // 8월 마케팅 변경 폼으로 따로 입력한 8월 채널·게시물 (있을 때만).
-      const { data: rawAug } = await supabase
-        .from("monthly_channel_info")
-        .select("marketing_channel, channel_url, main_content_url")
-        .eq("user_id", authUserId)
-        .eq("month", "2026-08")
-        .maybeSingle();
+      // 컬럼이 아직 없는 환경(마이그레이션 전 배포)에서도 8월 정보가 통째로
+      // 사라지지 않도록, 확장 컬럼 조회가 실패하면 기본 컬럼만 다시 읽는다.
+      const augSelect = (columns: string) =>
+        supabase
+          .from("monthly_channel_info")
+          .select(columns)
+          .eq("user_id", authUserId)
+          .eq("month", "2026-08")
+          .maybeSingle();
+
+      let augResult = await augSelect(
+        "marketing_channel, channel_url, main_content_url, youtube_channel_url, youtube_content_url, instagram_channel_url, instagram_content_url, youtube_marketer_count, instagram_marketer_count"
+      );
+      if (augResult.error) {
+        augResult = await augSelect(
+          "marketing_channel, channel_url, main_content_url, youtube_channel_url, youtube_content_url, instagram_channel_url, instagram_content_url"
+        );
+      }
+      if (augResult.error) {
+        augResult = await augSelect(
+          "marketing_channel, channel_url, main_content_url"
+        );
+      }
+      const rawAug = augResult.data;
       const augRow = rawAug as {
         marketing_channel: string | null;
         channel_url: string | null;
         main_content_url: string | null;
+        youtube_channel_url?: string | null;
+        youtube_content_url?: string | null;
+        instagram_channel_url?: string | null;
+        instagram_content_url?: string | null;
+        youtube_marketer_count?: number | null;
+        instagram_marketer_count?: number | null;
       } | null;
 
       if (!active) return;
@@ -1012,6 +1221,12 @@ export default function MyPage() {
               channel: augRow.marketing_channel,
               channelUrl: augRow.channel_url,
               mainContentUrl: augRow.main_content_url,
+              youtubeChannelUrl: augRow.youtube_channel_url ?? null,
+              youtubeContentUrl: augRow.youtube_content_url ?? null,
+              instagramChannelUrl: augRow.instagram_channel_url ?? null,
+              instagramContentUrl: augRow.instagram_content_url ?? null,
+              youtubeMarketerCount: augRow.youtube_marketer_count ?? null,
+              instagramMarketerCount: augRow.instagram_marketer_count ?? null,
             }
           : null,
       });
@@ -1117,18 +1332,18 @@ export default function MyPage() {
               </Card>
             )}
 
-            {/* 월별 마케팅 성과 (기관 지원/일반 결제 유저 공통).
-                목표치는 신청 수량(=selected_plan)에 비례한다. */}
-            <MonthlyPerformanceCard
-              performances={snapshot.performances}
-              quantity={
-                (serviceGrantState.status === "ready"
-                  ? serviceGrantState.grant.marketer_quantity
-                  : null) ??
-                snapshot.application?.selectedPlan ??
-                1
-              }
+            {/* 관리자 안내 (결제 확인 등) — 가장 위에 노출 */}
+            <UserNoticeCards notices={snapshot.notices} />
+
+            {/* 선결제 크레딧 잔액 (충전 내역이 있을 때만) */}
+            <PrepaidBalanceCard
+              balance={snapshot.prepaidBalance}
+              entries={snapshot.prepaidEntries}
             />
+
+            {/* 월별 마케팅 성과 (기관 지원/일반 결제 유저 공통).
+                목표는 채널 1개당 고정 기준이라 수량을 곱하지 않는다. */}
+            <MonthlyPerformanceCard performances={snapshot.performances} />
 
             {serviceGrantState.status === "ready" ? (
               // ─── GRANTED-USER LAYOUT ───────────────────────────────────────
@@ -1185,12 +1400,60 @@ export default function MyPage() {
                 const showJuly = grant.ai_marketer && marketerMonths.includes(7);
                 const showAugust = grant.ai_marketer && marketerMonths.includes(8);
                 const julyIsYoutube = marketingChannel === "youtube";
+                const julyAccountUrl = buildAccountUrl(
+                  marketingChannel,
+                  channelUrl,
+                  instagramId
+                );
+                // 7월은 신청서 기준이라 한 플랫폼만 존재한다.
+                const julyPlatforms: PlatformInfo[] = [
+                  {
+                    platform: julyIsYoutube ? "youtube" : "instagram",
+                    accountUrl: julyAccountUrl,
+                    contentUrl: mainContentUrl,
+                  },
+                ];
+
+                // 8월은 플랫폼별 칸이 따로 있어 두 개를 함께 표시할 수 있다.
+                // 값이 없으면(마이그레이션 전 데이터 등) 기존 단일 칸으로 대체한다.
                 const augChannel = august?.channel ?? marketingChannel;
                 const augIsYoutube = augChannel === "youtube";
-                const augAccountUrl =
-                  august?.channelUrl ??
-                  buildAccountUrl(marketingChannel, channelUrl, instagramId);
-                const augContentUrl = august?.mainContentUrl ?? mainContentUrl;
+                // 8월 정보를 따로 제출한 경우(monthly_channel_info 행 존재)에는
+                // 그 값만 쓴다. 7월 값으로 대체하면 8월 칸에 지난달 게시물이
+                // 잘못 표시된다. 행이 없을 때(=7월 정보 그대로 진행)만 대체한다.
+                const augFallbackAccount = august
+                  ? august.channelUrl
+                  : julyAccountUrl;
+                const augFallbackContent = august
+                  ? august.mainContentUrl
+                  : mainContentUrl;
+                const augYoutube: PlatformInfo = {
+                  platform: "youtube",
+                  accountUrl:
+                    august?.youtubeChannelUrl ??
+                    (augIsYoutube ? augFallbackAccount : null),
+                  contentUrl:
+                    august?.youtubeContentUrl ??
+                    (augIsYoutube ? augFallbackContent : null),
+                };
+                const augInstagram: PlatformInfo = {
+                  platform: "instagram",
+                  accountUrl:
+                    august?.instagramChannelUrl ??
+                    (augIsYoutube ? null : augFallbackAccount),
+                  contentUrl:
+                    august?.instagramContentUrl ??
+                    (augIsYoutube ? null : augFallbackContent),
+                };
+                // 두 플랫폼 중 하나라도 값이 있으면 둘 다 보여준다(없는 쪽은 "준비 중").
+                const augHasBoth =
+                  Boolean(augYoutube.accountUrl || augYoutube.contentUrl) &&
+                  Boolean(augInstagram.accountUrl || augInstagram.contentUrl);
+                const augPlatforms: PlatformInfo[] = augHasBoth
+                  ? [augYoutube, augInstagram]
+                  : augIsYoutube
+                    ? [augYoutube, augInstagram]
+                    : [augInstagram, augYoutube];
                 const monthlyInfoSection =
                   showJuly || showAugust ? (
                     <div className="space-y-3">
@@ -1201,14 +1464,7 @@ export default function MyPage() {
                         <MonthMarketingBlock
                           title="7월 마케팅 정보"
                           badge={monthStatusBadge(7, currentMonth)}
-                          accountLabel={julyIsYoutube ? "채널 주소" : "계정 주소"}
-                          accountUrl={buildAccountUrl(
-                            marketingChannel,
-                            channelUrl,
-                            instagramId
-                          )}
-                          contentLabel={julyIsYoutube ? "메인 영상" : "메인 게시물"}
-                          contentUrl={mainContentUrl}
+                          platforms={julyPlatforms}
                           emptyNote="아직 7월 정보를 입력하지 않았습니다."
                         />
                       )}
@@ -1216,10 +1472,7 @@ export default function MyPage() {
                         <MonthMarketingBlock
                           title="8월 마케팅 정보"
                           badge={monthStatusBadge(8, currentMonth)}
-                          accountLabel={augIsYoutube ? "채널 주소" : "계정 주소"}
-                          accountUrl={augAccountUrl}
-                          contentLabel={augIsYoutube ? "메인 영상" : "메인 게시물"}
-                          contentUrl={augContentUrl}
+                          platforms={augPlatforms}
                           emptyNote="아직 8월 정보를 입력하지 않았습니다."
                         />
                       )}
@@ -1302,16 +1555,36 @@ export default function MyPage() {
                       // ── 진행중 rich card ──────────────────────────────────
                       (() => {
                         const isYoutube = marketingChannel === "youtube";
-                        // 예상 성과는 '이번 달 1개월분'만 보여준다. 이용 개월이
-                        // 여러 달이어도 곱하지 않는다(달마다 따로 표시).
-                        const outcomeQuantity =
-                          grant.marketer_quantity ??
-                          snapshot.application?.selectedPlan ??
-                          1;
-                        const outcomes = getMonthlyOutcome(
-                          isYoutube ? "youtube" : "instagram",
-                          outcomeQuantity
-                        );
+                        // 이번 달 운영 중인 채널별 예상 성과.
+                        // 채널마다 붙은 마케터 수만큼 목표가 올라간다.
+                        const outcomeGroups = augPlatforms
+                          .filter((p) => p.accountUrl || p.contentUrl)
+                          .map((p) => ({
+                            platform: p.platform,
+                            label: p.platform === "youtube" ? "유튜브" : "인스타그램",
+                            count:
+                              (p.platform === "youtube"
+                                ? august?.youtubeMarketerCount
+                                : august?.instagramMarketerCount) ?? 1,
+                            items: getMonthlyOutcome(
+                              p.platform,
+                              (p.platform === "youtube"
+                                ? august?.youtubeMarketerCount
+                                : august?.instagramMarketerCount) ?? 1
+                            ),
+                          }));
+                        const outcomes = outcomeGroups.length
+                          ? outcomeGroups
+                          : [
+                              {
+                                platform: isYoutube ? "youtube" : "instagram",
+                                label: isYoutube ? "유튜브" : "인스타그램",
+                                count: 1,
+                                items: getMonthlyOutcome(
+                                  isYoutube ? "youtube" : "instagram"
+                                ),
+                              },
+                            ];
                         return (
                           <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-white p-6">
                             <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-emerald-50" />
@@ -1363,18 +1636,34 @@ export default function MyPage() {
                                 <p className="mb-2 text-xs font-medium text-gray-400">
                                   {currentMonth}월 예상 성과
                                 </p>
-                                <div className="grid grid-cols-3 gap-2">
-                                  {outcomes.map((outcome) => (
-                                    <div
-                                      key={outcome.label}
-                                      className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center"
-                                    >
-                                      <p className="text-[11px] text-emerald-700">
-                                        예상 {outcome.label}
-                                      </p>
-                                      <p className="text-base font-bold text-emerald-900">
-                                        {outcome.text}
-                                      </p>
+                                <div className="space-y-3">
+                                  {outcomes.map((group) => (
+                                    <div key={group.platform}>
+                                      {outcomes.length > 1 && (
+                                        <p className="mb-1.5 text-[11px] font-semibold text-gray-500">
+                                          {group.label}
+                                          {group.count > 1 && (
+                                            <span className="ml-1 font-normal text-gray-400">
+                                              · 마케터 {group.count}명
+                                            </span>
+                                          )}
+                                        </p>
+                                      )}
+                                      <div className="grid grid-cols-3 gap-2">
+                                        {group.items.map((item) => (
+                                          <div
+                                            key={item.label}
+                                            className="rounded-xl bg-emerald-50/70 px-3 py-2.5 text-center"
+                                          >
+                                            <p className="text-[11px] text-emerald-700">
+                                              예상 {item.label}
+                                            </p>
+                                            <p className="text-base font-bold text-emerald-900">
+                                              {item.text}
+                                            </p>
+                                          </div>
+                                        ))}
+                                      </div>
                                     </div>
                                   ))}
                                 </div>

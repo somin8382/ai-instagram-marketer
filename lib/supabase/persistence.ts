@@ -108,6 +108,23 @@ export type MonthlyPerformance = {
   note: string | null;
 };
 
+// 관리자가 넣는 마이페이지 상시 안내 카드.
+export type UserNotice = {
+  title: string;
+  body: string | null;
+  tone: "info" | "success" | "warn";
+  month: string | null;
+};
+
+// 선결제 크레딧 충전·차감 1건.
+export type PrepaidEntry = {
+  amount: number;
+  kind: "charge" | "deduct" | "adjust";
+  method: string | null;
+  memo: string | null;
+  occurredOn: string;
+};
+
 export type MyPageSnapshot = {
   application: SavedApplication | null;
   payment: SavedPayment | null;
@@ -115,6 +132,9 @@ export type MyPageSnapshot = {
   posts: SavedGeneratedPost[];
   usage: UsageSnapshot;
   performances: MonthlyPerformance[]; // 최신 월 우선
+  notices: UserNotice[]; // 상시 안내 카드 (sort_order 순)
+  prepaidBalance: number | null; // 선결제 크레딧 잔액 (1원=1크레딧). 내역 없으면 null
+  prepaidEntries: PrepaidEntry[]; // 충전·차감 내역 (최신순)
 };
 
 type ApplicationPersistenceInput = {
@@ -1710,6 +1730,116 @@ async function fetchMonthlyPerformances({
   return { performances, error: null };
 }
 
+type UserNoticeRow = {
+  title: string | null;
+  body: string | null;
+  tone: string | null;
+  month: string | null;
+  sort_order: number | null;
+  user_id: string | null;
+  email: string | null;
+};
+
+// 상시 안내 카드. RLS가 본인 행만 돌려주지만 코드에서도 소유권을 재확인한다.
+async function fetchUserNotices({
+  userId,
+  email,
+}: {
+  userId?: string | null;
+  email?: string | null;
+}): Promise<{ notices: UserNotice[]; error: string | null }> {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = (await supabase
+    .from("user_notices")
+    .select("title, body, tone, month, sort_order, user_id, email")
+    .eq("active", true)
+    .order("sort_order", { ascending: true })) as unknown as {
+    data: UserNoticeRow[] | null;
+    error: { message: string } | null;
+  };
+
+  if (error) {
+    // 테이블 미생성 환경에서도 마이페이지는 정상 동작해야 한다.
+    return { notices: [], error: error.message };
+  }
+
+  const normEmail = normalizeEmail(email);
+  const notices = (data ?? [])
+    .filter((row) => {
+      const rowEmail = normalizeEmail(row.email);
+      if (row.user_id && userId && row.user_id !== userId) return false;
+      if (normEmail && rowEmail && rowEmail !== normEmail) return false;
+      return !!row.title;
+    })
+    .map((row) => ({
+      title: String(row.title),
+      body: row.body,
+      tone:
+        row.tone === "success" || row.tone === "warn"
+          ? (row.tone as "success" | "warn")
+          : ("info" as const),
+      month: row.month,
+    }));
+
+  return { notices, error: null };
+}
+
+// 선결제 크레딧 잔액. 원장 합계이며, 내역이 하나도 없으면 null(=미사용).
+async function fetchPrepaidBalance({
+  userId,
+  email,
+}: {
+  userId?: string | null;
+  email?: string | null;
+}): Promise<{
+  balance: number | null;
+  entries: PrepaidEntry[];
+  error: string | null;
+}> {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = (await supabase
+    .from("prepaid_credit_entries")
+    .select("amount, kind, method, memo, occurred_on, user_id, email")
+    .order("occurred_on", { ascending: false })) as unknown as {
+    data: Array<{
+      amount: number | null;
+      kind: string | null;
+      method: string | null;
+      memo: string | null;
+      occurred_on: string | null;
+      user_id: string | null;
+      email: string | null;
+    }> | null;
+    error: { message: string } | null;
+  };
+  if (error) return { balance: null, entries: [], error: error.message };
+
+  const normEmail = normalizeEmail(email);
+  const rows = (data ?? []).filter((row) => {
+    const rowEmail = normalizeEmail(row.email);
+    if (row.user_id && userId && row.user_id !== userId) return false;
+    if (normEmail && rowEmail && rowEmail !== normEmail) return false;
+    return true;
+  });
+  if (!rows.length) return { balance: null, entries: [], error: null };
+
+  const entries: PrepaidEntry[] = rows.map((r) => ({
+    amount: r.amount ?? 0,
+    kind:
+      r.kind === "deduct" || r.kind === "adjust"
+        ? (r.kind as "deduct" | "adjust")
+        : ("charge" as const),
+    method: r.method,
+    memo: r.memo,
+    occurredOn: String(r.occurred_on ?? ""),
+  }));
+  return {
+    balance: entries.reduce((sum, r) => sum + r.amount, 0),
+    entries,
+    error: null,
+  };
+}
+
 export async function fetchMyPageSnapshot({
   userId,
   email,
@@ -1737,6 +1867,9 @@ export async function fetchMyPageSnapshot({
         posts: [] as SavedGeneratedPost[],
         usage: emptyUsage,
         performances: [] as MonthlyPerformance[],
+        notices: [] as UserNotice[],
+        prepaidBalance: null,
+        prepaidEntries: [] as PrepaidEntry[],
       },
       error: "Supabase 환경 변수가 설정되지 않았습니다.",
     };
@@ -1896,6 +2029,22 @@ export async function fetchMyPageSnapshot({
     errors.push(performanceResult.error);
   }
 
+  const noticeResult = await fetchUserNotices({
+    userId,
+    email: emailCandidates[0] || email || null,
+  });
+  if (noticeResult.error) {
+    errors.push(noticeResult.error);
+  }
+
+  const prepaidResult = await fetchPrepaidBalance({
+    userId,
+    email: emailCandidates[0] || email || null,
+  });
+  if (prepaidResult.error) {
+    errors.push(prepaidResult.error);
+  }
+
   console.info(
     "[MyPage] 조회 결과:",
     JSON.stringify({
@@ -1907,6 +2056,7 @@ export async function fetchMyPageSnapshot({
       postCount: posts.length,
       remainingPostCount: usage.remainingPostCount,
       performanceCount: performanceResult.performances.length,
+      noticeCount: noticeResult.notices.length,
       hasError: errors.length > 0,
     })
   );
@@ -1919,6 +2069,9 @@ export async function fetchMyPageSnapshot({
       posts,
       usage,
       performances: performanceResult.performances,
+      notices: noticeResult.notices,
+      prepaidBalance: prepaidResult.balance,
+      prepaidEntries: prepaidResult.entries,
     },
     error: errors.length ? errors.join(" / ") : null,
   };

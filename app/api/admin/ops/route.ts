@@ -12,6 +12,18 @@ function startOfKoreaDayIso(dateString = getKoreaDateString()): string {
   return new Date(`${dateString}T00:00:00+09:00`).toISOString();
 }
 
+// ISO → KST 기준 YYYY-MM-DD. 일부 컬럼(applications 등)은 타임존 없이 UTC로
+// 저장돼 있어, 오프셋이 없으면 UTC로 간주한다.
+function toKstDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const normalized = /[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`;
+  const d = new Date(normalized);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+}
+
+const AUGUST_MONTH = "2026-08";
+
 function estimatedUnitCostUsd(): number {
   const raw = process.env.AI_ESTIMATED_COST_PER_GENERATION_USD;
   const parsed = raw ? Number(raw) : NaN;
@@ -156,9 +168,99 @@ export async function GET(request: NextRequest) {
 
     const unitUsd = estimatedUnitCostUsd();
 
+    // ── AI 마케터 제출 현황 ────────────────────────────────────────────────
+    // 제출 경로 3가지(8월 정보 변경 / 유지 선택 / 8월 신규 신청)를 사람 단위로
+    // 합쳐 '언제 제출했는지'만 남긴다. 같은 사람이 여러 번이면 가장 이른 날.
+    const [mciRes, confRes, appsRes, tossRes] = await Promise.all([
+      (db
+        .from("monthly_channel_info")
+        .select("email, created_at")
+        .eq("month", AUGUST_MONTH) as unknown) as Promise<{
+        data: Array<{ email: string | null; created_at: string | null }> | null;
+        error: { message: string } | null;
+      }>,
+      (db
+        .from("marketing_confirmations")
+        .select("email, choice, created_at")
+        .eq("month", AUGUST_MONTH) as unknown) as Promise<{
+        data: Array<{
+          email: string | null;
+          choice: string;
+          created_at: string | null;
+        }> | null;
+        error: { message: string } | null;
+      }>,
+      (db
+        .from("applications")
+        .select("email, main_content_url, created_at")
+        .order("created_at", { ascending: false })
+        .limit(20000) as unknown) as Promise<{
+        data: Array<{
+          email: string | null;
+          main_content_url: string | null;
+          created_at: string | null;
+        }> | null;
+        error: { message: string } | null;
+      }>,
+      (db
+        .from("monthly_toss_status")
+        .select("email, status")
+        .eq("month", AUGUST_MONTH) as unknown) as Promise<{
+        data: Array<{ email: string; status: string }> | null;
+        error: { message: string } | null;
+      }>,
+    ]);
+
+    // email → 최초 제출일(KST)
+    const submittedOn = new Map<string, string>();
+    const noteSubmission = (email: string | null, at: string | null) => {
+      const key = email?.trim().toLowerCase();
+      const day = toKstDate(at);
+      if (!key || !day) return;
+      const prev = submittedOn.get(key);
+      if (!prev || day < prev) submittedOn.set(key, day);
+    };
+    for (const r of mciRes.data ?? []) noteSubmission(r.email, r.created_at);
+    for (const r of confRes.data ?? []) {
+      if (r.choice === "keep") noteSubmission(r.email, r.created_at);
+    }
+    for (const r of appsRes.data ?? []) {
+      if (!r.main_content_url) continue;
+      if (toKstDate(r.created_at)?.startsWith(AUGUST_MONTH)) {
+        noteSubmission(r.email, r.created_at);
+      }
+    }
+
+    const sevenDaysAgoKst = toKstDate(
+      new Date(now - 6 * 24 * 60 * 60 * 1000).toISOString()
+    );
+    let marketerToday = 0;
+    let marketer7d = 0;
+    for (const day of submittedOn.values()) {
+      if (day === todayKr) marketerToday += 1;
+      if (sevenDaysAgoKst && day >= sevenDaysAgoKst) marketer7d += 1;
+    }
+
+    // 제출자 중 8월 토스가 아직 '완료'가 아닌 사람 수 (기록 없으면 대기로 본다)
+    const tossByEmail = new Map<string, string>();
+    for (const t of tossRes.data ?? []) {
+      tossByEmail.set(t.email.trim().toLowerCase(), t.status);
+    }
+    let tossDone = 0;
+    for (const email of submittedOn.keys()) {
+      if (tossByEmail.get(email) === "done") tossDone += 1;
+    }
+
     return NextResponse.json({
       generatedAt: new Date().toISOString(),
       today: todayKr,
+      marketerSubmissions: {
+        today: marketerToday,
+        last7d: marketer7d,
+        total: submittedOn.size,
+        tossDone,
+        tossRemaining: submittedOn.size - tossDone,
+      },
       activity: {
         dau: dau.size,
         wau: wau.size,

@@ -2656,7 +2656,7 @@ export default function ToolsPage() {
                   </p>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
                     {hasActivePostGeneratorSubscription
-                        ? "다음 결제 주기에 다시 충전되거나 이후 추가 크레딧 기능으로 확장될 예정입니다"
+                        ? "다음 결제 주기에 다시 충전되거나 이후 추가 횟수 기능으로 확장될 예정입니다"
                         : "계속 이용하려면 로그인 후 월 구독을 시작해주세요"}
                   </p>
                 </div>

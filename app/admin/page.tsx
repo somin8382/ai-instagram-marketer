@@ -96,7 +96,7 @@ const BULK_FIELD_LABELS: Record<BulkField, string> = {
   marketer_months: "마케터 개월",
   ai_generator: "AI생성기(Y/N)",
   generator_months: "생성기 개월",
-  generator_credits: "생성기 크레딧",
+  generator_credits: "생성기 지급 횟수",
 };
 
 type BulkColumn = {
@@ -203,6 +203,13 @@ type UserDetail = {
 type OpsMetrics = {
   generatedAt: string;
   today: string;
+  marketerSubmissions: {
+    today: number;
+    last7d: number;
+    total: number;
+    tossDone: number;
+    tossRemaining: number;
+  };
   activity: {
     dau: number;
     wau: number;
@@ -348,6 +355,35 @@ function OpsPanel({ ops, error }: { ops: OpsMetrics | null; error: boolean }) {
         </p>
       </div>
 
+      {/* AI 마케터 제출 — 매일 확인하는 운영 지표 */}
+      <div>
+        <p className="text-xs font-medium text-gray-400 mb-2">AI 마케터 제출 (8월)</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard
+            label="오늘 제출"
+            value={fmt(ops.marketerSubmissions.today)}
+            sub={`최근 7일 ${fmt(ops.marketerSubmissions.last7d)}명`}
+            tone={ops.marketerSubmissions.today > 0 ? "good" : "default"}
+          />
+          <StatCard
+            label="8월 제출 누적"
+            value={fmt(ops.marketerSubmissions.total)}
+          />
+          <StatCard
+            label="토스 완료"
+            value={fmt(ops.marketerSubmissions.tossDone)}
+            sub={`제출자 ${fmt(ops.marketerSubmissions.total)}명 중`}
+            tone="good"
+          />
+          <StatCard
+            label="토스 남음"
+            value={fmt(ops.marketerSubmissions.tossRemaining)}
+            sub="제출했지만 토스 미완료"
+            tone={ops.marketerSubmissions.tossRemaining > 0 ? "warn" : "default"}
+          />
+        </div>
+      </div>
+
       {/* Activity */}
       <div>
         <p className="text-xs font-medium text-gray-400 mb-2">사용자 활동</p>
@@ -408,7 +444,7 @@ function OpsPanel({ ops, error }: { ops: OpsMetrics | null; error: boolean }) {
             tone="good"
           />
           <StatCard
-            label="잔여 크레딧 합계"
+            label="잔여 생성 횟수 합계"
             value={fmt(ops.subscriptions.remainingCreditsSum)}
           />
         </div>
@@ -1302,7 +1338,7 @@ export default function AdminPage() {
                           <p className="font-medium text-green-600">활성</p>
                         </div>
                         <div>
-                          <p className="text-gray-500">남은 크레딧</p>
+                          <p className="text-gray-500">남은 생성 횟수</p>
                           <p className="font-medium text-gray-900">{userDetail.subscription.remainingCredits}</p>
                         </div>
                         <div>
@@ -1541,7 +1577,7 @@ export default function AdminPage() {
                       <th className="px-3 py-2 font-medium">전화</th>
                       <th className="px-3 py-2 font-medium">마케터</th>
                       <th className="px-3 py-2 font-medium">생성기</th>
-                      <th className="px-3 py-2 font-medium">크레딧</th>
+                      <th className="px-3 py-2 font-medium">생성 횟수</th>
                       <th className="px-3 py-2 font-medium">변경/비고</th>
                     </tr>
                   </thead>
@@ -1692,7 +1728,7 @@ export default function AdminPage() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-600">크레딧 수 (기본 40)</label>
+                        <label className="text-xs font-medium text-gray-600">생성 횟수 (기본 40)</label>
                         <input
                           type="number"
                           value={addForm.generator_credits}
@@ -1965,7 +2001,7 @@ export default function AdminPage() {
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-xs font-medium text-gray-600">크레딧</label>
+                          <label className="text-xs font-medium text-gray-600">생성 횟수</label>
                           <input
                             type="number"
                             value={editForm.generator_credits}

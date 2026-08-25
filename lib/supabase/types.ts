@@ -287,6 +287,12 @@ export type Database = {
           instagram_id: string | null;
           main_content_url: string | null;
           comments_included: boolean | null;
+          youtube_channel_url: string | null;
+          youtube_content_url: string | null;
+          instagram_channel_url: string | null;
+          instagram_content_url: string | null;
+          youtube_marketer_count: number | null;
+          instagram_marketer_count: number | null;
           created_at: string;
           updated_at: string;
         };
@@ -302,6 +308,40 @@ export type Database = {
           recorded_on: string;
           recorded_by: string | null;
           created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      prepaid_credit_entries: {
+        Row: {
+          id: string;
+          email: string;
+          user_id: string | null;
+          amount: number;
+          kind: string;
+          method: string | null;
+          memo: string | null;
+          occurred_on: string;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
+      user_notices: {
+        Row: {
+          id: string;
+          email: string;
+          user_id: string | null;
+          month: string | null;
+          title: string;
+          body: string | null;
+          tone: string;
+          sort_order: number;
+          active: boolean;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
         };
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;

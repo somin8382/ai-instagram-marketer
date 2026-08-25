@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       };
       if (adjustRes.error) {
         return NextResponse.json(
-          { error: "크레딧 적용에 실패했습니다." },
+          { error: "생성 횟수 적용에 실패했습니다." },
           { status: 500 }
         );
       }
@@ -145,7 +145,7 @@ export async function POST(request: NextRequest) {
         {
           ok: true,
           applied,
-          warning: "크레딧은 지급되었으나 지급 이력 저장에 실패했습니다.",
+          warning: "생성 횟수는 지급되었으나 지급 이력 저장에 실패했습니다.",
         },
         { status: 200 }
       );

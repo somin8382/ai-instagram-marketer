@@ -29,6 +29,18 @@ type UserRow = {
   tossStatus: string; // (레거시) 월 구분 없는 토스 상태 — 표시는 julyToss/augustToss 사용
   augustMarketing: string | null; // 8월 마케팅: "keep"|"change"|"pending"|null(미해당)
   julyMarketing: string | null; // 7월 마케팅 실행: "done"|"pending"|null(7월 대상 아님)
+  // 8월 마케터 정보 제출: "changed"(정보 변경 제출) | "kept"(7월 정보 유지)
+  //                      | "new"(8월 신규 신청) | "pending"(미제출) | null(대상 아님)
+  augustSubmission: string | null;
+  augustChannelUrl: string | null; // 8월 기준 채널 주소
+  augustPostUrl: string | null; // 8월 기준 게시물 주소
+  augustSubmittedAt: string | null; // 8월 정보 제출 시각(ISO)
+  // 8월 댓글 이벤트 포함 여부. true=포함, false=미포함, null=미지정
+  augustCommentsIncluded: boolean | null;
+  prepaidBalance: number; // 선결제 크레딧 잔액 (1원=1크레딧)
+  julyChannelUrl: string | null; // 7월 제출 채널 주소
+  julyPostUrl: string | null; // 7월 제출 게시물 주소
+  marketingChannel: string | null; // "instagram" | "youtube" | null
   julyToss: string; // 7월 토스: "wait"|"in_progress"|"done"
   augustToss: string; // 8월 토스: "wait"|"in_progress"|"done"
   instagramUrl: string | null; // 마케터 제출 채널(인스타그램) 주소
@@ -228,6 +240,28 @@ const TOSS_CLS: Record<string, string> = {
   in_progress: "bg-blue-100 text-blue-700",
   done: "bg-green-100 text-green-700",
 };
+// ISO 문자열 → KST 기준 YYYY-MM-DD. applications 등 일부 컬럼은 타임존 없이
+// UTC로 저장돼 있어, 오프셋이 없으면 UTC로 간주한다.
+function kstDate(iso: string): string {
+  const normalized = /[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`;
+  const d = new Date(normalized);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+}
+
+const AUG_SUB_LABEL: Record<string, string> = {
+  changed: "정보 변경",
+  kept: "7월 정보 유지",
+  new: "8월 신규 신청",
+  pending: "미제출",
+};
+const AUG_SUB_CLS: Record<string, string> = {
+  changed: "bg-blue-100 text-blue-700",
+  kept: "bg-emerald-100 text-emerald-700",
+  new: "bg-violet-100 text-violet-700",
+  pending: "bg-red-100 text-red-700",
+};
+
 const JULY_MONTH = "2026-07";
 const AUGUST_MONTH = "2026-08";
 
@@ -241,6 +275,42 @@ const EXPORT_COLUMNS: Array<{
   { header: "구분", modes: ["normal", "marketer"], get: (u) => (u.signedUp ? "가입" : "미가입") },
   { header: "분야", modes: ALL_MODES, get: (u) => fieldLabel(u.field) },
   { header: "메모", modes: ["normal", "marketer"], get: (u) => u.note ?? "" },
+  {
+    header: "플랫폼",
+    modes: ["normal", "marketer"],
+    get: (u) =>
+      u.marketingChannel === "youtube"
+        ? "유튜브"
+        : u.marketingChannel === "instagram"
+          ? "인스타그램"
+          : "",
+  },
+  {
+    header: "8월 제출",
+    modes: ["normal", "marketer"],
+    get: (u) => (u.augustSubmission ? AUG_SUB_LABEL[u.augustSubmission] ?? "" : ""),
+  },
+  {
+    header: "8월 제출일",
+    modes: ["normal", "marketer"],
+    get: (u) => (u.augustSubmittedAt ? kstDate(u.augustSubmittedAt) : ""),
+  },
+  {
+    header: "8월 댓글 이벤트",
+    modes: ["normal", "marketer"],
+    get: (u) =>
+      u.augustSubmission === null
+        ? ""
+        : u.augustCommentsIncluded === true
+          ? "포함"
+          : u.augustCommentsIncluded === false
+            ? "미포함"
+            : "미지정",
+  },
+  { header: "7월 채널 주소", modes: ["marketer"], get: (u) => u.julyChannelUrl ?? "" },
+  { header: "7월 게시물 주소", modes: ["marketer"], get: (u) => u.julyPostUrl ?? "" },
+  { header: "8월 채널 주소", modes: ["marketer"], get: (u) => u.augustChannelUrl ?? "" },
+  { header: "8월 게시물 주소", modes: ["marketer"], get: (u) => u.augustPostUrl ?? "" },
   {
     header: "7월 토스",
     modes: ["normal", "marketer"],
@@ -299,12 +369,17 @@ const EXPORT_COLUMNS: Array<{
   { header: "로그인 수", modes: ["normal"], get: (u) => u.loginCount },
   { header: "AI 생성 수", modes: ["normal"], get: (u) => u.aiGenerationCount },
   {
-    header: "마케터 크레딧",
+    header: "마케터 수량",
     modes: ["normal", "capture"],
     get: (u) => (u.marketerQuantity === null ? "" : u.marketerQuantity),
   },
   {
-    header: "생성기 크레딧",
+    header: "선결제 크레딧",
+    modes: ["normal", "capture"],
+    get: (u) => (u.prepaidBalance ? u.prepaidBalance : ""),
+  },
+  {
+    header: "생성기 잔여 횟수",
     modes: ALL_MODES,
     get: (u) =>
       u.remainingCredits !== null
@@ -319,8 +394,6 @@ const EXPORT_COLUMNS: Array<{
     get: (u) =>
       u.aiMarketer ? (u.marketerSubmitted ? "제출완료" : "미제출") : "",
   },
-  { header: "인스타그램 주소", modes: ["marketer"], get: (u) => u.instagramUrl ?? "" },
-  { header: "게시물 주소", modes: ["marketer"], get: (u) => u.postUrl ?? "" },
   {
     header: "인스타 팔로워",
     modes: ["marketer"],
@@ -360,7 +433,18 @@ async function exportXlsx(rows: UserRow[], viewMode: ViewMode = "normal") {
   const XLSX = await import("xlsx");
   // "지금 보는 표"와 동일하게 — 현재 보기 모드에서 노출되는 열만 내보낸다.
   const columns = EXPORT_COLUMNS.filter((c) => c.modes.includes(viewMode));
-  const data = rows.map((row) => {
+  // 플랫폼이 섞여 있으면 보기 어려워, 인스타그램 → 유튜브 → 미확인 순으로 묶는다.
+  // 같은 플랫폼 안에서는 화면에 보이던 정렬 순서를 그대로 유지한다.
+  const platformRank = (u: UserRow) =>
+    u.marketingChannel === "instagram" ? 0 : u.marketingChannel === "youtube" ? 1 : 2;
+  const ordered = rows
+    .map((row, index) => ({ row, index }))
+    .sort(
+      (a, b) =>
+        platformRank(a.row) - platformRank(b.row) || a.index - b.index
+    )
+    .map((entry) => entry.row);
+  const data = ordered.map((row) => {
     const record: Record<string, string | number> = {};
     for (const column of columns) {
       record[column.header] = column.get(row);
@@ -404,6 +488,13 @@ const inputCls =
   "w-full px-3 py-2 bg-white text-gray-900 border border-gray-200 rounded-xl text-sm placeholder:text-gray-400 focus:outline-none focus:border-gray-400";
 const selectCls =
   "px-3 py-2 bg-white text-gray-900 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-gray-400";
+
+// 필터가 걸려 있으면(=기본값 "all"이 아니면) 파란 테두리로 표시해,
+// 지금 무엇이 걸러진 상태인지 한눈에 보이게 한다.
+const filterCls = (value: string) =>
+  value === "all"
+    ? selectCls
+    : `${selectCls} border-blue-400 bg-blue-50 text-blue-800 font-medium`;
 
 function Dot({ on }: { on: boolean }) {
   return on ? (
@@ -469,6 +560,9 @@ export default function AdminUsersPage() {
   const [monthFilter, setMonthFilter] = useState("all"); // 기준 월: all | "1".."12"
   const [creditFilter, setCreditFilter] = useState("all"); // all | low | zero
   const [inquiryFilter, setInquiryFilter] = useState("all"); // all | any | open
+  const [platformFilter, setPlatformFilter] = useState("all");
+  const [augSubFilter, setAugSubFilter] = useState("all");
+  const [tossFilter, setTossFilter] = useState("all");
   const [minLogins, setMinLogins] = useState("");
   const [minGenerations, setMinGenerations] = useState("");
 
@@ -477,7 +571,7 @@ export default function AdminUsersPage() {
   const [sortDesc, setSortDesc] = useState(true);
   // 표 보기 모드 (상호 배타):
   //  - "capture" (캡쳐용): 구분·메모·가입등록일·최근활동·접속·로그인·AI생성·무료·마케터제출 숨김
-  //  - "marketer" (마케터 검토용): 사용자·구분·분야·회사·메모·멘토기관·생성기크레딧·마케터제출만
+  //  - "marketer" (마케터 검토용): 사용자·구분·분야·회사·메모·멘토기관·생성기횟수·마케터제출만
   const [viewMode, setViewMode] = useState<"normal" | "capture" | "marketer">(
     "normal"
   );
@@ -496,8 +590,31 @@ export default function AdminUsersPage() {
   const [detail, setDetail] = useState<UserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailTab, setDetailTab] = useState<
-    "summary" | "memo" | "logins" | "posts" | "genlogs" | "marketer" | "credits"
+    | "summary" | "memo" | "logins" | "posts" | "genlogs" | "marketer"
+    | "credits" | "prepaid"
   >("summary");
+
+  // 선결제 크레딧 (1원=1크레딧 충전 잔액)
+  type PrepaidEntry = {
+    id: string;
+    amount: number;
+    kind: string;
+    method: string | null;
+    memo: string | null;
+    occurred_on: string;
+    created_by: string | null;
+  };
+  const [prepaid, setPrepaid] = useState<{
+    balance: number;
+    entries: PrepaidEntry[];
+    available: boolean;
+  } | null>(null);
+  const [prepaidAmount, setPrepaidAmount] = useState("");
+  const [prepaidKind, setPrepaidKind] = useState("charge");
+  const [prepaidMethod, setPrepaidMethod] = useState("bank_transfer");
+  const [prepaidMemo, setPrepaidMemo] = useState("");
+  const [prepaidSaving, setPrepaidSaving] = useState(false);
+  const [prepaidResult, setPrepaidResult] = useState<string | null>(null);
 
   // Email edit (detail view)
   const [emailEditing, setEmailEditing] = useState(false);
@@ -580,6 +697,11 @@ export default function AdminUsersPage() {
     setNoteResult(null);
     setMarketerForm(null);
     setMarketerResult(null);
+    setPrepaid(null);
+    setPrepaidAmount("");
+    setPrepaidMemo("");
+    setPrepaidResult(null);
+    void loadPrepaid(user.email);
     setGrantAmount("");
     setGrantReason("");
     setGrantMessage("");
@@ -822,6 +944,88 @@ export default function AdminUsersPage() {
     }
   }
 
+  // 선결제 크레딧 잔액·내역 조회
+  async function loadPrepaid(email: string | null) {
+    if (!email) return;
+    setPrepaid(null);
+    try {
+      const res = await adminFetch(
+        `/api/admin/users/prepaid-credit?email=${encodeURIComponent(email)}`,
+        accessToken
+      );
+      if (!res.ok) return;
+      setPrepaid(await res.json());
+    } catch {
+      // 무시: 화면에 "불러오지 못했습니다"로 남는다
+    }
+  }
+
+  // 선결제 충전/차감/조정 1건 기록
+  async function savePrepaid() {
+    const email = selectedUser?.email;
+    if (!email || prepaidSaving) return;
+    const n = Number(prepaidAmount.replace(/,/g, "").trim());
+    if (!Number.isInteger(n) || n === 0) {
+      setPrepaidResult("오류: 0이 아닌 정수를 입력하세요.");
+      return;
+    }
+    setPrepaidSaving(true);
+    setPrepaidResult(null);
+    try {
+      const res = await adminFetch("/api/admin/users/prepaid-credit", accessToken, {
+        method: "POST",
+        body: JSON.stringify({
+          email,
+          amount: n,
+          kind: prepaidKind,
+          method: prepaidKind === "charge" ? prepaidMethod : null,
+          memo: prepaidMemo.trim() || null,
+        }),
+      });
+      const data = (await res.json()) as { balance?: number; error?: string };
+      if (!res.ok) {
+        setPrepaidResult(`오류: ${data.error ?? "저장 실패"}`);
+        return;
+      }
+      setPrepaidResult(`저장했습니다. 현재 잔액 ${(data.balance ?? 0).toLocaleString("ko-KR")} 크레딧`);
+      setPrepaidAmount("");
+      setPrepaidMemo("");
+      await loadPrepaid(email);
+      // 목록의 잔액도 즉시 갱신
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.email === email ? { ...u, prepaidBalance: data.balance ?? u.prepaidBalance } : u
+        )
+      );
+    } catch {
+      setPrepaidResult("오류: 저장에 실패했습니다.");
+    } finally {
+      setPrepaidSaving(false);
+    }
+  }
+
+  // URL 셀 (7월/8월 채널·게시물 공통)
+  function urlCell(url: string | null) {
+    return (
+      <td className="px-3 py-2.5">
+        {url ? (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={url}
+            className="block max-w-[15rem] truncate text-blue-600 underline underline-offset-2 hover:text-blue-800"
+          >
+            {url}
+          </a>
+        ) : (
+          <span className="text-gray-300">—</span>
+        )}
+      </td>
+    );
+  }
+
   // 월별 토스 셀 (뱃지 + 변경 셀렉트)
   function tossCell(user: UserRow, month: string) {
     const value = month === JULY_MONTH ? user.julyToss : user.augustToss;
@@ -1050,6 +1254,25 @@ export default function AdminUsersPage() {
         if (marketerFilter === "unsubmitted" && user.marketerSubmitted)
           return false;
       }
+      if (platformFilter !== "all") {
+        // 미확인 = 채널 정보가 없어 플랫폼을 판정할 수 없는 사람(null)
+        const platform = user.marketingChannel ?? "unknown";
+        if (platform !== platformFilter) return false;
+      }
+      // 8월 제출 여부. 제출 경로(변경/유지/신규)는 열의 배지로 구분하고,
+      // 필터는 업무 흐름대로 '냈다 / 안 냈다' 두 갈래만 둔다.
+      const hasSubmitted = ["changed", "kept", "new"].includes(
+        user.augustSubmission ?? ""
+      );
+      if (augSubFilter === "submitted" && !hasSubmitted) return false;
+      if (augSubFilter === "pending" && user.augustSubmission !== "pending")
+        return false;
+      if (augSubFilter === "today") {
+        if (!hasSubmitted || !user.augustSubmittedAt) return false;
+        if (kstDate(user.augustSubmittedAt) !== kstDate(new Date().toISOString()))
+          return false;
+      }
+      if (tossFilter !== "all" && user.augustToss !== tossFilter) return false;
       if (minLoginCount > 0 && user.loginCount < minLoginCount) return false;
       if (minGenCount > 0 && user.aiGenerationCount < minGenCount) return false;
       if (monthFilter !== "all") {
@@ -1105,6 +1328,9 @@ export default function AdminUsersPage() {
     monthFilter,
     creditFilter,
     inquiryFilter,
+    platformFilter,
+    augSubFilter,
+    tossFilter,
     minLogins,
     minGenerations,
     sortField,
@@ -1157,7 +1383,7 @@ export default function AdminUsersPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">전체 유저</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              가입·미가입 사용자를 검색하고 상세 정보·크레딧을 관리합니다.
+              가입·미가입 사용자를 검색하고 상세 정보·생성 횟수를 관리합니다.
             </p>
             <p className="text-xs text-gray-400 mt-0.5">
               전체 {users.length.toLocaleString()}명 (미가입 포함) · 필터 결과{" "}
@@ -1185,7 +1411,7 @@ export default function AdminUsersPage() {
               onClick={() =>
                 setViewMode((v) => (v === "marketer" ? "normal" : "marketer"))
               }
-              title="사용자·구분·분야·회사·메모·멘토기관·생성기크레딧·마케터제출만 표시 — 마케터 검토용"
+              title="사용자·구분·분야·회사·메모·멘토기관·생성기횟수·마케터제출만 표시 — 마케터 검토용"
               className={`text-sm px-4 py-2 rounded-xl border transition-colors ${
                 mkt
                   ? "border-gray-900 bg-gray-900 text-white hover:bg-gray-700"
@@ -1267,112 +1493,142 @@ export default function AdminUsersPage() {
             <select
               value={signupStateFilter}
               onChange={(e) => setSignupStateFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(signupStateFilter)}
             >
-              <option value="all">가입 여부 전체</option>
-              <option value="signed">가입</option>
-              <option value="pre">미가입 (사전등록)</option>
+              <option value="all">가입 여부: 전체</option>
+              <option value="signed">가입 여부: 가입함</option>
+              <option value="pre">가입 여부: 미가입(사전등록)</option>
             </select>
             <select
               value={serviceFilter}
               onChange={(e) => setServiceFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(serviceFilter)}
             >
-              <option value="all">이용 유형 전체</option>
-              <option value="free">무료 유저</option>
-              <option value="marketer">AI 마케터 구독</option>
-              <option value="generator">AI 생성기 구독</option>
+              <option value="all">이용 유형: 전체</option>
+              <option value="free">이용 유형: 무료 유저</option>
+              <option value="marketer">이용 유형: AI 마케터</option>
+              <option value="generator">이용 유형: AI 생성기</option>
             </select>
             <select
               value={fieldFilter}
               onChange={(e) => setFieldFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(fieldFilter)}
             >
-              <option value="all">분야 전체</option>
-              <option value="local">로컬</option>
-              <option value="tech">기술</option>
+              <option value="all">분야: 전체</option>
+              <option value="local">분야: 로컬</option>
+              <option value="tech">분야: 기술</option>
             </select>
             <select
               value={hostOrgFilter}
               onChange={(e) => setHostOrgFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(hostOrgFilter)}
             >
-              <option value="all">주관기관 전체</option>
+              <option value="all">주관기관: 전체</option>
               {hostOrgs.map((org) => (
                 <option key={org} value={org}>
-                  {org}
+                  {`주관기관: ${org}`}
                 </option>
               ))}
             </select>
             <select
               value={signupFilter}
               onChange={(e) => setSignupFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(signupFilter)}
             >
-              <option value="all">가입일 전체</option>
-              <option value="1">오늘 가입</option>
-              <option value="7">최근 7일 가입</option>
-              <option value="30">최근 30일 가입</option>
-              <option value="90">최근 90일 가입</option>
+              <option value="all">가입일: 전체</option>
+              <option value="1">가입일: 오늘</option>
+              <option value="7">가입일: 최근 7일</option>
+              <option value="30">가입일: 최근 30일</option>
+              <option value="90">가입일: 최근 90일</option>
             </select>
             <select
               value={activityFilter}
               onChange={(e) => setActivityFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(activityFilter)}
             >
-              <option value="all">활동 전체</option>
-              <option value="active7">7일 내 활동</option>
-              <option value="active30">30일 내 활동</option>
-              <option value="inactive30">30일+ 미활동</option>
-              <option value="never">활동 기록 없음</option>
+              <option value="all">활동: 전체</option>
+              <option value="active7">활동: 7일 내</option>
+              <option value="active30">활동: 30일 내</option>
+              <option value="inactive30">활동: 30일 이상 없음</option>
+              <option value="never">활동: 기록 없음</option>
             </select>
             <select
               value={subscriptionFilter}
               onChange={(e) => setSubscriptionFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(subscriptionFilter)}
             >
-              <option value="all">생성기 구독 전체</option>
-              <option value="active">구독중</option>
-              <option value="inactive">미구독</option>
+              <option value="all">생성기 구독: 전체</option>
+              <option value="active">생성기 구독: 구독중</option>
+              <option value="inactive">생성기 구독: 미구독</option>
             </select>
             <select
               value={creditFilter}
               onChange={(e) => setCreditFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(creditFilter)}
             >
-              <option value="all">크레딧 전체</option>
-              <option value="low">5개 미만</option>
-              <option value="zero">0개</option>
+              <option value="all">생성 횟수: 전체</option>
+              <option value="low">생성 횟수: 5회 미만</option>
+              <option value="zero">생성 횟수: 0회</option>
+            </select>
+            <select
+              value={platformFilter}
+              onChange={(e) => setPlatformFilter(e.target.value)}
+              className={filterCls(platformFilter)}
+            >
+              <option value="all">플랫폼: 전체</option>
+              <option value="instagram">플랫폼: 인스타그램</option>
+              <option value="youtube">플랫폼: 유튜브</option>
+              <option value="unknown">플랫폼: 미확인</option>
+            </select>
+            <select
+              value={augSubFilter}
+              onChange={(e) => setAugSubFilter(e.target.value)}
+              className={filterCls(augSubFilter)}
+            >
+              <option value="all">8월 제출: 전체</option>
+              <option value="submitted">8월 제출: 제출함</option>
+              <option value="today">8월 제출: 오늘 제출</option>
+              <option value="pending">8월 제출: 미제출</option>
+            </select>
+            <select
+              value={tossFilter}
+              onChange={(e) => setTossFilter(e.target.value)}
+              className={filterCls(tossFilter)}
+            >
+              <option value="all">8월 토스: 전체</option>
+              <option value="wait">8월 토스: 대기</option>
+              <option value="in_progress">8월 토스: 진행중</option>
+              <option value="done">8월 토스: 완료</option>
             </select>
             <select
               value={marketerFilter}
               onChange={(e) => setMarketerFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(marketerFilter)}
             >
-              <option value="all">마케터 제출 전체</option>
-              <option value="submitted">제출완료</option>
-              <option value="unsubmitted">미제출</option>
+              <option value="all">신청서 제출: 전체</option>
+              <option value="submitted">신청서 제출: 완료</option>
+              <option value="unsubmitted">신청서 제출: 미제출</option>
             </select>
             <select
               value={monthFilter}
               onChange={(e) => setMonthFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(monthFilter)}
             >
-              <option value="all">기준 월 전체</option>
+              <option value="all">이용 월: 전체</option>
               {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                 <option key={m} value={String(m)}>
-                  {m}월 이용자
+                  이용 월: {m}월
                 </option>
               ))}
             </select>
             <select
               value={inquiryFilter}
               onChange={(e) => setInquiryFilter(e.target.value)}
-              className={selectCls}
+              className={filterCls(inquiryFilter)}
             >
-              <option value="all">문의 전체</option>
-              <option value="any">문의 있음</option>
-              <option value="open">미답변 문의 있음</option>
+              <option value="all">문의: 전체</option>
+              <option value="any">문의: 있음</option>
+              <option value="open">문의: 미답변 있음</option>
             </select>
             <input
               type="number"
@@ -1418,6 +1674,9 @@ export default function AdminUsersPage() {
                 <th className={plainHeaderCls}>분야</th>
                 <th className={plainHeaderCls}>회사</th>
                 {!cap && <th className={plainHeaderCls}>메모</th>}
+                {!cap && <th className={plainHeaderCls}>플랫폼</th>}
+                {!cap && <th className={plainHeaderCls}>8월 제출</th>}
+                {!cap && <th className={plainHeaderCls}>제출일</th>}
                 {!cap && <th className={plainHeaderCls}>7월 토스</th>}
                 {!cap && <th className={plainHeaderCls}>8월 토스</th>}
                 {!cap && <th className={plainHeaderCls}>7월 마케팅</th>}
@@ -1484,17 +1743,23 @@ export default function AdminUsersPage() {
                   <th className={`${plainHeaderCls} text-center`}>생성기 개월</th>
                 )}
                 {!mkt && (
-                  <th className={`${plainHeaderCls} text-right`}>마케터 크레딧</th>
+                  <th className={`${plainHeaderCls} text-right`}>선결제 크레딧</th>
+                )}
+                {!mkt && (
+                  <th className={`${plainHeaderCls} text-right`}>마케터 수량</th>
                 )}
                 <th
                   className={`${headerCls} text-right`}
                   onClick={() => toggleSort("remainingCredits")}
                 >
-                  생성기 크레딧{sortIndicator("remainingCredits")}
+                  생성기 잔여 횟수{sortIndicator("remainingCredits")}
                 </th>
                 {!cap && <th className={plainHeaderCls}>마케터 제출</th>}
-                {mkt && <th className={plainHeaderCls}>인스타그램 주소</th>}
-                {mkt && <th className={plainHeaderCls}>게시물 주소</th>}
+                {mkt && <th className={plainHeaderCls}>댓글 이벤트</th>}
+                {mkt && <th className={plainHeaderCls}>7월 채널 주소</th>}
+                {mkt && <th className={plainHeaderCls}>7월 게시물 주소</th>}
+                {mkt && <th className={plainHeaderCls}>8월 채널 주소</th>}
+                {mkt && <th className={plainHeaderCls}>8월 게시물 주소</th>}
                 {mkt && (
                   <th className={`${plainHeaderCls} text-right`}>인스타 팔로워</th>
                 )}
@@ -1564,6 +1829,52 @@ export default function AdminUsersPage() {
                           <span className="text-amber-700">{user.note}</span>
                         ) : (
                           "—"
+                        )}
+                      </td>
+                    )}
+                    {!cap && (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {user.marketingChannel === "instagram" ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-pink-100 text-pink-700">
+                            인스타
+                          </span>
+                        ) : user.marketingChannel === "youtube" ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                            유튜브
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
+                    {!cap && (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {user.augustSubmission ? (
+                          <span
+                            className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${AUG_SUB_CLS[user.augustSubmission] ?? ""}`}
+                          >
+                            {AUG_SUB_LABEL[user.augustSubmission]}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
+                    {!cap && (
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
+                        {user.augustSubmittedAt ? (
+                          <span
+                            className={
+                              kstDate(user.augustSubmittedAt) ===
+                              kstDate(new Date().toISOString())
+                                ? "font-semibold text-emerald-600"
+                                : ""
+                            }
+                          >
+                            {kstDate(user.augustSubmittedAt).slice(5)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
                         )}
                       </td>
                     )}
@@ -1673,6 +1984,23 @@ export default function AdminUsersPage() {
                       </td>
                     )}
                     {!mkt && (
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        {user.prepaidBalance ? (
+                          <span
+                            className={
+                              user.prepaidBalance > 0
+                                ? "font-semibold text-violet-700"
+                                : "font-semibold text-red-600"
+                            }
+                          >
+                            {user.prepaidBalance.toLocaleString("ko-KR")}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
+                    {!mkt && (
                       <td className="px-3 py-2.5 text-right text-gray-600">
                         {user.marketerQuantity ?? "—"}
                       </td>
@@ -1705,41 +2033,28 @@ export default function AdminUsersPage() {
                       </td>
                     )}
                     {mkt && (
-                      <td className="px-3 py-2.5">
-                        {user.instagramUrl ? (
-                          <a
-                            href={user.instagramUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            title={user.instagramUrl}
-                            className="block max-w-[15rem] truncate text-blue-600 underline underline-offset-2 hover:text-blue-800"
-                          >
-                            {user.instagramUrl}
-                          </a>
-                        ) : (
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {user.augustSubmission === null ? (
                           <span className="text-gray-300">—</span>
+                        ) : user.augustCommentsIncluded === true ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                            포함
+                          </span>
+                        ) : user.augustCommentsIncluded === false ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                            미포함
+                          </span>
+                        ) : (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                            미지정
+                          </span>
                         )}
                       </td>
                     )}
-                    {mkt && (
-                      <td className="px-3 py-2.5">
-                        {user.postUrl ? (
-                          <a
-                            href={user.postUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            title={user.postUrl}
-                            className="block max-w-[15rem] truncate text-blue-600 underline underline-offset-2 hover:text-blue-800"
-                          >
-                            {user.postUrl}
-                          </a>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                    )}
+                    {mkt && urlCell(user.julyChannelUrl)}
+                    {mkt && urlCell(user.julyPostUrl)}
+                    {mkt && urlCell(user.augustChannelUrl)}
+                    {mkt && urlCell(user.augustPostUrl)}
                     {mkt &&
                       metricCell(
                         user,
@@ -1976,7 +2291,7 @@ export default function AdminUsersPage() {
                         구독중
                       </span>
                       <span className="text-gray-700">
-                        남은 크레딧{" "}
+                        남은 생성 횟수{" "}
                         <b>{detail.subscription.remainingCredits}</b>
                       </span>
                       <span className="text-gray-500">
@@ -1999,7 +2314,8 @@ export default function AdminUsersPage() {
                       ["posts", `AI 생성물 (${detail.posts.length})`],
                       ["genlogs", `생성 로그 (${detail.generationLogs.length})`],
                       ["marketer", "마케터 제출"],
-                      ["credits", `크레딧 지급 (${detail.creditGrants.length})`],
+                      ["credits", `생성 횟수 지급 (${detail.creditGrants.length})`],
+                      ["prepaid", "선결제 크레딧"],
                     ] as const
                   ).map(([key, label]) => (
                     <button
@@ -2313,16 +2629,146 @@ export default function AdminUsersPage() {
                   ))}
 
                 {/* Tab: credit grants */}
+                {detailTab === "prepaid" && (
+                  <div className="space-y-4">
+                    <div className="rounded-xl bg-violet-50 px-4 py-3">
+                      <p className="text-xs font-medium text-violet-600">현재 잔액</p>
+                      <p className="text-2xl font-extrabold tabular-nums text-violet-800">
+                        {prepaid
+                          ? prepaid.balance.toLocaleString("ko-KR")
+                          : "···"}
+                        <span className="ml-1 text-sm font-semibold">크레딧</span>
+                      </p>
+                      <p className="mt-1 text-[11px] text-violet-500">
+                        1원 = 1크레딧. AI 생성기의 생성 횟수와는 별개입니다.
+                      </p>
+                    </div>
+
+                    {!selectedUser?.email ? (
+                      <p className="text-sm text-gray-400">
+                        이메일이 없어 선결제를 기록할 수 없습니다.
+                      </p>
+                    ) : (
+                      <div className="space-y-2.5 rounded-xl border border-gray-200 p-4">
+                        <p className="text-sm font-semibold text-gray-900">
+                          충전 · 차감 기록
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <select
+                            value={prepaidKind}
+                            onChange={(e) => setPrepaidKind(e.target.value)}
+                            className={selectCls}
+                          >
+                            <option value="charge">충전 (+)</option>
+                            <option value="deduct">차감 (−)</option>
+                            <option value="adjust">조정 (±)</option>
+                          </select>
+                          {prepaidKind === "charge" && (
+                            <select
+                              value={prepaidMethod}
+                              onChange={(e) => setPrepaidMethod(e.target.value)}
+                              className={selectCls}
+                            >
+                              <option value="bank_transfer">계좌이체</option>
+                              <option value="card">카드결제</option>
+                              <option value="other">기타</option>
+                            </select>
+                          )}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={prepaidAmount}
+                            onChange={(e) => setPrepaidAmount(e.target.value)}
+                            placeholder="금액 (예: 900000)"
+                            className="px-3 py-2 w-44 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-gray-400"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={prepaidMemo}
+                          onChange={(e) => setPrepaidMemo(e.target.value)}
+                          placeholder="메모 (예: 90만원 계좌이체 선결제)"
+                          className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-gray-400"
+                        />
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => void savePrepaid()}
+                            disabled={prepaidSaving || !prepaidAmount.trim()}
+                            className="px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-medium hover:bg-violet-500 disabled:opacity-40"
+                          >
+                            {prepaidSaving ? "저장 중..." : "기록"}
+                          </button>
+                          {prepaidResult && (
+                            <p
+                              className={`text-sm ${prepaidResult.startsWith("오류") ? "text-red-500" : "text-green-600"}`}
+                            >
+                              {prepaidResult}
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-gray-400">
+                          부호는 구분에 맞춰 자동 적용됩니다. 차감을 고르면 입력한
+                          금액이 마이너스로 기록됩니다.
+                        </p>
+                      </div>
+                    )}
+
+                    {prepaid && !prepaid.available && (
+                      <p className="text-sm text-amber-600">
+                        선결제 테이블이 아직 생성되지 않았습니다. SQL 실행이 필요합니다.
+                      </p>
+                    )}
+
+                    {prepaid && prepaid.entries.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-gray-400">내역</p>
+                        {prepaid.entries.map((entry) => (
+                          <div
+                            key={entry.id}
+                            className="px-3 py-2 bg-gray-50 rounded-lg text-sm"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className={`font-semibold tabular-nums ${entry.amount >= 0 ? "text-violet-700" : "text-red-600"}`}
+                              >
+                                {entry.amount >= 0 ? "+" : ""}
+                                {entry.amount.toLocaleString("ko-KR")}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {entry.occurred_on}
+                                {entry.method === "bank_transfer"
+                                  ? " · 계좌이체"
+                                  : entry.method === "card"
+                                    ? " · 카드결제"
+                                    : entry.method === "other"
+                                      ? " · 기타"
+                                      : ""}
+                              </span>
+                            </div>
+                            {entry.memo && (
+                              <p className="mt-0.5 text-xs text-gray-600">{entry.memo}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {prepaid && prepaid.available && prepaid.entries.length === 0 && (
+                      <p className="text-sm text-gray-400">아직 내역이 없습니다.</p>
+                    )}
+                  </div>
+                )}
+
                 {detailTab === "credits" && (
                   <div className="space-y-4">
                     {!selectedUser.signedUp || !detail.user.id ? (
                       <p className="text-sm text-gray-400 py-2">
-                        미가입 사용자에게는 크레딧을 지급할 수 없습니다.
+                        미가입 사용자에게는 생성 횟수를 지급할 수 없습니다.
                       </p>
                     ) : (
                       <div className="bg-gray-50 rounded-xl p-4 space-y-3">
                         <p className="text-sm font-medium text-gray-900">
-                          보너스 크레딧 지급
+                          생성 횟수 추가 지급
                         </p>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
@@ -2359,7 +2805,7 @@ export default function AdminUsersPage() {
                             type="text"
                             value={grantMessage}
                             onChange={(e) => setGrantMessage(e.target.value)}
-                            placeholder="예: 이용에 불편을 드려 보상 크레딧을 지급했습니다."
+                            placeholder="예: 이용에 불편을 드려 생성 횟수를 추가 지급했습니다."
                             className={inputCls}
                           />
                         </div>
@@ -2384,7 +2830,7 @@ export default function AdminUsersPage() {
                           )}
                         </div>
                         <p className="text-[11px] text-gray-400">
-                          지급 즉시 사용자의 남은 크레딧에 반영되며, 사용자는
+                          지급 즉시 사용자의 남은 생성 횟수에 반영되며, 사용자는
                           다음 접속 시 1회성 팝업으로 안내받습니다.
                         </p>
                       </div>

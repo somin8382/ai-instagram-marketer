@@ -405,7 +405,7 @@ const DIFF_FIELDS: Array<{ key: keyof ParsedGrantRow; label: string }> = [
   { key: "mentor_org", label: "멘토기관" },
   { key: "ai_marketer", label: "AI마케터" },
   { key: "ai_generator", label: "AI생성기" },
-  { key: "generator_credits", label: "크레딧" },
+  { key: "generator_credits", label: "생성 횟수" },
 ];
 
 // Diff for an UPDATE: only fields the row actually supplied are candidates for
