@@ -8,7 +8,7 @@ const TEST_ACCOUNT_ACCESS_STORAGE_KEY = "qmeet-test-account-access";
 
 export const TEST_ACCOUNT_DEFAULT_PLAN = 2;
 export const TEST_ACCOUNT_DEFAULT_DURATION = 1;
-export const TEST_ACCOUNT_DEFAULT_REMAINING_POSTS = 4;
+export const TEST_ACCOUNT_DEFAULT_REMAINING_POSTS = 30;
 
 function setLocalTestAccountAccess(active: boolean) {
   if (typeof window === "undefined") {

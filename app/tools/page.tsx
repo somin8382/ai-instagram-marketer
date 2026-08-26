@@ -2547,7 +2547,7 @@ export default function ToolsPage() {
                     </button>
                   )}
                   <button
-                    onClick={() => router.push("/?screen=account-check")}
+                    onClick={() => router.push("/?screen=apply")}
                     className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                   >
                     AI 마케팅 서비스 신청하기
@@ -3051,7 +3051,7 @@ export default function ToolsPage() {
                           : "회원가입 또는 로그인"}
                   </button>
                   <button
-                    onClick={() => router.push("/?screen=account-check")}
+                    onClick={() => router.push("/?screen=apply")}
                     className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                   >
                     AI 마케팅 서비스 신청하기

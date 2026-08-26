@@ -34,8 +34,6 @@ import {
   fetchTestAccountAccess,
   isTestAccountUser,
   TEST_ACCOUNT_AUTH_ID,
-  TEST_ACCOUNT_DEFAULT_DURATION,
-  TEST_ACCOUNT_DEFAULT_PLAN,
   TEST_ACCOUNT_DEFAULT_REMAINING_POSTS,
   TEST_ACCOUNT_NAME,
   TEST_ACCOUNT_USER_ID,
@@ -894,20 +892,11 @@ export default function MyPage() {
                   remainingPosts?: number;
                 })
               : null;
-            const selectedPlan =
-              parsedApp?.selectedPlan === 1 || parsedApp?.selectedPlan === 2
-                ? parsedApp.selectedPlan
-                : TEST_ACCOUNT_DEFAULT_PLAN;
-            const selectedDuration =
-              parsedApp?.selectedDuration === 1 || parsedApp?.selectedDuration === 2
-                ? parsedApp.selectedDuration
-                : TEST_ACCOUNT_DEFAULT_DURATION;
             const remainingCredits =
               typeof parsedApp?.remainingPosts === "number" &&
               parsedApp.remainingPosts >= 0
                 ? parsedApp.remainingPosts
                 : TEST_ACCOUNT_DEFAULT_REMAINING_POSTS;
-            const now = new Date().toISOString();
 
             setAuthName(
               parsedIsTestAccount && parsedAuth?.authName
@@ -925,24 +914,13 @@ export default function MyPage() {
                 : TEST_ACCOUNT_USER_ID
             );
             setSnapshot({
-              application: {
-                id: "mock-application",
-                status: "in_progress",
-                selectedPlan,
-                selectedDuration,
-                isExpress: Boolean(parsedApp?.isExpress),
-                createdAt: now,
-                completionDate: parsedApp?.completionDate ?? null,
-              },
-              payment: {
-                id: "mock-payment",
-                applicationId: "mock-application",
-                expectedAmount: getPrice(selectedPlan, selectedDuration),
-                depositorName: "체험 계정",
-                paymentStatus: "confirmed",
-                confirmedAt: now,
-                createdAt: now,
-              },
+              // AI 마케터는 신규 유저와 동일하게 "아직 신청 내역이 없습니다"로
+              // 시작한다. 심사위원이 채널 선택부터 결제 화면까지 직접
+              // 입력해볼 수 있어야 하므로 신청·결제를 미리 완료된 것처럼
+              // 꾸미지 않는다. 게시물 AI 생성기만 구독 활성 상태로 미리 열어
+              // 둔다(아래 usage).
+              application: null,
+              payment: null,
               subscription: null,
               posts: [],
               usage: {
@@ -2139,7 +2117,7 @@ export default function MyPage() {
                       actions={
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <button
-                            onClick={() => router.push("/?screen=account-check")}
+                            onClick={() => router.push("/?screen=apply")}
                             className="w-full py-2.5 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-sm font-semibold rounded-xl shadow-sm hover:shadow-md active:scale-[0.98] transition-all"
                           >
                             AI 마케터 신청하기
@@ -2348,7 +2326,7 @@ export default function MyPage() {
                             게시물 AI 생성하기
                           </button>
                           <button
-                            onClick={() => router.push("/?screen=account-check")}
+                            onClick={() => router.push("/?screen=apply")}
                             className="w-full py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-white transition-colors"
                           >
                             AI 마케터 신청하기

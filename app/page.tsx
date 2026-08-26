@@ -39,8 +39,6 @@ import {
   fetchTestAccountAccess,
   isTestAccountUser,
   TEST_ACCOUNT_AUTH_ID,
-  TEST_ACCOUNT_DEFAULT_DURATION,
-  TEST_ACCOUNT_DEFAULT_PLAN,
   TEST_ACCOUNT_DEFAULT_REMAINING_POSTS,
   TEST_ACCOUNT_NAME,
   TEST_ACCOUNT_USER_ID,
@@ -1784,6 +1782,10 @@ export default function Home() {
       return;
     }
 
+    // 심사위원 데모 계정: 로그인 신원과 "게시물 AI 생성기" 구독만 미리 열어 둔다.
+    // AI 마케터 쪽은 isPaid/paymentStatus/applicationStatus/selectedPlan을
+    // 건드리지 않아 신규 유저와 똑같이 시작하고, 심사위원이 채널 선택부터
+    // 결제 화면까지 직접 입력해볼 수 있다.
     setIsAuthenticated(true);
     setAuthEmail(TEST_ACCOUNT_AUTH_ID);
     if (!authName.trim()) {
@@ -1791,19 +1793,6 @@ export default function Home() {
     }
     setUserId(TEST_ACCOUNT_USER_ID);
     setIsRequestLinked(true);
-    setIsPaid(true);
-    setPaymentStatus("confirmed");
-    if (applicationStatus === "idle" || applicationStatus === "submitted") {
-      setApplicationStatus("in_progress");
-    }
-
-    if (selectedPlan !== TEST_ACCOUNT_DEFAULT_PLAN) {
-      setSelectedPlan(TEST_ACCOUNT_DEFAULT_PLAN);
-    }
-
-    if (selectedDuration !== TEST_ACCOUNT_DEFAULT_DURATION) {
-      setSelectedDuration(TEST_ACCOUNT_DEFAULT_DURATION);
-    }
 
     if (remainingPosts <= 0) {
       setRemainingPosts(TEST_ACCOUNT_DEFAULT_REMAINING_POSTS);
@@ -1823,9 +1812,6 @@ export default function Home() {
     hasHydrated,
     hasTestAccess,
     authName,
-    applicationStatus,
-    selectedPlan,
-    selectedDuration,
     remainingPosts,
     postGeneratorSubscription,
   ]);
@@ -2609,6 +2595,13 @@ export default function Home() {
       return;
     }
 
+    // 심사위원 데모 계정: 과거 실제 테스트에서 이 이메일로 남은 신청 이력이
+    // 있어도(실 DB row) 매번 새 신청자로 취급한다. 실제 조회를 건너뛴다.
+    if (isTestAccountAuthenticated) {
+      setExistingApplicationId("");
+      return;
+    }
+
     const supabase = getSupabaseBrowserClientOrNull();
     if (!supabase) {
       setExistingApplicationId("");
@@ -2653,7 +2646,7 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, [isAuthenticated, userId, authEmail]);
+  }, [isAuthenticated, userId, authEmail, isTestAccountAuthenticated]);
 
   // ── Pre-check: look up existing grant application on entering payment step ─
   // Prevents duplicate submission and shows completion screen immediately on
