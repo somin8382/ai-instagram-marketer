@@ -1,21 +1,31 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowClockwise } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 
-// ── 브랜드 아이덴티티 제작: 컬러 → 로고 → 명함 ──
-// 컬러·로고는 /api/brand(LLM), 명함은 팔레트+로고를 재료로 한 클라이언트
-// 합성이다. brand-identity 스킬의 일관성 원칙에 따라 로고 재생성은 팔레트를,
-// 명함 재생성은 현재 선택 색과 로고를 그대로 유지한 채 레이아웃만 바꾼다.
+// ── 브랜드 아이덴티티 제작 ──
+// 브랜드 분석 → 컬러+타이포 → 로고 콘셉트(아트디렉션) → 이미지 모델 로고 →
+// 로고를 레퍼런스로 명함 디자인. 로고 재생성은 컬러·타이포를 유지하고 콘셉트
+// 방법만 바꾸며, 명함 재생성은 선택 색과 로고를 유지하고 구성만 바꾼다.
+// 연락처 텍스트는 이미지 모델에 맡기지 않고 클라이언트가 오버레이한다.
 
 type PaletteColor = {
   hex: string;
   name: string;
   role: "primary" | "secondary" | "accent" | "neutral" | "surface";
   usage: string;
+};
+
+type Typography = {
+  display: string;
+  body: string;
+  register: string;
+  rationale: string;
 };
 
 type CardInfo = {
@@ -42,112 +52,81 @@ function download(filename: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
-function svgBlob(svg: string) {
-  return new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-}
-
-/** SVG 문자열 → PNG Blob (2x). 외부 리소스가 없는 SVG만 들어온다. */
-async function svgToPngBlob(svg: string, width: number, height: number) {
-  const url = URL.createObjectURL(svgBlob(svg));
-  try {
-    const image = new Image();
-    image.decoding = "async";
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("svg load failed"));
-      image.src = url;
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = width * 2;
-    canvas.height = height * 2;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("no canvas context");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/png")
-    );
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function escapeXml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+async function dataUriToBlob(uri: string) {
+  return await (await fetch(uri)).blob();
 }
 
 /**
- * 명함 SVG 합성 (90×54mm 비율, 1000×600).
- * variant 0: 좌측 컬러 밴드 / 1: 상단 밴드 + 중앙 정렬 / 2: 미니멀 라인.
- * 로고는 data URI <image>로 임베드해 별도 파일 없이 한 장으로 내려받는다.
+ * 명함 최종 합성: 생성된 디자인 이미지 위에 연락처 텍스트를 정확한 위치에
+ * 그린다. 좌하단 텍스트 존은 생성 프롬프트에서 비워두도록 지시한 영역이며,
+ * 판독성 보장을 위해 반투명 패널을 깐다.
  */
-function composeCardSvg(input: {
-  variant: number;
-  accentHex: string;
-  palette: PaletteColor[];
-  logoSvg: string;
-  brandName: string;
+async function composeCardPng(input: {
+  cardImage: string;
   info: CardInfo;
-}) {
-  const { variant, accentHex, palette, logoSvg, brandName, info } = input;
-  const neutral = palette.find((c) => c.role === "neutral")?.hex ?? "#1f2430";
-  const surface = palette.find((c) => c.role === "surface")?.hex ?? "#ffffff";
-  const logoUri = `data:image/svg+xml;base64,${btoa(
-    unescape(encodeURIComponent(logoSvg))
-  )}`;
-  const name = escapeXml(info.personName || "홍길동");
-  const role = escapeXml(info.role || "대표");
-  const phone = escapeXml(info.phone);
-  const email = escapeXml(info.email);
-  const brand = escapeXml(brandName);
+  brandName: string;
+  neutralHex: string;
+}): Promise<Blob | null> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("card image load failed"));
+    image.src = input.cardImage;
+  });
 
-  const contactLines = [phone, email].filter(Boolean);
-  const contactText = (x: number, anchor: string, startY: number) =>
-    contactLines
-      .map(
-        (line, i) =>
-          `<text x="${x}" y="${startY + i * 34}" text-anchor="${anchor}" font-family="system-ui, sans-serif" font-size="24" fill="${neutral}" opacity="0.75">${line}</text>`
-      )
-      .join("");
+  const W = 1600;
+  const H = Math.round((W / image.width) * image.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(image, 0, 0, W, H);
 
-  if (input.variant % 3 === 1) {
-    // 상단 밴드 + 중앙 정렬
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600">
-<rect width="1000" height="600" fill="${surface}"/>
-<rect width="1000" height="120" fill="${accentHex}"/>
-<image href="${logoUri}" x="330" y="170" width="340" height="113"/>
-<text x="500" y="360" text-anchor="middle" font-family="system-ui, sans-serif" font-size="44" font-weight="700" fill="${neutral}">${name}</text>
-<text x="500" y="404" text-anchor="middle" font-family="system-ui, sans-serif" font-size="26" fill="${accentHex}" font-weight="600">${role} · ${brand}</text>
-${contactText(500, "middle", 470)}
-</svg>`;
+  const name = input.info.personName.trim();
+  const roleLine = [input.info.role.trim(), input.brandName.trim()]
+    .filter(Boolean)
+    .join(" · ");
+  const contacts = [input.info.phone.trim(), input.info.email.trim()].filter(
+    Boolean
+  );
+  const lines = [name, roleLine, ...contacts].filter(Boolean);
+  if (lines.length > 0) {
+    const x = W * 0.055;
+    const panelTop = H * 0.62;
+    const lineHeights = [64, 40, ...contacts.map(() => 38)];
+    const totalTextHeight = lines.reduce(
+      (sum, _, i) => sum + (lineHeights[i] ?? 38) + 10,
+      0
+    );
+    const panelPad = 34;
+    // 판독성 패널: 디자인이 지시를 어겨 텍스트 존에 그래픽을 넣었어도
+    // 연락처가 항상 읽히도록 보장한다.
+    ctx.fillStyle = "rgba(255,255,255,0.88)";
+    ctx.beginPath();
+    ctx.roundRect(
+      x - panelPad,
+      panelTop - panelPad,
+      W * 0.46,
+      totalTextHeight + panelPad * 2,
+      20
+    );
+    ctx.fill();
+
+    let y = panelTop;
+    lines.forEach((line, i) => {
+      const size = i === 0 ? 52 : i === 1 ? 30 : 28;
+      ctx.font = `${i === 0 ? "700" : "500"} ${size}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = i === 1 ? input.neutralHex + "cc" : input.neutralHex;
+      ctx.textBaseline = "top";
+      ctx.fillText(line, x, y);
+      y += (lineHeights[i] ?? 38) + 10;
+    });
   }
 
-  if (variant % 3 === 2) {
-    // 미니멀 라인
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600">
-<rect width="1000" height="600" fill="${surface}"/>
-<image href="${logoUri}" x="80" y="80" width="300" height="100"/>
-<line x1="80" y1="250" x2="920" y2="250" stroke="${accentHex}" stroke-width="4"/>
-<text x="80" y="340" font-family="system-ui, sans-serif" font-size="46" font-weight="700" fill="${neutral}">${name}</text>
-<text x="80" y="386" font-family="system-ui, sans-serif" font-size="26" fill="${neutral}" opacity="0.8">${role} · ${brand}</text>
-${contactText(80, "start", 460)}
-</svg>`;
-  }
-
-  // 기본: 좌측 컬러 밴드
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600">
-<rect width="1000" height="600" fill="${surface}"/>
-<rect width="24" height="600" fill="${accentHex}"/>
-<image href="${logoUri}" x="90" y="90" width="320" height="107"/>
-<text x="90" y="330" font-family="system-ui, sans-serif" font-size="46" font-weight="700" fill="${neutral}">${name}</text>
-<text x="90" y="378" font-family="system-ui, sans-serif" font-size="26" fill="${accentHex}" font-weight="600">${role} · ${brand}</text>
-${contactText(90, "start", 450)}
-</svg>`;
+  return await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/png")
+  );
 }
 
 export default function BrandIdentityPage() {
@@ -158,10 +137,15 @@ export default function BrandIdentityPage() {
   const [mood, setMood] = useState("");
 
   const [palette, setPalette] = useState<PaletteColor[] | null>(null);
+  const [typography, setTypography] = useState<Typography | null>(null);
   const [selectedHex, setSelectedHex] = useState<string | null>(null);
-  const [logoSvg, setLogoSvg] = useState<string | null>(null);
+
+  const [logoImage, setLogoImage] = useState<string | null>(null);
+  const [logoConcept, setLogoConcept] = useState<string>("");
   const [logoSeed, setLogoSeed] = useState(0);
-  const [cardVariant, setCardVariant] = useState<number | null>(null);
+
+  const [cardImage, setCardImage] = useState<string | null>(null);
+  const [cardSeed, setCardSeed] = useState(0);
   const [cardInfo, setCardInfo] = useState<CardInfo>({
     personName: "",
     role: "",
@@ -169,13 +153,16 @@ export default function BrandIdentityPage() {
     email: "",
   });
 
-  const [busy, setBusy] = useState<"palette" | "logo" | null>(null);
+  const [busy, setBusy] = useState<"identity" | "logo" | "card" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const accentHex = useMemo(() => {
-    if (selectedHex) return selectedHex;
-    return palette?.find((c) => c.role === "primary")?.hex ?? null;
-  }, [palette, selectedHex]);
+  const accentHex = useMemo(
+    () =>
+      selectedHex ?? palette?.find((c) => c.role === "primary")?.hex ?? null,
+    [palette, selectedHex]
+  );
+  const neutralHex =
+    palette?.find((c) => c.role === "neutral")?.hex ?? "#1f2430";
 
   const callBrandApi = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -200,7 +187,13 @@ export default function BrandIdentityPage() {
         }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { error?: string; colors?: PaletteColor[]; svg?: string }
+        | {
+            error?: string;
+            colors?: PaletteColor[];
+            typography?: Typography;
+            image?: string;
+            concept?: string;
+          }
         | null;
       if (!res.ok || !data) {
         setMessage(data?.error ?? "요청에 실패했습니다. 잠시 후 다시 시도해주세요.");
@@ -211,20 +204,22 @@ export default function BrandIdentityPage() {
     [brandName, industry, mood, router]
   );
 
-  async function generatePalette() {
+  async function generateIdentity() {
     if (!brandName.trim()) {
       setMessage("브랜드 이름을 입력해주세요.");
       return;
     }
-    setBusy("palette");
+    setBusy("identity");
     setMessage(null);
-    const data = await callBrandApi({ step: "palette" });
-    if (data?.colors) {
+    const data = await callBrandApi({ step: "identity" });
+    if (data?.colors && data.typography) {
       setPalette(data.colors);
+      setTypography(data.typography);
       setSelectedHex(null);
-      // 하위 산출물은 팔레트가 바뀌면 무효.
-      setLogoSvg(null);
-      setCardVariant(null);
+      // 하위 산출물은 아이덴티티가 바뀌면 무효.
+      setLogoImage(null);
+      setLogoConcept("");
+      setCardImage(null);
     }
     setBusy(null);
   }
@@ -233,33 +228,68 @@ export default function BrandIdentityPage() {
     if (!palette) return;
     setBusy("logo");
     setMessage(null);
-    const seed = logoSvg ? logoSeed + 1 : logoSeed;
-    const data = await callBrandApi({ step: "logo", palette, variantSeed: seed });
-    if (data?.svg) {
-      setLogoSvg(data.svg);
+    const seed = logoImage ? logoSeed + 1 : logoSeed;
+    const data = await callBrandApi({
+      step: "logo",
+      palette,
+      typography,
+      variantSeed: seed,
+    });
+    if (data?.image) {
+      setLogoImage(data.image);
+      setLogoConcept(data.concept ?? "");
       setLogoSeed(seed);
-      setCardVariant((v) => (v === null ? null : v));
+      // 명함은 로고에 종속: 로고가 바뀌면 다시 만들어야 한다.
+      setCardImage(null);
     }
     setBusy(null);
   }
 
-  const cardSvg = useMemo(() => {
-    if (cardVariant === null || !palette || !logoSvg || !accentHex) return null;
-    return composeCardSvg({
-      variant: cardVariant,
-      accentHex,
+  async function generateCard() {
+    if (!palette || !logoImage) return;
+    setBusy("card");
+    setMessage(null);
+    const seed = cardImage ? cardSeed + 1 : cardSeed;
+    const data = await callBrandApi({
+      step: "card",
       palette,
-      logoSvg,
-      brandName: brandName || "브랜드",
-      info: cardInfo,
+      accentHex,
+      logoImage,
+      variantSeed: seed,
     });
-  }, [cardVariant, palette, logoSvg, accentHex, brandName, cardInfo]);
+    if (data?.image) {
+      setCardImage(data.image);
+      setCardSeed(seed);
+    }
+    setBusy(null);
+  }
 
-  async function downloadCardPng() {
-    if (!cardSvg) return;
-    const blob = await svgToPngBlob(cardSvg, 1000, 600);
+  async function downloadLogo() {
+    if (!logoImage) return;
+    download(`${brandName || "brand"}-로고.png`, await dataUriToBlob(logoImage));
+  }
+
+  async function downloadCard() {
+    if (!cardImage) return;
+    const blob = await composeCardPng({
+      cardImage,
+      info: cardInfo,
+      brandName,
+      neutralHex,
+    });
     if (blob) download(`${brandName || "brand"}-명함.png`, blob);
   }
+
+  const overlayLines = useMemo(() => {
+    const name = cardInfo.personName.trim();
+    const roleLine = [cardInfo.role.trim(), brandName.trim()]
+      .filter(Boolean)
+      .join(" · ");
+    const contacts = [cardInfo.phone.trim(), cardInfo.email.trim()].filter(
+      Boolean
+    );
+    return { name, roleLine, contacts, any: Boolean(name || roleLine || contacts.length) };
+  }, [cardInfo, brandName]);
 
   const inputCls =
     "w-full px-4 py-3 border border-gray-200 bg-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-300 transition-colors placeholder:text-gray-400";
@@ -267,7 +297,6 @@ export default function BrandIdentityPage() {
   return (
     <main className="min-h-screen bg-[#f8f9fb] px-4 py-12">
       <div className="max-w-xl mx-auto space-y-10">
-        {/* 허브와 같은 헤더 문법 */}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-4">
             <button
@@ -300,15 +329,16 @@ export default function BrandIdentityPage() {
             <br />한 번에 만듭니다
           </h1>
           <p className="text-sm text-gray-500 leading-relaxed">
-            브랜드 컬러를 먼저 정하고, 그 컬러로 로고를, 그 둘로 명함을
-            만듭니다. 각 단계는 따로 다시 만들 수 있습니다.
+            브랜드를 분석해 컬러와 타이포그래피를 정하고, 그 위에서 로고를,
+            로고를 기준으로 명함을 만듭니다. 각 단계는 따로 다시 만들 수
+            있습니다.
           </p>
         </div>
 
-        {/* STEP 1. 브랜드 컬러 */}
+        {/* STEP 1. 컬러 + 타이포그래피 */}
         <section className="p-6 rounded-2xl bg-white border-2 border-gray-100 space-y-4">
           <div className="flex items-center justify-between">
-            <p className="font-bold text-gray-900">1. 브랜드 컬러</p>
+            <p className="font-bold text-gray-900">1. 브랜드 컬러 · 타이포그래피</p>
             {palette && (
               <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">
                 완료
@@ -337,15 +367,15 @@ export default function BrandIdentityPage() {
             className={inputCls}
           />
           <button
-            onClick={generatePalette}
+            onClick={generateIdentity}
             disabled={busy !== null}
             className="w-full py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all"
           >
-            {busy === "palette"
-              ? "컬러를 뽑고 있습니다..."
+            {busy === "identity"
+              ? "브랜드를 분석하고 있습니다..."
               : palette
-                ? "브랜드 컬러 다시 만들기"
-                : "브랜드 컬러 만들기"}
+                ? "컬러 · 타이포 다시 만들기"
+                : "컬러 · 타이포 만들기"}
           </button>
 
           {palette && (
@@ -365,10 +395,7 @@ export default function BrandIdentityPage() {
                     }`}
                     title={color.usage}
                   >
-                    <span
-                      className="block h-14"
-                      style={{ background: color.hex }}
-                    />
+                    <span className="block h-14" style={{ background: color.hex }} />
                     <span className="block px-1.5 py-1 bg-white">
                       <span className="block text-[10px] font-semibold text-gray-700 truncate">
                         {color.name}
@@ -380,6 +407,22 @@ export default function BrandIdentityPage() {
                   </button>
                 ))}
               </div>
+              {typography && (
+                <div className="rounded-xl bg-gray-50 border border-gray-100 p-4 space-y-1">
+                  <p className="text-xs font-semibold text-gray-500">
+                    추천 타이포그래피
+                  </p>
+                  <p className="text-sm text-gray-900">
+                    <span className="font-bold">{typography.display}</span>
+                    <span className="text-gray-400"> (제목) · </span>
+                    <span className="font-medium">{typography.body}</span>
+                    <span className="text-gray-400"> (본문)</span>
+                  </p>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    {typography.rationale}
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -392,22 +435,28 @@ export default function BrandIdentityPage() {
         >
           <div className="flex items-center justify-between">
             <p className="font-bold text-gray-900">2. 로고</p>
-            {logoSvg && (
+            {logoImage && (
               <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">
                 완료
               </span>
             )}
           </div>
           <p className="text-xs text-gray-500">
-            위 브랜드 컬러를 사용해 로고를 만듭니다. 다시 만들어도 컬러는
-            유지됩니다.
+            아트디렉션을 거쳐 이미지 모델이 로고를 그립니다. 다시 만들면
+            컬러는 유지되고 콘셉트가 바뀝니다.
           </p>
 
-          {logoSvg && (
-            <div
-              className="rounded-xl border border-gray-100 bg-white p-6 [&_svg]:w-full [&_svg]:h-auto"
-              dangerouslySetInnerHTML={{ __html: logoSvg }}
-            />
+          {logoImage && (
+            <div className="space-y-2">
+              <div className="rounded-xl border border-gray-100 bg-white overflow-hidden">
+                <img src={logoImage} alt="생성된 로고" className="w-full h-auto" />
+              </div>
+              {logoConcept && (
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  {logoConcept}
+                </p>
+              )}
+            </div>
           )}
 
           <div className="flex gap-2">
@@ -417,22 +466,20 @@ export default function BrandIdentityPage() {
               className="flex-1 py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all inline-flex items-center justify-center gap-2"
             >
               {busy === "logo" ? (
-                "로고를 그리고 있습니다..."
-              ) : logoSvg ? (
+                "로고를 그리고 있습니다... (10~20초)"
+              ) : logoImage ? (
                 <>
-                  <ArrowClockwise size={16} weight="bold" /> 로고 다시 만들기
+                  <ArrowClockwise size={16} weight="bold" /> 다른 콘셉트로 다시
                 </>
               ) : (
                 "로고 만들기"
               )}
             </button>
-            {logoSvg && (
+            {logoImage && (
               <button
-                onClick={() =>
-                  download(`${brandName || "brand"}-로고.svg`, svgBlob(logoSvg))
-                }
+                onClick={downloadLogo}
                 className="px-4 rounded-xl border-2 border-gray-100 text-gray-600 hover:border-emerald-300 hover:text-emerald-600 transition-all"
-                title="SVG 다운로드"
+                title="PNG 다운로드"
               >
                 <DownloadSimple size={18} weight="bold" />
               </button>
@@ -443,20 +490,20 @@ export default function BrandIdentityPage() {
         {/* STEP 3. 명함 */}
         <section
           className={`p-6 rounded-2xl bg-white border-2 border-gray-100 space-y-4 ${
-            logoSvg ? "" : "opacity-50 pointer-events-none"
+            logoImage ? "" : "opacity-50 pointer-events-none"
           }`}
         >
           <div className="flex items-center justify-between">
             <p className="font-bold text-gray-900">3. 명함</p>
-            {cardSvg && (
+            {cardImage && (
               <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">
                 완료
               </span>
             )}
           </div>
           <p className="text-xs text-gray-500">
-            선택한 강조색과 로고로 명함을 만듭니다. 다시 만들면 배치만
-            바뀝니다.
+            로고와 선택한 강조색을 그대로 반영해 명함을 디자인합니다.
+            이름·연락처는 이미지에 맡기지 않고 정확한 위치에 직접 얹습니다.
           </p>
 
           <div className="grid grid-cols-2 gap-2">
@@ -471,61 +518,86 @@ export default function BrandIdentityPage() {
             />
             <input
               value={cardInfo.role}
-              onChange={(e) =>
-                setCardInfo((v) => ({ ...v, role: e.target.value }))
-              }
+              onChange={(e) => setCardInfo((v) => ({ ...v, role: e.target.value }))}
               maxLength={20}
               placeholder="직함 (예: 대표)"
               className={inputCls}
             />
             <input
               value={cardInfo.phone}
-              onChange={(e) =>
-                setCardInfo((v) => ({ ...v, phone: e.target.value }))
-              }
+              onChange={(e) => setCardInfo((v) => ({ ...v, phone: e.target.value }))}
               maxLength={20}
               placeholder="전화번호"
               className={inputCls}
             />
             <input
               value={cardInfo.email}
-              onChange={(e) =>
-                setCardInfo((v) => ({ ...v, email: e.target.value }))
-              }
+              onChange={(e) => setCardInfo((v) => ({ ...v, email: e.target.value }))}
               maxLength={40}
               placeholder="이메일"
               className={inputCls}
             />
           </div>
 
-          {cardSvg && (
-            <div
-              className="rounded-xl border border-gray-100 overflow-hidden shadow-sm [&_svg]:w-full [&_svg]:h-auto"
-              dangerouslySetInnerHTML={{ __html: cardSvg }}
-            />
+          {cardImage && (
+            <div className="relative rounded-xl border border-gray-100 overflow-hidden shadow-sm">
+              <img src={cardImage} alt="생성된 명함 디자인" className="w-full h-auto" />
+              {overlayLines.any && (
+                <div
+                  className="absolute left-[5.5%] bottom-[8%] max-w-[46%] rounded-lg px-3 py-2.5"
+                  style={{ background: "rgba(255,255,255,0.88)" }}
+                >
+                  {overlayLines.name && (
+                    <p
+                      className="text-base sm:text-lg font-bold leading-tight"
+                      style={{ color: neutralHex }}
+                    >
+                      {overlayLines.name}
+                    </p>
+                  )}
+                  {overlayLines.roleLine && (
+                    <p
+                      className="text-[11px] sm:text-xs font-medium mt-0.5"
+                      style={{ color: neutralHex, opacity: 0.8 }}
+                    >
+                      {overlayLines.roleLine}
+                    </p>
+                  )}
+                  {overlayLines.contacts.map((line) => (
+                    <p
+                      key={line}
+                      className="text-[11px] sm:text-xs mt-0.5"
+                      style={{ color: neutralHex }}
+                    >
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           <div className="flex gap-2">
             <button
-              onClick={() =>
-                setCardVariant((v) => (v === null ? 0 : v + 1))
-              }
-              disabled={!logoSvg}
+              onClick={generateCard}
+              disabled={busy !== null || !logoImage}
               className="flex-1 py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all inline-flex items-center justify-center gap-2"
             >
-              {cardSvg ? (
+              {busy === "card" ? (
+                "명함을 디자인하고 있습니다... (10~20초)"
+              ) : cardImage ? (
                 <>
-                  <ArrowClockwise size={16} weight="bold" /> 명함 다시 만들기
+                  <ArrowClockwise size={16} weight="bold" /> 다른 구성으로 다시
                 </>
               ) : (
                 "명함 만들기"
               )}
             </button>
-            {cardSvg && (
+            {cardImage && (
               <button
-                onClick={downloadCardPng}
+                onClick={downloadCard}
                 className="px-4 rounded-xl border-2 border-gray-100 text-gray-600 hover:border-emerald-300 hover:text-emerald-600 transition-all"
-                title="PNG 다운로드"
+                title="PNG 다운로드 (연락처 포함)"
               >
                 <DownloadSimple size={18} weight="bold" />
               </button>
