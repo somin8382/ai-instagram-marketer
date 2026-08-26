@@ -23,6 +23,7 @@ import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { Megaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
 import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
 import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
+import { Palette } from "@phosphor-icons/react/dist/csr/Palette";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
 import { CreditGrantPopup } from "@/lib/ui/credit-grant-popup";
@@ -1294,7 +1295,7 @@ export default function MyPage() {
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
             서비스 바로가기
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {(() => {
               const marketerStatus = loading
                 ? null
@@ -1329,6 +1330,15 @@ export default function MyPage() {
                   status: generatorStatus,
                   action: "게시물 만들기",
                   onClick: () => router.push("/tools"),
+                },
+                {
+                  Icon: Palette,
+                  chipCls: "bg-emerald-50 text-emerald-500",
+                  name: "브랜드 아이덴티티",
+                  hoverCls: "hover:border-emerald-300",
+                  status: { label: "베타", cls: "bg-emerald-50 text-emerald-600" },
+                  action: "컬러 · 로고 · 명함",
+                  onClick: () => router.push("/brand"),
                 },
                 {
                   Icon: Browser,
@@ -2163,7 +2173,7 @@ export default function MyPage() {
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                         {[
                           {
                             label: "입금자명",
@@ -2213,7 +2223,7 @@ export default function MyPage() {
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
                       <p className="text-xs font-semibold text-gray-400">
                         무료 체험

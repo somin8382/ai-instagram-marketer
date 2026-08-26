@@ -6,6 +6,7 @@ import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { Megaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
 import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
 import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
+import { Palette } from "@phosphor-icons/react/dist/csr/Palette";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 
@@ -73,6 +74,16 @@ export default function HomeHubPage() {
       desc: "프롬프트를 넣으면 게시물 문구와 이미지가 함께 나옵니다.",
       meta: "월 2만원",
       onClick: () => router.push("/tools"),
+    },
+    {
+      Icon: Palette,
+      chipCls: "bg-emerald-50 text-emerald-500",
+      hoverCls: "hover:border-emerald-300",
+      nameHoverCls: "group-hover:text-emerald-600",
+      name: "브랜드 아이덴티티",
+      desc: "브랜드 컬러, 로고, 명함을 순서대로 만들어 드립니다.",
+      meta: "베타",
+      onClick: () => router.push("/brand"),
     },
     {
       Icon: Browser,
