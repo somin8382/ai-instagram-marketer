@@ -56,6 +56,7 @@ import {
   hasSignedInCookie,
 } from "@/lib/ui/auth-cookie-sync";
 import { HomeLanding } from "@/lib/ui/home-landing";
+import { WorkspaceHeader } from "@/lib/ui/workspace-header";
 import {
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
@@ -617,7 +618,7 @@ function Card({
 }) {
   return (
     <div
-      className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-6 ${className}`}
+      className={`bg-white rounded-2xl border border-gray-100 shadow-[0_1px_2px_rgba(16,24,40,0.04),0_12px_32px_-16px_rgba(16,24,40,0.12)] p-6 ${className}`}
     >
       {children}
     </div>
@@ -632,6 +633,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+// 신청 플로우 헤더. /tools·/brand와 같은 WorkspaceHeader 크롬을 그대로 쓰되
+// 진행바만 로즈 톤으로 맞춘다 (제품 전반의 헤더 문법 통일).
 function StepUtilityHeader({
   onBack,
   onHome,
@@ -644,63 +647,14 @@ function StepUtilityHeader({
   progress: { current: number; total: number } | null;
 }) {
   return (
-    <div className="sticky top-0 z-20 bg-[#f8f9fb] pb-3">
-      <div className="space-y-3 rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
-        <div className="flex items-center justify-between gap-3">
-          {onBack ? (
-            <button
-              onClick={onBack}
-              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-            >
-              ← 뒤로
-            </button>
-          ) : (
-            <div className="h-5" aria-hidden="true" />
-          )}
-          <div className="flex items-center gap-2">
-            <a
-              href="/pricing"
-              className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors border border-violet-100 rounded-full px-3 py-1.5 bg-violet-50"
-            >
-              가격 안내
-            </a>
-            <button
-              onClick={onHome}
-              className="text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors border border-gray-200 rounded-full px-3 py-1.5 bg-white"
-            >
-              홈
-            </button>
-            <button
-              onClick={onMyPage}
-              className="text-xs font-medium text-rose-600 hover:text-rose-700 transition-colors border border-rose-100 rounded-full px-3 py-1.5 bg-rose-50"
-            >
-              마이페이지
-            </button>
-          </div>
-        </div>
-        {progress && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-gray-500 font-medium">
-              <span>진행 단계</span>
-              <span>
-                {progress.current}/{progress.total}
-              </span>
-            </div>
-            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-300"
-                style={{
-                  width: `${Math.max(
-                    (progress.current / progress.total) * 100,
-                    10
-                  )}%`,
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <WorkspaceHeader
+      onBack={onBack}
+      onHome={onHome}
+      onMyPage={onMyPage}
+      progress={progress}
+      progressLabel="신청 단계"
+      progressBarClassName="bg-gradient-to-r from-rose-500 to-pink-500"
+    />
   );
 }
 
@@ -2923,7 +2877,7 @@ export default function Home() {
   }
 
   const wrapper =
-    "min-h-screen bg-[#f8f9fb] flex items-start justify-center px-4 py-12";
+    "min-h-screen bg-[#f8f9fb] bg-[radial-gradient(52rem_26rem_at_50%_-8rem,rgba(244,63,94,0.055),transparent_70%)] flex items-start justify-center px-4 py-12";
 
   function buildPersistedSessionPosts(posts: GeneratedPost[]) {
     return posts.slice(0, 2).map((post) => ({
@@ -3028,13 +2982,15 @@ export default function Home() {
               progress={serviceFlowProgress}
             />
 
-            <div className="text-center space-y-2">
-              <h2 className="text-2xl font-bold text-gray-900">
+            <div className="text-center space-y-3">
+              <p className="text-[11px] font-semibold tracking-[0.18em] text-rose-500">
+                AI 마케터 신청
+              </p>
+              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
                 어떤 채널로 마케팅할까요?
               </h2>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm leading-relaxed text-gray-500">
                 운영 중인 계정이 있다면 마케팅을 진행할 계정을 선택해 주세요.
-                <br />
                 <br />
                 아직 계정이 없다면 계정명 추천부터 도와드리며,
                 <br />
@@ -3063,14 +3019,20 @@ export default function Home() {
                     }
                     className={`text-left p-6 rounded-2xl border-2 transition-all active:scale-[0.99] ${
                       isSelected
-                        ? "border-rose-500 bg-rose-50/50 shadow-md"
+                        ? "border-rose-500 bg-rose-50/40 shadow-lg ring-4 ring-rose-100/60"
                         : marketingChannelError
                           ? "border-rose-300 bg-rose-50/40"
-                          : "border-gray-100 bg-white hover:border-rose-300 hover:shadow-lg"
+                          : "border-gray-100 bg-white hover:border-rose-200 hover:shadow-[0_1px_2px_rgba(16,24,40,0.04),0_16px_36px_-18px_rgba(16,24,40,0.16)]"
                     }`}
                   >
                     <div className="flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-400 to-pink-500 flex items-center justify-center text-white text-xl flex-shrink-0">
+                      <div
+                        className={`w-12 h-12 rounded-2xl border flex items-center justify-center text-2xl flex-shrink-0 transition-colors ${
+                          isSelected
+                            ? "border-rose-200 bg-white"
+                            : "border-gray-100 bg-gray-50"
+                        }`}
+                      >
                         {option.icon}
                       </div>
                       <div className="space-y-2">
@@ -3430,7 +3392,7 @@ export default function Home() {
                 {selectedChannelIcon} {selectedChannelLabel}
               </span>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
               {accountCheckTitle}
             </h2>
             <p className="text-sm text-gray-500">
@@ -3446,22 +3408,38 @@ export default function Home() {
                 setHasAccount(true);
                 setStep("input");
               }}
-              className="p-6 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all space-y-1"
+              className="p-6 rounded-2xl border-2 border-gray-100 bg-white text-left hover:border-rose-200 hover:shadow-[0_1px_2px_rgba(16,24,40,0.04),0_16px_36px_-18px_rgba(16,24,40,0.16)] active:scale-[0.98] transition-all"
             >
-              <div className="text-2xl">✅</div>
-              <div className="font-semibold">계정이 있어요</div>
-              <div className="text-sm text-white/80">기존 계정으로 시작</div>
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl border border-gray-100 bg-gray-50 flex items-center justify-center text-2xl flex-shrink-0">
+                  ✅
+                </div>
+                <div>
+                  <div className="font-bold text-gray-900">계정이 있어요</div>
+                  <div className="text-sm text-gray-500 mt-0.5">
+                    기존 계정으로 시작
+                  </div>
+                </div>
+              </div>
             </button>
             <button
               onClick={() => {
                 setHasAccount(false);
                 setStep("input");
               }}
-              className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-gray-700 font-semibold hover:border-gray-300 hover:shadow-md active:scale-[0.98] transition-all space-y-1"
+              className="p-6 rounded-2xl border-2 border-gray-100 bg-white text-left hover:border-rose-200 hover:shadow-[0_1px_2px_rgba(16,24,40,0.04),0_16px_36px_-18px_rgba(16,24,40,0.16)] active:scale-[0.98] transition-all"
             >
-              <div className="text-2xl">🪄</div>
-              <div className="font-semibold">계정이 없어요</div>
-              <div className="text-sm text-gray-500">새 계정으로 시작</div>
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl border border-gray-100 bg-gray-50 flex items-center justify-center text-2xl flex-shrink-0">
+                  🪄
+                </div>
+                <div>
+                  <div className="font-bold text-gray-900">계정이 없어요</div>
+                  <div className="text-sm text-gray-500 mt-0.5">
+                    새 계정으로 시작
+                  </div>
+                </div>
+              </div>
             </button>
           </div>
         </div>
@@ -3484,7 +3462,7 @@ export default function Home() {
             />
 
             <div className="text-center space-y-1">
-              <h2 className="text-2xl font-bold text-gray-900">
+              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
                 정보를 알려주세요
               </h2>
               <p className="text-sm text-gray-500">
@@ -3656,7 +3634,7 @@ export default function Home() {
           />
 
           <div className="text-center space-y-1">
-            <h2 className="text-2xl font-bold text-gray-900">AI 기획 결과</h2>
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">AI 기획 결과</h2>
             <p className="text-sm text-gray-500">
               아래 전략을 바탕으로 {channelDisplayName}를 운영해 보세요
             </p>
@@ -3878,7 +3856,7 @@ export default function Home() {
             <div className="inline-flex items-center gap-2 bg-rose-50 text-rose-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-rose-100">
               AI 추천
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
               추천 인스타그램 계정명
             </h2>
             <p className="text-sm text-gray-500">
@@ -3976,7 +3954,7 @@ export default function Home() {
           />
 
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
               인스타그램 계정 생성 확인
             </h2>
             <p className="text-sm text-gray-500 leading-relaxed max-w-md mx-auto">
@@ -4083,7 +4061,7 @@ export default function Home() {
             />
 
             <div className="text-center space-y-2">
-              <h2 className="text-2xl font-bold text-gray-900">
+              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
                 대표 URL을 알려주세요
               </h2>
               <p className="text-sm text-gray-500">
@@ -4407,7 +4385,7 @@ export default function Home() {
                 <div className="w-16 h-16 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
                   <span className="text-white text-2xl">✓</span>
                 </div>
-                <h2 className="text-2xl font-bold text-gray-900">
+                <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
                   세팅이 완료되었습니다
                 </h2>
                 <p className="text-gray-500 text-sm">
@@ -4523,7 +4501,7 @@ export default function Home() {
           />
 
           <div className="text-center space-y-1">
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
               마케팅 서비스 신청
             </h2>
             <p className="text-sm text-gray-500">
@@ -5235,7 +5213,7 @@ export default function Home() {
             <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
               <span className="text-white text-2xl">✓</span>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
               {isPaymentConfirmed
                 ? "입금 확인이 완료되었습니다"
                 : "신청이 접수되었습니다"}
@@ -5508,7 +5486,7 @@ export default function Home() {
               <div className="inline-flex items-center gap-2 bg-violet-50 text-violet-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-violet-100">
                 구독 결제
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">
+              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
                 게시물 AI 생성 구독 신청
               </h2>
               <p className="text-sm text-gray-500">
@@ -5796,7 +5774,7 @@ export default function Home() {
               <div className="w-16 h-16 bg-gradient-to-br from-violet-400 to-purple-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
                 <span className="text-white text-2xl">✓</span>
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">
+              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
                 구독 신청이 접수되었습니다
               </h2>
               <p className="text-sm text-gray-500">
@@ -5896,7 +5874,7 @@ export default function Home() {
             <div className="inline-flex items-center gap-2 bg-violet-50 text-violet-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-violet-100">
               AI 콘텐츠 생성
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
               게시물 AI 생성
             </h2>
             <p className="text-sm text-gray-500">

@@ -21,7 +21,7 @@ export function WorkspaceHeader({
   progressBarClassName?: string;
 }) {
   return (
-    <div className="sticky top-0 z-20 bg-[#f8f9fb] pb-3">
+    <div className="sticky top-0 z-20 bg-[#f8f9fb]/85 backdrop-blur-sm pb-3">
       <div className="space-y-3 rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-4">
