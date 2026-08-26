@@ -16,7 +16,7 @@ import "@/lib/ui/motion/motion.css";
 const ACCENT = "#ef4a6b";
 
 /** 마케터 1명 1개월 가격. 히어로·제품 목록·비용 비교가 같은 값을 쓴다. */
-const MARKETER_MONTHLY_PRICE = 300_000;
+const MARKETER_MONTHLY_PRICE = 330_000;
 const HIRE_MONTHLY_COST = 3_000_000;
 
 /** A row of 실제 고객이 경험한 변화. Rows carry a counted value, a chart, or
@@ -108,13 +108,13 @@ export function HomeLanding({
     {
       name: "AI 마케터",
       summary: "계정 기획부터 콘텐츠 운영, 마케팅 전략까지 맡깁니다.",
-      price: "월 30만원부터",
+      price: "월 33만원부터",
       onClick: onApply,
     },
     {
       name: "게시물 AI 생성기",
       summary: "프롬프트를 넣으면 게시물 문구와 이미지가 함께 나옵니다.",
-      price: "월 2만원",
+      price: "월 2만 2천원",
       href: "/tools",
     },
   ];
@@ -215,8 +215,8 @@ export function HomeLanding({
 
                 <WordReveal
                   as="h1"
-                  lines={["AI 마케터를 월 30만원에", "고용하세요"]}
-                  accentWords={["30만원에"]}
+                  lines={["AI 마케터를 월 33만원에", "고용하세요"]}
+                  accentWords={["33만원에"]}
                   className="mt-6 text-[2.75rem] font-semibold leading-[1.1] tracking-tighter sm:text-6xl md:text-7xl"
                   delay={0.15}
                 />
@@ -599,7 +599,7 @@ export function HomeLanding({
                   className="mx-auto mt-5 max-w-md text-base leading-relaxed sm:text-lg"
                   style={{ color: "var(--ink-muted)" }}
                 >
-                  AI 마케터 1명 1개월 30만원부터 시작합니다.
+                  AI 마케터 1명 1개월 33만원부터 시작합니다.
                 </p>
                 <button
                   type="button"

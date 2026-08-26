@@ -1,5 +1,5 @@
 export const POST_GENERATOR_PLAN_TYPE = "post_generator" as const;
-export const POST_GENERATOR_MONTHLY_PRICE = 20000;
+export const POST_GENERATOR_MONTHLY_PRICE = 22000;
 export const POST_GENERATOR_MONTHLY_CREDITS = 40;
 
 export type PostGeneratorPlanType = typeof POST_GENERATOR_PLAN_TYPE;

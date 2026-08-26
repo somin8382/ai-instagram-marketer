@@ -62,7 +62,7 @@ export default function HomeHubPage() {
       nameHoverCls: "group-hover:text-rose-600",
       name: "AI 마케터",
       desc: "계정 기획부터 콘텐츠 운영, 마케팅 전략까지 맡깁니다.",
-      meta: "월 30만원부터",
+      meta: "월 33만원부터",
       onClick: () => router.push("/?screen=apply"),
     },
     {
@@ -72,7 +72,7 @@ export default function HomeHubPage() {
       nameHoverCls: "group-hover:text-violet-600",
       name: "게시물 AI 생성기",
       desc: "프롬프트를 넣으면 게시물 문구와 이미지가 함께 나옵니다.",
-      meta: "월 2만원",
+      meta: "월 2만 2천원",
       onClick: () => router.push("/tools"),
     },
     {

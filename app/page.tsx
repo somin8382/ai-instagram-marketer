@@ -259,11 +259,11 @@ const OUTCOME_META: Array<{
 /* ─── Helpers ─── */
 
 function getPrice(plan: number, duration: number): number {
-  if (plan === 1 && duration === 1) return 300000;
-  if (plan === 1 && duration === 2) return 600000;
-  if (plan === 2 && duration === 1) return 550000;
-  if (plan === 2 && duration === 2) return 1100000;
-  return 300000;
+  if (plan === 1 && duration === 1) return 330000;
+  if (plan === 1 && duration === 2) return 660000;
+  if (plan === 2 && duration === 1) return 610000;
+  if (plan === 2 && duration === 2) return 1220000;
+  return 330000;
 }
 
 function getExpressFee(isExpress: boolean): number {
@@ -4718,11 +4718,11 @@ export default function Home() {
                 <div className="mt-4 space-y-2">
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>1개월</span>
-                    <span className="font-semibold">30만원</span>
+                    <span className="font-semibold">33만원</span>
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>2개월</span>
-                    <span className="font-semibold">60만원</span>
+                    <span className="font-semibold">66만원</span>
                   </div>
                 </div>
                 <div className="mt-4 pt-3 border-t border-gray-100">
@@ -4780,11 +4780,11 @@ export default function Home() {
                 <div className="mt-4 space-y-2">
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>1개월</span>
-                    <span className="font-semibold">55만원</span>
+                    <span className="font-semibold">61만원</span>
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>2개월</span>
-                    <span className="font-semibold">110만원</span>
+                    <span className="font-semibold">122만원</span>
                   </div>
                 </div>
                 <div className="mt-4 pt-3 border-t border-gray-100">

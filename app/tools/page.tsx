@@ -2394,7 +2394,10 @@ export default function ToolsPage() {
                     </svg>
                     <p className="text-sm leading-relaxed text-gray-800">
                       게시물 AI 생성은 구독형으로 운영됩니다.{" "}
-                      <span className="font-semibold">월 20,000원</span> 구독으로
+                      <span className="font-semibold">
+                        월 {POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원
+                      </span>{" "}
+                      구독으로
                       이미지 생성, 재생성, AI 수정 기능을 이용하실 수 있습니다.
                     </p>
                   </div>
