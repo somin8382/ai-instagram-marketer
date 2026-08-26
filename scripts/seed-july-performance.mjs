@@ -135,9 +135,28 @@ if (!process.argv.includes("--apply")) {
   process.exit(0);
 }
 
-await rest("monthly_performance?on_conflict=email,month", {
-  method: "POST",
-  headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-  body: JSON.stringify(payload),
-});
-console.log("✅ upsert 완료");
+// 유니크 제약은 다중 채널 마이그레이션 전후로 달라진다.
+//   이전: (email, month)        이후: (email, month, slot)
+// 어느 쪽이든 동작하도록 새 형식을 먼저 시도하고 실패하면 옛 형식으로 재시도한다.
+async function upsertPerformance() {
+  const body = JSON.stringify(
+    payload.map((row) => ({ ...row, slot: 1 }))
+  );
+  try {
+    await rest("monthly_performance?on_conflict=email,month,slot", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body,
+    });
+    return "email,month,slot";
+  } catch {
+    await rest("monthly_performance?on_conflict=email,month", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(payload),
+    });
+    return "email,month";
+  }
+}
+const usedKey = await upsertPerformance();
+console.log(`✅ upsert 완료 (기준: ${usedKey})`);
