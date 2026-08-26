@@ -39,6 +39,7 @@ export function WorkspaceHeader({
   progressLabel = "진행 단계",
   progressBarClassName = "bg-gradient-to-r from-violet-500 to-purple-500",
   tone = "light",
+  showHomeLink = false,
 }: {
   onBack?: () => void;
   onHome: () => void;
@@ -47,6 +48,9 @@ export function WorkspaceHeader({
   progressLabel?: string;
   progressBarClassName?: string;
   tone?: keyof typeof TONE_STYLES;
+  /** The wordmark already goes home, but that is not a visible affordance.
+   *  Multi-step flows spell it out next to 뒤로 so leaving is never a guess. */
+  showHomeLink?: boolean;
 }) {
   const styles = TONE_STYLES[tone];
 
@@ -69,6 +73,14 @@ export function WorkspaceHeader({
                 className={`text-sm transition-colors ${styles.quietLink}`}
               >
                 ← 뒤로
+              </button>
+            )}
+            {showHomeLink && (
+              <button
+                onClick={onHome}
+                className={`text-sm transition-colors ${styles.quietLink}`}
+              >
+                홈으로
               </button>
             )}
           </div>

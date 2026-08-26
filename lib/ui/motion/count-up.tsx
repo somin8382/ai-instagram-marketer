@@ -24,6 +24,7 @@ export function CountUp({
   to,
   prefix = "",
   suffix = "",
+  decimals = 0,
   duration = 1.6,
   className = "",
 }: {
@@ -31,12 +32,17 @@ export function CountUp({
   to: number;
   prefix?: string;
   suffix?: string;
+  /** Ratings land on a fraction (평균 9.4); counts stay whole. */
+  decimals?: number;
   duration?: number;
   className?: string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
   const format = (value: number) =>
-    `${prefix}${Math.round(value).toLocaleString("ko-KR")}${suffix}`;
+    `${prefix}${value.toLocaleString("ko-KR", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })}${suffix}`;
 
   useIsoLayoutEffect(() => {
     const el = ref.current;
@@ -67,7 +73,7 @@ export function CountUp({
     }, el);
 
     return () => ctx.revert();
-  }, [from, to, prefix, suffix, duration]);
+  }, [from, to, prefix, suffix, decimals, duration]);
 
   return (
     <span ref={ref} className={`tabular-nums ${className}`}>

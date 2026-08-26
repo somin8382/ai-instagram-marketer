@@ -708,6 +708,7 @@ function StepUtilityHeader({
   return (
     <WorkspaceHeader
       tone="dark"
+      showHomeLink
       onBack={onBack}
       onHome={onHome}
       onMyPage={onMyPage}

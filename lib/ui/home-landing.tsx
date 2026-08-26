@@ -8,6 +8,7 @@ import { MotionRoot } from "@/lib/ui/motion/motion-root";
 import { HorizontalPan } from "@/lib/ui/motion/horizontal-pan";
 import { Reveal, ScrubbedSentence, WordReveal } from "@/lib/ui/motion/reveal";
 import { CountUp } from "@/lib/ui/motion/count-up";
+import { GrowthCurve } from "@/lib/ui/motion/growth-curve";
 import { REVIEWS, quoteLength } from "@/lib/ui/reviews";
 import "@/lib/ui/motion/motion.css";
 
@@ -84,20 +85,23 @@ export function HomeLanding({
   ];
 
   // 실제 고객이 경험한 변화. 스크롤이 닿으면 뒤 숫자가 앞 숫자에서부터 오른다.
+  // beforeLabel 이 없는 항목은 "이전 → 이후"가 아니라 값 하나를 세는 지표다.
   const stats = [
     {
-      label: "구독자 달성 사례",
-      from: 0,
-      to: 500,
-      suffix: "+",
-      beforeLabel: "0",
+      label: "팔로우 달성 사례",
+      from: 13,
+      to: 529,
+      suffix: "명",
+      beforeLabel: "13명",
+      curve: { startLabel: "13명", endLabel: "529명" },
     },
     {
       label: "고객 만족도",
       from: 0,
-      to: 10,
+      to: 9.4,
       suffix: "/10",
-      beforeLabel: "0",
+      decimals: 1,
+      note: "평균",
     },
     {
       label: "비용 비교",
@@ -263,26 +267,48 @@ export function HomeLanding({
                       ) : null}
                     </p>
 
-                    <div className="flex flex-wrap items-baseline gap-3 md:col-span-8 sm:gap-4">
-                      <span
-                        className="font-mono text-2xl tabular-nums sm:text-3xl"
-                        style={{ color: "var(--ink-muted)" }}
-                      >
-                        {stat.beforeLabel}
-                      </span>
-                      <ArrowRight
-                        size={20}
-                        weight="bold"
-                        className="shrink-0 translate-y-[-0.15em]"
-                        style={{ color: "var(--ink-accent)" }}
-                      />
-                      <CountUp
-                        from={stat.from}
-                        to={stat.to}
-                        prefix={stat.prefix}
-                        suffix={stat.suffix}
-                        className="font-mono text-4xl font-semibold tracking-tight sm:text-6xl"
-                      />
+                    <div className="space-y-6 md:col-span-8">
+                      <div className="flex flex-wrap items-baseline gap-3 sm:gap-4">
+                        {stat.beforeLabel ? (
+                          <>
+                            <span
+                              className="font-mono text-2xl tabular-nums sm:text-3xl"
+                              style={{ color: "var(--ink-muted)" }}
+                            >
+                              {stat.beforeLabel}
+                            </span>
+                            <ArrowRight
+                              size={20}
+                              weight="bold"
+                              className="shrink-0 translate-y-[-0.15em]"
+                              style={{ color: "var(--ink-accent)" }}
+                            />
+                          </>
+                        ) : null}
+                        {stat.note ? (
+                          <span
+                            className="text-sm font-medium"
+                            style={{ color: "var(--ink-muted)" }}
+                          >
+                            {stat.note}
+                          </span>
+                        ) : null}
+                        <CountUp
+                          from={stat.from}
+                          to={stat.to}
+                          prefix={stat.prefix}
+                          suffix={stat.suffix}
+                          decimals={stat.decimals}
+                          className="font-mono text-4xl font-semibold tracking-tight sm:text-6xl"
+                        />
+                      </div>
+
+                      {stat.curve ? (
+                        <GrowthCurve
+                          startLabel={stat.curve.startLabel}
+                          endLabel={stat.curve.endLabel}
+                        />
+                      ) : null}
                     </div>
                   </div>
                 ))}
