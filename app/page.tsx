@@ -261,7 +261,7 @@ function getPrice(plan: number, duration: number): number {
   if (plan === 1 && duration === 1) return 300000;
   if (plan === 1 && duration === 2) return 600000;
   if (plan === 2 && duration === 1) return 550000;
-  if (plan === 2 && duration === 2) return 1000000;
+  if (plan === 2 && duration === 2) return 1100000;
   return 300000;
 }
 
@@ -4767,7 +4767,7 @@ export default function Home() {
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-700">
                     <span>2개월</span>
-                    <span className="font-semibold">100만원</span>
+                    <span className="font-semibold">110만원</span>
                   </div>
                 </div>
                 <div className="mt-4 pt-3 border-t border-gray-100">

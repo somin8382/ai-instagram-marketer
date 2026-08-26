@@ -109,7 +109,7 @@ function getPrice(plan: number, duration: number): number {
   if (plan === 1 && duration === 1) return 300000;
   if (plan === 1 && duration === 2) return 600000;
   if (plan === 2 && duration === 1) return 550000;
-  if (plan === 2 && duration === 2) return 1000000;
+  if (plan === 2 && duration === 2) return 1100000;
   return 300000;
 }
 
