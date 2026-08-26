@@ -571,7 +571,7 @@ export default function BrandIdentityPage() {
                 {busy === "logo" ? (
                   <span className="flex items-center justify-center gap-2">
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    로고를 그리고 있습니다... (1~2분)
+                    로고를 그리고 있습니다...
                   </span>
                 ) : (
                   "로고 만들기"
@@ -611,7 +611,7 @@ export default function BrandIdentityPage() {
                   label="다른 콘셉트로 다시"
                   note="컬러 유지"
                   busy={busy === "logo"}
-                  busyLabel="그리는 중… (1~2분)"
+                  busyLabel="그리는 중…"
                   idleLabel="로고 다시 만들기"
                   onClick={generateLogo}
                   disabled={!palette}
@@ -683,7 +683,7 @@ export default function BrandIdentityPage() {
               {busy === "card" ? (
                 <span className="flex items-center justify-center gap-2">
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  명함을 디자인하고 있습니다... (1~2분)
+                  명함을 디자인하고 있습니다...
                 </span>
               ) : (
                 "명함 만들기"
@@ -746,7 +746,7 @@ export default function BrandIdentityPage() {
                 label="다른 구성으로 다시"
                 note="로고 · 강조색 유지"
                 busy={busy === "card"}
-                busyLabel="디자인 중… (1~2분)"
+                busyLabel="디자인 중…"
                 idleLabel="명함 다시 만들기"
                 onClick={generateCard}
                 disabled={!logoImage}
