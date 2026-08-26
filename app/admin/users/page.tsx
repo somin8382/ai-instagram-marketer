@@ -266,7 +266,7 @@ const AUG_SUB_CLS: Record<string, string> = {
 const JULY_MONTH = "2026-07";
 const AUGUST_MONTH = "2026-08";
 
-/** 제출한 채널·게시물 주소를 한 칸에 라벨과 함께 쌓아 보여준다. */
+/** 마케팅 중인 채널·게시물 주소를 한 칸에 라벨과 함께 쌓아 보여준다. */
 function UrlPair({
   channel,
   post,
@@ -317,8 +317,8 @@ function subscribedServices(u: UserRow): string[] {
   return names;
 }
 
-/** 마케터가 제출한 주소. 8월이 현재 월 기준이고 7월 값이 유지될 수 있어,
- *  8월이 비면 7월로 내려간다. */
+/** 마케팅이 진행 중인 채널·게시물 주소. 8월이 현재 월 기준이고 7월 값이
+ *  유지될 수 있어, 8월이 비면 7월로 내려간다. */
 function submittedUrls(u: UserRow): { channel: string | null; post: string | null } {
   return {
     channel: u.augustChannelUrl ?? u.julyChannelUrl ?? null,
@@ -437,13 +437,13 @@ const EXPORT_COLUMNS: Array<{
     get: (u) => subscribedServices(u).join(", "),
   },
   {
-    header: "제출 채널 주소",
+    header: "마케팅 채널 주소",
     modes: ["userdb"],
     // 마케터 구독자만 제출 대상이라 그 외에는 비워 둔다.
     get: (u) => (u.aiMarketerSub ? (submittedUrls(u).channel ?? "") : ""),
   },
   {
-    header: "제출 게시물 주소",
+    header: "마케팅 게시물 주소",
     modes: ["userdb"],
     get: (u) => (u.aiMarketerSub ? (submittedUrls(u).post ?? "") : ""),
   },
@@ -471,7 +471,7 @@ const EXPORT_COLUMNS: Array<{
   },
   {
     header: "AI 마케터 제출 내역",
-    modes: ["normal", "marketer", "userdb"],
+    modes: ["normal", "marketer"],
     get: (u) =>
       u.aiMarketer ? (u.marketerSubmitted ? "제출완료" : "미제출") : "",
   },
@@ -1785,8 +1785,7 @@ export default function AdminUsersPage() {
                   </th>
                   <th className={plainHeaderCls}>플랫폼</th>
                   <th className={plainHeaderCls}>구독 중인 서비스</th>
-                  <th className={plainHeaderCls}>AI 마케터 제출 내역</th>
-                  <th className={plainHeaderCls}>제출한 주소</th>
+                  <th className={plainHeaderCls}>마케팅 진행중인 정보</th>
                   <th className={plainHeaderCls}>마지막 접속일</th>
                 </tr>
               </thead>
@@ -1828,19 +1827,6 @@ export default function AdminUsersPage() {
                         <span className="text-gray-300">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      {!user.aiMarketer ? (
-                        <span className="text-xs text-gray-300">대상 아님</span>
-                      ) : user.marketerSubmitted ? (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                          제출완료
-                        </span>
-                      ) : (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-                          미제출
-                        </span>
-                      )}
-                    </td>
                     <td className="px-3 py-2.5">
                       {!user.aiMarketerSub ? (
                         <span className="text-xs text-gray-300">
@@ -1860,7 +1846,7 @@ export default function AdminUsersPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={5}
                       className="px-3 py-10 text-center text-gray-400"
                     >
                       조건에 맞는 사용자가 없습니다
