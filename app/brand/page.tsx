@@ -466,7 +466,7 @@ export default function BrandIdentityPage() {
               className="flex-1 py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all inline-flex items-center justify-center gap-2"
             >
               {busy === "logo" ? (
-                "로고를 그리고 있습니다... (10~20초)"
+                "로고를 그리고 있습니다... (1~2분)"
               ) : logoImage ? (
                 <>
                   <ArrowClockwise size={16} weight="bold" /> 다른 콘셉트로 다시
@@ -584,7 +584,7 @@ export default function BrandIdentityPage() {
               className="flex-1 py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all inline-flex items-center justify-center gap-2"
             >
               {busy === "card" ? (
-                "명함을 디자인하고 있습니다... (10~20초)"
+                "명함을 디자인하고 있습니다... (1~2분)"
               ) : cardImage ? (
                 <>
                   <ArrowClockwise size={16} weight="bold" /> 다른 구성으로 다시

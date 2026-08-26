@@ -1,15 +1,18 @@
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/types";
 
-export const maxDuration = 60;
+// GPT Image 2는 한 장에 1~2분 걸린다. 이미지 단계가 잘리지 않도록
+// 함수·페치 타임아웃 모두 넉넉히 잡는다 (Vercel Pro 기준 허용 범위).
+export const maxDuration = 300;
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_TIMEOUT_MS = 55_000;
+const TEXT_TIMEOUT_MS = 55_000;
+const IMAGE_TIMEOUT_MS = 240_000;
 // 분석·아트디렉션은 텍스트 모델, 로고·명함은 이미지 특화 모델.
-// 이전 구현은 텍스트 모델이 SVG 코드를 직접 작성해 품질이 낮았다. 텍스트
-// 모델은 좌표 공간 추론이 약해 도형 나열 수준을 벗어나지 못한다.
+// GPT Image 2 (GPT-Image-1.5의 후속): OpenAI imagegen 스킬의 구조화 프롬프트
+// 스키마(Use case/역할 라벨링된 입력 이미지/Text verbatim/Constraints)를 따른다.
 const TEXT_MODEL = "openai/gpt-4o-mini";
-const IMAGE_MODEL = "google/gemini-3-pro-image-preview";
+const IMAGE_MODEL = "openai/gpt-5.4-image-2";
 
 type PaletteColor = {
   hex: string;
@@ -89,7 +92,10 @@ async function callOpenRouter(payload: {
 }) {
   const apiKey = process.env.OPENROUTER_API_KEY!;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    payload.modalities?.includes("image") ? IMAGE_TIMEOUT_MS : TEXT_TIMEOUT_MS
+  );
   try {
     const res = await fetch(OPENROUTER_API_URL, {
       method: "POST",
@@ -341,18 +347,15 @@ export async function POST(request: Request) {
       messages: [
         {
           role: "user",
-          content: `Professional flat vector logo on a pure white background.
-
-${imagePrompt}
-
-Hard requirements:
-- Brand name in the wordmark must read exactly "${brandName}" with no spelling errors
-- The brand name appears exactly ONCE. No tagline, no subtitle, no repeated or partial text anywhere else
-- Flat solid colors only, use only these hex colors: ${palette.map((c) => c.hex).join(", ")}
-- No gradients, no drop shadows, no 3D, no photo, no mockup, no background texture
-- The mark must stay legible when scaled down to 16px (simple silhouette, bold shapes)
-- Must work in single color reproduction
-- Centered, generous margin around the logo`,
+          content: `Use case: logo-brand
+Asset type: primary brand logo lockup on a pure white background, for business cards and signage
+Primary request: ${imagePrompt}
+Style/medium: professional flat vector logo, clean geometric shapes
+Composition/framing: centered lockup, generous even margin on all sides
+Color palette: use ONLY these hex colors: ${palette.map((c) => c.hex).join(", ")}
+Text (verbatim): "${brandName}"
+Constraints: the brand name appears exactly once with no spelling errors; no tagline, subtitle, or repeated partial text; mark must stay legible at 16px (bold simple silhouette); must survive single-color reproduction
+Avoid: gradients, drop shadows, 3D rendering, photographic elements, mockup scenes, background textures, watermarks`,
         },
       ],
       modalities: ["image", "text"],
@@ -392,22 +395,17 @@ Hard requirements:
           content: [
             {
               type: "text",
-              text: `Design the FRONT of a premium business card (16:9 landscape).
-
-Brand identity reference: the attached image is this brand's logo. Place this exact logo tastefully on the card (do not redraw or alter it).
-
-Design direction: ${direction}
-
-Color rules:
-- Card base color: ${surfaceHex}
-- Accent color: ${accentHex}
-- You may also use: ${palette.map((c) => c.hex).join(", ")}
-- Flat, printed look. No gradients, no photo textures, no mockup scene, no hands, no table. Render ONLY the flat card face filling the entire frame edge to edge.
-
-Text rules (critical):
-- Do NOT render any names, phone numbers, emails, or placeholder text
-- The ONLY text allowed is whatever already exists inside the logo
-- Keep the lower-left area (about 45% width, 35% height) visually quiet and clean so contact text can be overlaid there later`,
+              text: `Use case: product-mockup
+Asset type: front face of a premium business card, printed flat design (16:9 landscape)
+Primary request: design the front of this brand's business card following the composition direction below
+Input images: Image 1: brand logo reference - place this exact logo tastefully on the card, identity-preserve, do not redraw or alter it
+Scene/backdrop: none - render ONLY the flat card face filling the entire frame edge to edge
+Style/medium: flat printed graphic design, solid colors
+Composition/framing: ${direction}
+Color palette: card base ${surfaceHex}, accent ${accentHex}, may also use ${palette.map((c) => c.hex).join(", ")}
+Text (verbatim): none - do NOT render any names, phone numbers, emails, or placeholder text; the only text allowed is whatever already exists inside the logo
+Constraints: keep the lower-left area (about 45% width, 35% height) visually quiet and clean so contact text can be overlaid there later
+Avoid: gradients, photo textures, mockup scenes, hands, tables, shadows, perspective tilt, lorem ipsum, placeholder contact text`,
             },
             { type: "image_url", image_url: { url: logoImage } },
           ],
