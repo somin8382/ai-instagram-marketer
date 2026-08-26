@@ -1,0 +1,98 @@
+/* Shared dark-surface tokens and motion utilities.
+   A page opts in with `className="ink-surface"` and locks its own accent:
+     <div className="ink-surface" style={{ "--ink-accent": "#3d6dff" }}>
+   Everything else (neutrals, hairlines, grain, word masks) is shared so the
+   dark surfaces across the site stay one system. */
+.ink-surface {
+  --ink-bg: #0a0b0f;
+  --ink-raised: #101219;
+  --ink-line: rgba(255, 255, 255, 0.09);
+  --ink-line-strong: rgba(255, 255, 255, 0.16);
+  --ink-text: #edeff5;
+  /* Body copy that sits under an emphasised phrase, so the bold still reads
+     as emphasis rather than as the baseline weight. */
+  --ink-text-soft: #c6cad6;
+  --ink-muted: #8b90a3;
+  --ink-accent: #3d6dff;
+  --ink-accent-quiet: color-mix(in srgb, var(--ink-accent) 14%, transparent);
+
+  background: var(--ink-bg);
+  color: var(--ink-text);
+  /* Korean copy must not break mid-word. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* Lenis runtime styles, inlined so the app owns them rather than importing
+   node_modules CSS into the global graph. */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
+}
+
+/* Word-mask reveal: the mask clips the word until GSAP lifts it into place. */
+.ink-word-mask {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: top;
+  /* Reserve descender room so Korean and Latin glyphs are not clipped. */
+  padding-bottom: 0.12em;
+  margin-bottom: -0.12em;
+}
+
+/* Film grain. Fixed and pointer-events-none so it never repaints on scroll. */
+.ink-grain::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Horizontal pan falls back to a native swipe carousel below the pin breakpoint. */
+.ink-pan-track {
+  scroll-snap-type: x mandatory;
+}
+.ink-pan-panel {
+  scroll-snap-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ink-surface * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* The site-wide footer and version stamp are rendered by app/layout.tsx as
+   siblings of the page, so a dark page cannot style them from inside its own
+   tree. Match them to the surface instead of letting a white band cut across
+   the bottom of the page. */
+body:has(.ink-surface) > footer {
+  background: #0a0b0f;
+  border-color: rgba(255, 255, 255, 0.09);
+}
+body:has(.ink-surface) > footer div,
+body:has(.ink-surface) > footer p {
+  color: #8b90a3;
+}
+body:has(.ink-surface) > footer a {
+  color: #c3c7d4;
+}
+body:has(.ink-surface) > footer a:hover {
+  color: #edeff5;
+}

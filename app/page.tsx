@@ -2911,7 +2911,13 @@ export default function Home() {
       <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
         <div className="max-w-xl w-full text-center space-y-10">
           <div className="space-y-2">
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                onClick={() => router.push("/landing-ai")}
+                className="inline-flex items-center gap-1.5 text-sm font-semibold text-blue-600 bg-blue-50 border border-blue-100 rounded-full px-3 py-1.5 hover:bg-blue-100 transition-colors"
+              >
+                랜딩페이지 개발 AI
+              </button>
               {hasHydrated ? (
                 isAuthenticated ? (
                   <>
