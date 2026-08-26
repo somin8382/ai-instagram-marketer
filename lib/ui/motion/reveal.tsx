@@ -49,13 +49,25 @@ export function WordReveal({
 
     gsap.registerPlugin(ScrollTrigger);
     const ctx = gsap.context(() => {
-      gsap.from(el.querySelectorAll<HTMLElement>("[data-word]"), {
-        yPercent: 118,
-        duration: 1,
-        ease: "power4.out",
-        stagger: 0.055,
-        delay,
-        scrollTrigger: { trigger: el, start: "top 85%" },
+      const words = el.querySelectorAll<HTMLElement>("[data-word]");
+      // The tween is launched from onEnter rather than attached to the
+      // trigger: attached from()-tweens get reverted mid-flight when
+      // ScrollTrigger.refresh() fires (fonts/load) during the entrance,
+      // freezing later stagger items at partial opacity.
+      gsap.set(words, { yPercent: 118 });
+      ScrollTrigger.create({
+        trigger: el,
+        start: "top 85%",
+        once: true,
+        onEnter: () => {
+          gsap.to(words, {
+            yPercent: 0,
+            duration: 1,
+            ease: "power4.out",
+            stagger: 0.055,
+            delay,
+          });
+        },
       });
     }, el);
 
@@ -131,13 +143,22 @@ export function Reveal({
     const ctx = gsap.context(() => {
       const items = el.querySelectorAll<HTMLElement>("[data-reveal-item]");
       const targets = items.length ? Array.from(items) : [el];
-      gsap.from(targets, {
-        opacity: 0,
-        y,
-        duration: 0.9,
-        ease: "power3.out",
-        stagger: items.length ? 0.08 : 0,
-        scrollTrigger: { trigger: el, start: "top 82%" },
+      // Trigger and tween are decoupled (see WordReveal): a refresh() during
+      // the entrance must not revert a tween that is already playing.
+      gsap.set(targets, { opacity: 0, y });
+      ScrollTrigger.create({
+        trigger: el,
+        start: "top 82%",
+        once: true,
+        onEnter: () => {
+          gsap.to(targets, {
+            opacity: 1,
+            y: 0,
+            duration: 0.9,
+            ease: "power3.out",
+            stagger: items.length ? 0.08 : 0,
+          });
+        },
       });
     }, el);
 

@@ -57,6 +57,9 @@ import {
 } from "@/lib/ui/auth-cookie-sync";
 import { HomeLanding } from "@/lib/ui/home-landing";
 import { WorkspaceHeader } from "@/lib/ui/workspace-header";
+import { MotionRoot } from "@/lib/ui/motion/motion-root";
+import { Reveal, WordReveal } from "@/lib/ui/motion/reveal";
+import "@/lib/ui/motion/motion.css";
 import {
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
@@ -630,6 +633,34 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
       {children}
     </p>
+  );
+}
+
+// 신청 플로우 공용 셸. 호출부가 key={스텝명}을 주면 스텝이 바뀔 때 통째로
+// 리마운트되어 등장 모션이 매 진입마다 새로 재생된다. Lenis 스무스 스크롤과
+// 상단 스크롤 진행 헤어라인(MotionRoot)도 여기서 켠다.
+function StepShell({
+  children,
+  align = "start",
+}: {
+  children: React.ReactNode;
+  align?: "start" | "center";
+}) {
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
+  return (
+    <div style={{ "--ink-accent": "#f43f5e" } as React.CSSProperties}>
+      <MotionRoot>
+        <main
+          className={`min-h-screen bg-[#f8f9fb] bg-[radial-gradient(52rem_26rem_at_50%_-8rem,rgba(244,63,94,0.055),transparent_70%)] flex ${
+            align === "center" ? "items-center" : "items-start"
+          } justify-center px-4 py-12`}
+        >
+          {children}
+        </main>
+      </MotionRoot>
+    </div>
   );
 }
 
@@ -2029,7 +2060,11 @@ export default function Home() {
 
     if (resolvedStep) {
       setStep(resolvedStep);
-      router.replace("/");
+      // Strip the deep-link param synchronously. router.replace("/") is a
+      // soft navigation that can leave ?screen= in place, and while it
+      // remains, every state change in this effect's deps re-fires the
+      // resolution and yanks the user back to the entry step.
+      window.history.replaceState(null, "", "/");
     }
   }, [
     hasHydrated,
@@ -2973,7 +3008,7 @@ export default function Home() {
   if (activeStep === "channel") {
     return (
       <>
-        <main className={wrapper}>
+        <StepShell key="channel">
           <div className="max-w-3xl w-full space-y-6">
             <StepUtilityHeader
               onBack={() => navigateBack("channel")}
@@ -2982,23 +3017,29 @@ export default function Home() {
               progress={serviceFlowProgress}
             />
 
-            <div className="text-center space-y-3">
-              <p className="text-[11px] font-semibold tracking-[0.18em] text-rose-500">
-                AI 마케터 신청
-              </p>
-              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-                어떤 채널로 마케팅할까요?
-              </h2>
-              <p className="text-sm leading-relaxed text-gray-500">
-                운영 중인 계정이 있다면 마케팅을 진행할 계정을 선택해 주세요.
-                <br />
-                아직 계정이 없다면 계정명 추천부터 도와드리며,
-                <br />
-                동일한 목표 기준으로 운영해드립니다.
-              </p>
+            <div className="text-center space-y-3 pt-4">
+              <Reveal y={14}>
+                <p className="text-[11px] font-semibold tracking-[0.18em] text-rose-500">
+                  AI 마케터 신청
+                </p>
+              </Reveal>
+              <WordReveal
+                lines={["어떤 채널로", "마케팅할까요?"]}
+                className="text-[2.1rem] sm:text-[2.5rem] leading-[1.15] font-bold tracking-tight text-gray-900"
+                delay={0.1}
+              />
+              <Reveal y={16}>
+                <p className="text-sm leading-relaxed text-gray-500">
+                  운영 중인 계정이 있다면 마케팅을 진행할 계정을 선택해 주세요.
+                  <br />
+                  아직 계정이 없다면 계정명 추천부터 도와드리며,
+                  <br />
+                  동일한 목표 기준으로 운영해드립니다.
+                </p>
+              </Reveal>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Reveal className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {MARKETING_CHANNEL_OPTIONS.map((option) => {
                 const isSelected = marketingChannel === option.value;
                 const isYoutube = option.value === "youtube";
@@ -3007,6 +3048,7 @@ export default function Home() {
                   <button
                     key={option.value}
                     type="button"
+                    data-reveal-item
                     onClick={() => {
                       setMarketingChannel(option.value);
                       markFieldTouched("marketingChannel");
@@ -3065,13 +3107,14 @@ export default function Home() {
                   </button>
                 );
               })}
-            </div>
+            </Reveal>
             {marketingChannelError && (
               <p className={`text-center ${getHelperTextClass("rose")}`}>
                 {marketingChannelError}
               </p>
             )}
 
+            <Reveal>
             <Card className="space-y-4 border-emerald-100">
               <div className="mb-4 flex items-center gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
@@ -3279,7 +3322,9 @@ export default function Home() {
                 </div>
               </div>
             </Card>
+            </Reveal>
 
+            <Reveal>
             <Card className="space-y-4">
               <div>
                 <SectionLabel>내 사업에 적합한 채널 비교</SectionLabel>
@@ -3339,7 +3384,9 @@ export default function Home() {
                 )}
               </div>
             </Card>
+            </Reveal>
 
+            <Reveal y={12}>
             <button
               type="button"
               onClick={() => goToStep("account-check")}
@@ -3352,8 +3399,9 @@ export default function Home() {
             >
               다음
             </button>
+            </Reveal>
           </div>
-        </main>
+        </StepShell>
         <ValidationToast
           message={validationToast}
           onClose={() => setValidationToast(null)}
@@ -3376,7 +3424,7 @@ export default function Home() {
       : "인스타그램 계정 보유 여부에 따라";
 
     return (
-      <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
+      <StepShell key="account-check" align="center">
         <div className="max-w-xl w-full text-center space-y-8">
           <StepUtilityHeader
             onBack={() => navigateBack("account-check")}
@@ -3386,24 +3434,31 @@ export default function Home() {
           />
 
           <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-rose-100 bg-white px-3 py-1.5 text-xs font-medium text-rose-600">
-              <span className="text-gray-400">현재 선택</span>
-              <span>
-                {selectedChannelIcon} {selectedChannelLabel}
-              </span>
-            </div>
-            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-              {accountCheckTitle}
-            </h2>
-            <p className="text-sm text-gray-500">
-              {accountCheckSubtitle}
-              <br />
-              맞춤 설정을 진행합니다.
-            </p>
+            <Reveal y={12}>
+              <div className="inline-flex items-center gap-2 rounded-full border border-rose-100 bg-white px-3 py-1.5 text-xs font-medium text-rose-600">
+                <span className="text-gray-400">현재 선택</span>
+                <span>
+                  {selectedChannelIcon} {selectedChannelLabel}
+                </span>
+              </div>
+            </Reveal>
+            <WordReveal
+              lines={[accountCheckTitle]}
+              className="text-[2rem] leading-snug font-bold tracking-tight text-gray-900"
+              delay={0.08}
+            />
+            <Reveal y={14}>
+              <p className="text-sm text-gray-500">
+                {accountCheckSubtitle}
+                <br />
+                맞춤 설정을 진행합니다.
+              </p>
+            </Reveal>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Reveal className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
+              data-reveal-item
               onClick={() => {
                 setHasAccount(true);
                 setStep("input");
@@ -3423,6 +3478,7 @@ export default function Home() {
               </div>
             </button>
             <button
+              data-reveal-item
               onClick={() => {
                 setHasAccount(false);
                 setStep("input");
@@ -3441,9 +3497,9 @@ export default function Home() {
                 </div>
               </div>
             </button>
-          </div>
+          </Reveal>
         </div>
-      </main>
+      </StepShell>
     );
   }
 
@@ -3452,7 +3508,7 @@ export default function Home() {
   if (activeStep === "input") {
     return (
       <>
-        <main className={wrapper}>
+        <StepShell key="input">
           <div className="max-w-xl w-full space-y-6">
             <StepUtilityHeader
               onBack={() => navigateBack("input")}
@@ -3461,15 +3517,20 @@ export default function Home() {
               progress={serviceFlowProgress}
             />
 
-            <div className="text-center space-y-1">
-              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-                정보를 알려주세요
-              </h2>
-              <p className="text-sm text-gray-500">
-                AI가 맞춤 마케팅 전략을 기획합니다
-              </p>
+            <div className="text-center space-y-3 pt-4">
+              <WordReveal
+                lines={["정보를 알려주세요"]}
+                className="text-[2.1rem] leading-snug font-bold tracking-tight text-gray-900"
+                delay={0.08}
+              />
+              <Reveal y={14}>
+                <p className="text-sm text-gray-500">
+                  AI가 맞춤 마케팅 전략을 기획합니다
+                </p>
+              </Reveal>
             </div>
 
+            <Reveal>
             <Card className="space-y-5">
               {isYoutubeChannel ? (
                 <InputField
@@ -3568,7 +3629,9 @@ export default function Home() {
                 fieldKey="productService"
               />
             </Card>
+            </Reveal>
 
+            <Reveal y={12}>
             <button
               onClick={() => handleGenerate("result")}
               disabled={loading}
@@ -3587,8 +3650,9 @@ export default function Home() {
                 "AI로 기획하기"
               )}
             </button>
+            </Reveal>
           </div>
-        </main>
+        </StepShell>
         <ValidationToast
           message={validationToast}
           onClose={() => setValidationToast(null)}
@@ -3624,7 +3688,7 @@ export default function Home() {
 
     return (
       <>
-      <main className={wrapper}>
+      <StepShell key="result">
         <div className="max-w-2xl w-full space-y-6">
           <StepUtilityHeader
             onBack={() => navigateBack("result")}
@@ -3633,11 +3697,17 @@ export default function Home() {
             progress={serviceFlowProgress}
           />
 
-          <div className="text-center space-y-1">
-            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">AI 기획 결과</h2>
+          <div className="text-center space-y-3 pt-4">
+            <WordReveal
+              lines={["AI 기획 결과"]}
+              className="text-[2.1rem] leading-snug font-bold tracking-tight text-gray-900"
+              delay={0.08}
+            />
+            <Reveal y={14}>
             <p className="text-sm text-gray-500">
               아래 전략을 바탕으로 {channelDisplayName}를 운영해 보세요
             </p>
+            </Reveal>
             {aiSource && (
               <span className={`inline-block text-[10px] font-mono px-2 py-0.5 rounded-full ${aiSource === "api" ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"}`}>
                 {aiSource === "api" ? "API 결과" : "예비 결과"}
@@ -3658,6 +3728,7 @@ export default function Home() {
           )}
 
           {/* 계정 기획 */}
+          <Reveal>
           <Card className="space-y-3">
             <div className="flex items-center justify-between">
               <SectionLabel>계정 기획</SectionLabel>
@@ -3687,8 +3758,10 @@ export default function Home() {
               </div>
             ))}
           </Card>
+          </Reveal>
 
           {/* 운영 안내 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG), info(blue) 톤 */}
+          <Reveal>
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="mb-4 flex items-center gap-3">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600">
@@ -3807,9 +3880,10 @@ export default function Home() {
               </div>
             </div>
           </div>
+          </Reveal>
 
           {/* Actions */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Reveal y={12} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               onClick={() => navigateBack("result")}
               className="py-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -3826,9 +3900,9 @@ export default function Home() {
             >
               다음
             </button>
-          </div>
+          </Reveal>
         </div>
-      </main>
+      </StepShell>
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}
@@ -3843,7 +3917,7 @@ export default function Home() {
   if (activeStep === "names") {
     return (
       <>
-      <main className={wrapper}>
+      <StepShell key="names">
         <div className="max-w-2xl w-full space-y-6">
           <StepUtilityHeader
             onBack={() => navigateBack("names")}
@@ -3852,16 +3926,22 @@ export default function Home() {
             progress={serviceFlowProgress}
           />
 
-          <div className="text-center space-y-2">
+          <div className="text-center space-y-3 pt-4">
+            <Reveal y={12}>
             <div className="inline-flex items-center gap-2 bg-rose-50 text-rose-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-rose-100">
               AI 추천
             </div>
-            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-              추천 인스타그램 계정명
-            </h2>
+            </Reveal>
+            <WordReveal
+              lines={["추천 인스타그램 계정명"]}
+              className="text-[2.1rem] leading-snug font-bold tracking-tight text-gray-900"
+              delay={0.08}
+            />
+            <Reveal y={14}>
             <p className="text-sm text-gray-500">
               AI가 브랜드에 맞는 인스타그램 계정명을 추천해드립니다
             </p>
+            </Reveal>
             {aiSource && (
               <span className={`inline-block text-[10px] font-mono px-2 py-0.5 rounded-full ${aiSource === "api" ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"}`}>
                 {aiSource === "api" ? "API 결과" : "예비 결과"}
@@ -3881,6 +3961,7 @@ export default function Home() {
             </Card>
           )}
 
+          <Reveal>
           <Card className="space-y-4">
             <div className="flex items-center justify-between">
               <SectionLabel>추천 계정명</SectionLabel>
@@ -3896,9 +3977,10 @@ export default function Home() {
               {aiResult?.accountNames.map((item, i) => (
                 <div
                   key={i}
+                  data-reveal-item
                   className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl"
                 >
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-rose-400 to-pink-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-white border border-rose-100 flex items-center justify-center text-rose-500 font-bold text-sm flex-shrink-0">
                     {item.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="space-y-0.5">
@@ -3909,8 +3991,9 @@ export default function Home() {
               ))}
             </div>
           </Card>
+          </Reveal>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Reveal y={12} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               onClick={() => navigateBack("names")}
               className="py-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -3927,9 +4010,9 @@ export default function Home() {
             >
               다음 단계로
             </button>
-          </div>
+          </Reveal>
         </div>
-      </main>
+      </StepShell>
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}
@@ -3944,7 +4027,7 @@ export default function Home() {
   if (activeStep === "confirm") {
     return (
       <>
-      <main className={wrapper}>
+      <StepShell key="confirm">
         <div className="max-w-xl w-full space-y-6">
           <StepUtilityHeader
             onBack={() => navigateBack("confirm")}
@@ -3953,18 +4036,23 @@ export default function Home() {
             progress={serviceFlowProgress}
           />
 
-          <div className="text-center space-y-2">
-            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-              인스타그램 계정 생성 확인
-            </h2>
+          <div className="text-center space-y-3 pt-4">
+            <WordReveal
+              lines={["인스타그램 계정 생성 확인"]}
+              className="text-[2rem] leading-snug font-bold tracking-tight text-gray-900"
+              delay={0.08}
+            />
+            <Reveal y={14}>
             <p className="text-sm text-gray-500 leading-relaxed max-w-md mx-auto">
               추천 계정명을 참고해 인스타그램 계정을 생성해주세요.
               <br />
               생성 완료 후 최종 아이디를 입력해주세요.
             </p>
+            </Reveal>
           </div>
 
           {/* 추천 이름 요약 */}
+          <Reveal>
           <Card className="space-y-2">
             <SectionLabel>추천 계정명</SectionLabel>
             <p className="text-xs text-gray-500">
@@ -3987,7 +4075,9 @@ export default function Home() {
               ))}
             </div>
           </Card>
+          </Reveal>
 
+          <Reveal>
           <Card className="space-y-4">
             <InputField
               label="최종 인스타그램 아이디"
@@ -4000,8 +4090,9 @@ export default function Home() {
               fieldKey="finalInstagramId"
             />
           </Card>
+          </Reveal>
 
-          <div className="grid grid-cols-2 gap-3">
+          <Reveal y={12} className="grid grid-cols-2 gap-3">
             <button
               onClick={() => navigateBack("confirm")}
               className="py-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -4020,9 +4111,9 @@ export default function Home() {
             >
               확인하고 다음으로
             </button>
-          </div>
+          </Reveal>
         </div>
-      </main>
+      </StepShell>
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}
@@ -4051,7 +4142,7 @@ export default function Home() {
 
     return (
       <>
-        <main className={wrapper}>
+        <StepShell key="channel-materials">
           <div className="max-w-xl w-full space-y-6">
             <StepUtilityHeader
               onBack={() => navigateBack("channel-materials")}
@@ -4060,15 +4151,20 @@ export default function Home() {
               progress={serviceFlowProgress}
             />
 
-            <div className="text-center space-y-2">
-              <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-                대표 URL을 알려주세요
-              </h2>
+            <div className="text-center space-y-3 pt-4">
+              <WordReveal
+                lines={["대표 URL을 알려주세요"]}
+                className="text-[2rem] leading-snug font-bold tracking-tight text-gray-900"
+                delay={0.08}
+              />
+              <Reveal y={14}>
               <p className="text-sm text-gray-500">
                 AI 마케터가 홍보에 활용할 기준 콘텐츠를 확인합니다
               </p>
+              </Reveal>
             </div>
 
+            <Reveal>
             <Card className="space-y-5">
               <div className="flex items-center justify-between gap-3 rounded-2xl bg-rose-50 px-4 py-3">
                 <span className="text-sm font-semibold text-rose-600">
@@ -4117,8 +4213,10 @@ export default function Home() {
                 </p>
               </div>
             </Card>
+            </Reveal>
 
             {/* 댓글 이벤트 포함/미포함 선택 */}
+            <Reveal>
             <Card className="space-y-3">
               <div className="space-y-1">
                 <p className="text-sm font-semibold text-gray-900">댓글 이벤트</p>
@@ -4152,8 +4250,10 @@ export default function Home() {
                 ))}
               </div>
             </Card>
+            </Reveal>
 
             {/* 실행 전 경고 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG), warning(red) 톤 */}
+            <Reveal>
             <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
               <div className="mb-4 flex items-center gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-red-100 text-red-600">
@@ -4223,8 +4323,10 @@ export default function Home() {
                 </div>
               </div>
             </div>
+            </Reveal>
 
             {/* 급행 지원 안내 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG) */}
+            <Reveal>
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <div className="mb-4 flex items-center gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
@@ -4322,8 +4424,9 @@ export default function Home() {
                 </span>
               </div>
             </div>
+            </Reveal>
 
-            <div className="grid grid-cols-2 gap-3">
+            <Reveal y={12} className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => navigateBack("channel-materials")}
                 className="py-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -4340,9 +4443,9 @@ export default function Home() {
               >
                 다음 단계로
               </button>
-            </div>
+            </Reveal>
           </div>
-        </main>
+        </StepShell>
         <ValidationToast
           message={validationToast}
           onClose={() => setValidationToast(null)}
@@ -4489,7 +4592,7 @@ export default function Home() {
 
     return (
       <>
-      <main className={wrapper}>
+      <StepShell key="payment">
         <div className="max-w-2xl w-full space-y-6">
           <StepUtilityHeader
             onBack={() => {
@@ -4500,16 +4603,21 @@ export default function Home() {
             progress={serviceFlowProgress}
           />
 
-          <div className="text-center space-y-1">
-            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-              마케팅 서비스 신청
-            </h2>
+          <div className="text-center space-y-3 pt-4">
+            <WordReveal
+              lines={["마케팅 서비스 신청"]}
+              className="text-[2.1rem] leading-snug font-bold tracking-tight text-gray-900"
+              delay={0.08}
+            />
+            <Reveal y={14}>
             <p className="text-sm text-gray-500">
               필요한 옵션만 선택하고 바로 신청하세요
             </p>
+            </Reveal>
           </div>
 
           {/* Plan selection */}
+          <Reveal>
           <div>
             <SectionLabel>플랜 선택</SectionLabel>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -4639,8 +4747,10 @@ export default function Home() {
               <p className={`mt-2 ${getHelperTextClass("rose")}`}>{selectedPlanError}</p>
             )}
           </div>
+          </Reveal>
 
           {/* Duration selection */}
+          <Reveal>
           <div>
             <SectionLabel>운영 기간</SectionLabel>
             <div className="grid grid-cols-2 gap-3">
@@ -4690,7 +4800,9 @@ export default function Home() {
               2개월 운영이 더 경제적입니다
             </p>
           </div>
+          </Reveal>
 
+          <Reveal>
           <Card className="space-y-5 border-rose-100">
             <div className="space-y-1">
               <SectionLabel>예상 성과</SectionLabel>
@@ -4838,7 +4950,9 @@ export default function Home() {
               </div>
             </div>
           </Card>
+          </Reveal>
 
+          <Reveal>
           <Card className="space-y-4 border-rose-100">
             <div className="space-y-1">
               <SectionLabel>성과는 언제부터 보이나요?</SectionLabel>
@@ -4885,7 +4999,9 @@ export default function Home() {
               ))}
             </div>
           </Card>
+          </Reveal>
 
+          <Reveal>
           <Card className="space-y-3">
             <SectionLabel>급행 마무리 요청</SectionLabel>
             <label className="flex items-start gap-3 cursor-pointer group">
@@ -4949,8 +5065,10 @@ export default function Home() {
               </div>
             )}
           </Card>
+          </Reveal>
 
           {/* Summary */}
+          <Reveal>
           <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-none text-white space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
               결제 요약
@@ -4990,8 +5108,10 @@ export default function Home() {
               </div>
             </div>
           </Card>
+          </Reveal>
 
           {/* Bank info */}
+          <Reveal>
           <Card className="space-y-2">
             <SectionLabel>입금 정보</SectionLabel>
             <div className="text-sm space-y-1 text-gray-700">
@@ -5031,8 +5151,10 @@ export default function Home() {
               </div>
             </div>
           </Card>
+          </Reveal>
 
           {/* Form */}
+          <Reveal>
           <Card className="space-y-5">
             <SectionLabel>신청자 정보</SectionLabel>
             <InputField
@@ -5151,6 +5273,7 @@ export default function Home() {
               </div>
             )}
           </Card>
+          </Reveal>
 
           {submissionError && (
             <Card className="bg-red-50 border-red-100 text-center space-y-2">
@@ -5163,6 +5286,7 @@ export default function Home() {
             </Card>
           )}
 
+          <Reveal y={12}>
           <button
             onClick={handleApplicationSubmit}
             disabled={submittingApplication}
@@ -5176,8 +5300,9 @@ export default function Home() {
               ? "신청 정보를 저장하고 있습니다..."
               : `신청 완료 (${totalPrice.toLocaleString()}원 입금 진행하기)`}
           </button>
+          </Reveal>
         </div>
-      </main>
+      </StepShell>
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}
@@ -5200,7 +5325,7 @@ export default function Home() {
 
     return (
       <>
-      <main className={wrapper}>
+      <StepShell key="status">
         <div className="max-w-2xl w-full space-y-6">
           <StepUtilityHeader
             onBack={() => goToStep("landing")}
@@ -5209,23 +5334,30 @@ export default function Home() {
             progress={serviceFlowProgress}
           />
           {/* Hero */}
+          <Reveal>
           <Card className="text-center space-y-3 py-8">
             <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center mx-auto shadow-lg">
               <span className="text-white text-2xl">✓</span>
             </div>
-            <h2 className="text-[1.7rem] leading-snug font-bold tracking-tight text-gray-900">
-              {isPaymentConfirmed
-                ? "입금 확인이 완료되었습니다"
-                : "신청이 접수되었습니다"}
-            </h2>
+            <WordReveal
+              lines={[
+                isPaymentConfirmed
+                  ? "입금 확인이 완료되었습니다"
+                  : "신청이 접수되었습니다",
+              ]}
+              className="text-[2rem] leading-snug font-bold tracking-tight text-gray-900"
+              delay={0.12}
+            />
             <p className="text-gray-500 text-sm">
               {isPaymentConfirmed
                 ? "마케팅 준비가 진행중입니다"
                 : "입금 확인 후 마케팅이 시작됩니다"}
             </p>
           </Card>
+          </Reveal>
 
           {/* Payment instruction */}
+          <Reveal>
           <Card className="space-y-4 border-rose-100 shadow-md">
             <div className="space-y-1">
               <SectionLabel>입금 안내</SectionLabel>
@@ -5313,8 +5445,10 @@ export default function Home() {
                 : "계좌번호 복사"}
             </button>
           </Card>
+          </Reveal>
 
           {/* Schedule summary */}
+          <Reveal>
           <Card className="space-y-3">
             <SectionLabel>진행 안내</SectionLabel>
             <div className="space-y-2 text-sm">
@@ -5339,8 +5473,10 @@ export default function Home() {
               )}
             </div>
           </Card>
+          </Reveal>
 
           {/* Progress */}
+          <Reveal>
           <Card>
             <SectionLabel>진행 상태</SectionLabel>
             <div className="grid grid-cols-4 gap-3 mt-2 items-start">
@@ -5379,6 +5515,7 @@ export default function Home() {
               ))}
             </div>
           </Card>
+          </Reveal>
 
           {!isTestAccountAuthenticated && (
             <Card className="space-y-3">
@@ -5436,7 +5573,7 @@ export default function Home() {
             </Card>
           )}
 
-          <div className="space-y-3">
+          <Reveal y={12} className="space-y-3">
             <button
               onClick={() => {
                 if (isAuthenticated) {
@@ -5456,9 +5593,9 @@ export default function Home() {
             >
               처음으로 돌아가기
             </button>
-          </div>
+          </Reveal>
         </div>
-      </main>
+      </StepShell>
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}
