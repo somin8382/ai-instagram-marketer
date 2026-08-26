@@ -7,11 +7,20 @@ import { useRouter } from "next/navigation";
 import { ArrowClockwise } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { Card, SectionLabel } from "@/lib/ui/surface-card";
+import { InputField, TextareaField } from "@/lib/ui/form-fields";
+import { WorkspaceHeader } from "@/lib/ui/workspace-header";
+import { getPrimaryActionButtonClass } from "@/lib/ui/form-feedback";
 
 // ── 브랜드 아이덴티티 제작 ──
-// 브랜드 분석 → 컬러+타이포 → 로고 콘셉트(아트디렉션) → 이미지 모델 로고 →
-// 로고를 레퍼런스로 명함 디자인. 로고 재생성은 컬러·타이포를 유지하고 콘셉트
-// 방법만 바꾸며, 명함 재생성은 선택 색과 로고를 유지하고 구성만 바꾼다.
+// UI/UX는 게시물 AI 생성기(app/tools)와 같은 부품을 그대로 가져다 쓴다:
+// WorkspaceHeader, Card/SectionLabel, InputField/TextareaField(모두
+// lib/ui에서 공유), 스텝별 상태 배지, 결과물 좌(이미지+다운로드)/우(재생성
+// 패널) 2열 레이아웃, 버튼 내 인라인 스피너. 테마 색만 emerald.
+//
+// 흐름: 브랜드 분석 → 컬러+타이포 → 로고 콘셉트(아트디렉션) → 이미지 모델
+// 로고 → 로고를 레퍼런스로 명함. 로고 재생성은 컬러·타이포를 유지하고
+// 콘셉트만 바꾸며, 명함 재생성은 선택 색과 로고를 유지하고 구성만 바꾼다.
 // 연락처 텍스트는 이미지 모델에 맡기지 않고 클라이언트가 오버레이한다.
 
 type PaletteColor = {
@@ -42,6 +51,13 @@ const ROLE_LABELS: Record<PaletteColor["role"], string> = {
   neutral: "텍스트",
   surface: "배경",
 };
+
+const MOOD_PRESETS = [
+  "따뜻하고 편안한, 동네 단골 같은 느낌",
+  "정갈하고 신뢰감 있는, 전문적인 느낌",
+  "트렌디하고 감각적인, 20~30대 타깃",
+  "고급스럽고 차분한, 프리미엄 느낌",
+];
 
 function download(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
@@ -100,8 +116,6 @@ async function composeCardPng(input: {
       0
     );
     const panelPad = 34;
-    // 판독성 패널: 디자인이 지시를 어겨 텍스트 존에 그래픽을 넣었어도
-    // 연락처가 항상 읽히도록 보장한다.
     ctx.fillStyle = "rgba(255,255,255,0.88)";
     ctx.beginPath();
     ctx.roundRect(
@@ -126,6 +140,52 @@ async function composeCardPng(input: {
 
   return await new Promise<Blob | null>((resolve) =>
     canvas.toBlob(resolve, "image/png")
+  );
+}
+
+/** postgen 결과 카드의 "다시 생성" 서브패널과 같은 문법: 회색 박스 + 헤더
+ * 줄(라벨/보조설명) + 버튼. */
+function RegeneratePanel({
+  label,
+  note,
+  busy,
+  busyLabel,
+  idleLabel,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  note: string;
+  busy: boolean;
+  busyLabel: string;
+  idleLabel: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="space-y-2 border border-gray-100 rounded-xl p-3 bg-gray-50">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-700">{label}</span>
+        <span className="text-xs text-gray-400">{note}</span>
+      </div>
+      <button
+        disabled={busy || disabled}
+        onClick={onClick}
+        className="w-full text-xs py-1.5 rounded-lg font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors inline-flex items-center justify-center gap-1.5"
+      >
+        {busy ? (
+          <>
+            <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            {busyLabel}
+          </>
+        ) : (
+          <>
+            <ArrowClockwise size={12} weight="bold" />
+            {idleLabel}
+          </>
+        )}
+      </button>
+    </div>
   );
 }
 
@@ -164,6 +224,8 @@ export default function BrandIdentityPage() {
   );
   const neutralHex =
     palette?.find((c) => c.role === "neutral")?.hex ?? "#1f2430";
+
+  const stepIndex = cardImage ? 3 : logoImage ? 2 : palette ? 1 : 0;
 
   const callBrandApi = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -218,7 +280,6 @@ export default function BrandIdentityPage() {
       setPalette(data.colors);
       setTypography(data.typography);
       setSelectedHex(null);
-      // 하위 산출물은 아이덴티티가 바뀌면 무효.
       setLogoImage(null);
       setLogoConcept("");
       setCardImage(null);
@@ -241,7 +302,6 @@ export default function BrandIdentityPage() {
       setLogoImage(data.image);
       setLogoConcept(data.concept ?? "");
       setLogoSeed(seed);
-      // 명함은 로고에 종속: 로고가 바뀌면 다시 만들어야 한다.
       setCardImage(null);
     }
     setBusy(null);
@@ -290,45 +350,32 @@ export default function BrandIdentityPage() {
     const contacts = [cardInfo.phone.trim(), cardInfo.email.trim()].filter(
       Boolean
     );
-    return { name, roleLine, contacts, any: Boolean(name || roleLine || contacts.length) };
+    return {
+      name,
+      roleLine,
+      contacts,
+      any: Boolean(name || roleLine || contacts.length),
+    };
   }, [cardInfo, brandName]);
-
-  const inputCls =
-    "w-full px-4 py-3 border border-gray-200 bg-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-300 transition-colors placeholder:text-gray-400";
 
   return (
     <main className="min-h-screen bg-[#f8f9fb] px-4 py-12">
-      <div className="max-w-xl mx-auto space-y-10">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/home")}
-              className="text-sm font-bold tracking-tight text-gray-900"
-            >
-              큐밋
-            </button>
-            <button
-              onClick={() => router.push("/home")}
-              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              ← 홈
-            </button>
-          </div>
-          <button
-            onClick={() => router.push("/mypage")}
-            className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
-          >
-            마이페이지
-          </button>
-        </div>
+      <div className="max-w-2xl mx-auto space-y-4">
+        <WorkspaceHeader
+          onBack={() => router.push("/home")}
+          onHome={() => router.push("/home")}
+          onMyPage={() => router.push("/mypage")}
+          progress={{ current: stepIndex, total: 3 }}
+          progressLabel="아이덴티티 제작 단계"
+          progressBarClassName="bg-gradient-to-r from-emerald-500 to-teal-500"
+        />
 
-        <div className="space-y-2">
+        <div className="space-y-2 px-1">
           <div className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-emerald-100">
             브랜드 아이덴티티
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-gray-900">
-            컬러, 로고, 명함까지
-            <br />한 번에 만듭니다
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">
+            컬러, 로고, 명함까지 한 번에
           </h1>
           <p className="text-sm text-gray-500 leading-relaxed">
             브랜드를 분석해 컬러와 타이포그래피를 정하고, 그 위에서 로고를,
@@ -338,59 +385,107 @@ export default function BrandIdentityPage() {
         </div>
 
         {/* STEP 1. 컬러 + 타이포그래피 */}
-        <section className="p-6 rounded-2xl bg-white border-2 border-gray-100 space-y-4">
+        <Card className="space-y-5">
           <div className="flex items-center justify-between">
-            <p className="font-bold text-gray-900">1. 브랜드 컬러 · 타이포그래피</p>
+            <SectionLabel>1. 브랜드 컬러 · 타이포그래피</SectionLabel>
             {palette && (
-              <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">
+              <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
                 완료
               </span>
             )}
           </div>
-          <input
+
+          <InputField
+            label="브랜드 이름"
             value={brandName}
-            onChange={(e) => setBrandName(e.target.value)}
-            maxLength={40}
-            placeholder="브랜드 이름 (예: 온기제빵소)"
-            className={inputCls}
+            onChange={setBrandName}
+            placeholder="예: 온기제빵소"
+            theme="emerald"
           />
-          <input
+          <InputField
+            label="업종"
             value={industry}
-            onChange={(e) => setIndustry(e.target.value)}
-            maxLength={60}
-            placeholder="업종 (예: 베이커리 카페)"
-            className={inputCls}
+            onChange={setIndustry}
+            placeholder="예: 베이커리 카페"
+            theme="emerald"
           />
-          <input
-            value={mood}
-            onChange={(e) => setMood(e.target.value)}
-            maxLength={120}
-            placeholder="원하는 느낌 (예: 따뜻하지만 세련된, 수제 감성)"
-            className={inputCls}
-          />
-          <div className="space-y-1.5">
-            <input
-              value={colorHint}
-              onChange={(e) => setColorHint(e.target.value)}
-              maxLength={60}
-              placeholder="메인 컬러 (예: 깊은 남색 / #1B3A6B) · 비워두면 알아서"
-              className={inputCls}
+
+          <div className="space-y-2">
+            <TextareaField
+              label="원하는 느낌"
+              value={mood}
+              onChange={setMood}
+              placeholder="예: 따뜻하지만 세련된, 수제 감성"
+              rows={2}
+              theme="emerald"
             />
-            <p className="text-[11px] text-gray-400 leading-relaxed">
-              원하는 색을 말로 적거나 #1B3A6B 처럼 코드로 넣으면 그 색을
-              대표색으로 두고 나머지를 맞춥니다.
-            </p>
+            <div className="grid grid-cols-1 gap-2">
+              {MOOD_PRESETS.map((preset) => {
+                const isSelected = mood.trim() === preset;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setMood(preset)}
+                    className={`text-left rounded-xl border px-4 py-2.5 transition-all ${
+                      isSelected
+                        ? "border-emerald-400 bg-emerald-50 shadow-sm"
+                        : "border-gray-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/40"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <p
+                        className={`text-sm leading-relaxed ${
+                          isSelected
+                            ? "text-emerald-700 font-medium"
+                            : "text-gray-700"
+                        }`}
+                      >
+                        {preset}
+                      </p>
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-1 rounded-full whitespace-nowrap ${
+                          isSelected
+                            ? "bg-emerald-100 text-emerald-600"
+                            : "bg-gray-100 text-gray-500"
+                        }`}
+                      >
+                        {isSelected ? "선택됨" : "빠른 선택"}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
+
+          <InputField
+            label="메인 컬러 (선택)"
+            value={colorHint}
+            onChange={setColorHint}
+            placeholder="예: 깊은 남색 / #1B3A6B · 비워두면 알아서 제안"
+            theme="emerald"
+          />
+
           <button
             onClick={generateIdentity}
             disabled={busy !== null}
-            className="w-full py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all"
+            aria-disabled={busy !== null}
+            className={`${getPrimaryActionButtonClass({
+              theme: "emerald",
+              isInactive: busy !== null,
+            })} py-3`}
           >
-            {busy === "identity"
-              ? "브랜드를 분석하고 있습니다..."
-              : palette
-                ? "컬러 · 타이포 다시 만들기"
-                : "컬러 · 타이포 만들기"}
+            {busy === "identity" ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                브랜드를 분석하고 있습니다...
+              </span>
+            ) : palette ? (
+              "컬러 · 타이포 다시 만들기"
+            ) : (
+              "컬러 · 타이포 만들기"
+            )}
           </button>
 
           {palette && (
@@ -410,7 +505,10 @@ export default function BrandIdentityPage() {
                     }`}
                     title={color.usage}
                   >
-                    <span className="block h-14" style={{ background: color.hex }} />
+                    <span
+                      className="block h-14"
+                      style={{ background: color.hex }}
+                    />
                     <span className="block px-1.5 py-1 bg-white">
                       <span className="block text-[10px] font-semibold text-gray-700 truncate">
                         {color.name}
@@ -440,185 +538,222 @@ export default function BrandIdentityPage() {
               )}
             </div>
           )}
-        </section>
+        </Card>
 
         {/* STEP 2. 로고 */}
-        <section
-          className={`p-6 rounded-2xl bg-white border-2 border-gray-100 space-y-4 ${
-            palette ? "" : "opacity-50 pointer-events-none"
-          }`}
+        <Card
+          className={`space-y-4 ${palette ? "" : "opacity-50 pointer-events-none"}`}
         >
           <div className="flex items-center justify-between">
-            <p className="font-bold text-gray-900">2. 로고</p>
+            <SectionLabel>2. 로고</SectionLabel>
             {logoImage && (
-              <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">
+              <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
                 완료
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500">
-            아트디렉션을 거쳐 이미지 모델이 로고를 그립니다. 다시 만들면
-            컬러는 유지되고 콘셉트가 바뀝니다.
-          </p>
 
-          {logoImage && (
-            <div className="space-y-2">
-              <div className="rounded-xl border border-gray-100 bg-white overflow-hidden">
-                <img src={logoImage} alt="생성된 로고" className="w-full h-auto" />
+          {!logoImage ? (
+            <>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                아트디렉션을 거쳐 이미지 생성 모델이 로고를 그립니다. 위 브랜드
+                컬러를 그대로 사용합니다.
+              </p>
+              <button
+                onClick={generateLogo}
+                disabled={busy !== null || !palette}
+                aria-disabled={busy !== null || !palette}
+                className={`${getPrimaryActionButtonClass({
+                  theme: "emerald",
+                  isInactive: busy !== null || !palette,
+                })} py-3`}
+              >
+                {busy === "logo" ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    로고를 그리고 있습니다... (1~2분)
+                  </span>
+                ) : (
+                  "로고 만들기"
+                )}
+              </button>
+            </>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-4 items-start">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-gray-900">로고</p>
+                  <button
+                    onClick={downloadLogo}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
+                  >
+                    <DownloadSimple size={14} weight="bold" />
+                    다운로드
+                  </button>
+                </div>
+                <div className="relative max-w-[260px] w-full rounded-xl overflow-hidden border border-gray-100 aspect-square bg-white mx-auto md:mx-0 shadow-sm">
+                  <img
+                    src={logoImage}
+                    alt="생성된 로고"
+                    className="absolute inset-0 w-full h-full object-contain p-3"
+                  />
+                </div>
               </div>
-              {logoConcept && (
-                <p className="text-xs text-gray-500 leading-relaxed">
-                  {logoConcept}
-                </p>
-              )}
+              <div className="space-y-3">
+                {logoConcept && (
+                  <div className="p-3 bg-gray-50 rounded-xl">
+                    <p className="text-xs text-gray-600 leading-relaxed">
+                      {logoConcept}
+                    </p>
+                  </div>
+                )}
+                <RegeneratePanel
+                  label="다른 콘셉트로 다시"
+                  note="컬러 유지"
+                  busy={busy === "logo"}
+                  busyLabel="그리는 중… (1~2분)"
+                  idleLabel="로고 다시 만들기"
+                  onClick={generateLogo}
+                  disabled={!palette}
+                />
+              </div>
             </div>
           )}
-
-          <div className="flex gap-2">
-            <button
-              onClick={generateLogo}
-              disabled={busy !== null || !palette}
-              className="flex-1 py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all inline-flex items-center justify-center gap-2"
-            >
-              {busy === "logo" ? (
-                "로고를 그리고 있습니다... (1~2분)"
-              ) : logoImage ? (
-                <>
-                  <ArrowClockwise size={16} weight="bold" /> 다른 콘셉트로 다시
-                </>
-              ) : (
-                "로고 만들기"
-              )}
-            </button>
-            {logoImage && (
-              <button
-                onClick={downloadLogo}
-                className="px-4 rounded-xl border-2 border-gray-100 text-gray-600 hover:border-emerald-300 hover:text-emerald-600 transition-all"
-                title="PNG 다운로드"
-              >
-                <DownloadSimple size={18} weight="bold" />
-              </button>
-            )}
-          </div>
-        </section>
+        </Card>
 
         {/* STEP 3. 명함 */}
-        <section
-          className={`p-6 rounded-2xl bg-white border-2 border-gray-100 space-y-4 ${
-            logoImage ? "" : "opacity-50 pointer-events-none"
-          }`}
+        <Card
+          className={`space-y-4 ${logoImage ? "" : "opacity-50 pointer-events-none"}`}
         >
           <div className="flex items-center justify-between">
-            <p className="font-bold text-gray-900">3. 명함</p>
+            <SectionLabel>3. 명함</SectionLabel>
             {cardImage && (
-              <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">
+              <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
                 완료
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500">
-            로고와 선택한 강조색을 그대로 반영해 명함을 디자인합니다.
-            이름·연락처는 이미지에 맡기지 않고 정확한 위치에 직접 얹습니다.
+
+          <p className="text-sm text-gray-500 leading-relaxed">
+            로고와 선택한 강조색을 그대로 반영해 명함을 디자인합니다. 이름과
+            연락처는 이미지에 맡기지 않고 정확한 위치에 직접 얹습니다.
           </p>
 
           <div className="grid grid-cols-2 gap-2">
-            <input
+            <InputField
+              label="이름"
               value={cardInfo.personName}
-              onChange={(e) =>
-                setCardInfo((v) => ({ ...v, personName: e.target.value }))
-              }
-              maxLength={20}
+              onChange={(v) => setCardInfo((s) => ({ ...s, personName: v }))}
               placeholder="이름"
-              className={inputCls}
+              theme="emerald"
             />
-            <input
+            <InputField
+              label="직함"
               value={cardInfo.role}
-              onChange={(e) => setCardInfo((v) => ({ ...v, role: e.target.value }))}
-              maxLength={20}
-              placeholder="직함 (예: 대표)"
-              className={inputCls}
+              onChange={(v) => setCardInfo((s) => ({ ...s, role: v }))}
+              placeholder="예: 대표"
+              theme="emerald"
             />
-            <input
+            <InputField
+              label="전화번호"
               value={cardInfo.phone}
-              onChange={(e) => setCardInfo((v) => ({ ...v, phone: e.target.value }))}
-              maxLength={20}
+              onChange={(v) => setCardInfo((s) => ({ ...s, phone: v }))}
               placeholder="전화번호"
-              className={inputCls}
+              theme="emerald"
             />
-            <input
+            <InputField
+              label="이메일"
               value={cardInfo.email}
-              onChange={(e) => setCardInfo((v) => ({ ...v, email: e.target.value }))}
-              maxLength={40}
+              onChange={(v) => setCardInfo((s) => ({ ...s, email: v }))}
               placeholder="이메일"
-              className={inputCls}
+              theme="emerald"
             />
           </div>
 
-          {cardImage && (
-            <div className="relative rounded-xl border border-gray-100 overflow-hidden shadow-sm">
-              <img src={cardImage} alt="생성된 명함 디자인" className="w-full h-auto" />
-              {overlayLines.any && (
-                <div
-                  className="absolute left-[5.5%] bottom-[8%] max-w-[46%] rounded-lg px-3 py-2.5"
-                  style={{ background: "rgba(255,255,255,0.88)" }}
-                >
-                  {overlayLines.name && (
-                    <p
-                      className="text-base sm:text-lg font-bold leading-tight"
-                      style={{ color: neutralHex }}
-                    >
-                      {overlayLines.name}
-                    </p>
-                  )}
-                  {overlayLines.roleLine && (
-                    <p
-                      className="text-[11px] sm:text-xs font-medium mt-0.5"
-                      style={{ color: neutralHex, opacity: 0.8 }}
-                    >
-                      {overlayLines.roleLine}
-                    </p>
-                  )}
-                  {overlayLines.contacts.map((line) => (
-                    <p
-                      key={line}
-                      className="text-[11px] sm:text-xs mt-0.5"
-                      style={{ color: neutralHex }}
-                    >
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="flex gap-2">
+          {!cardImage ? (
             <button
               onClick={generateCard}
               disabled={busy !== null || !logoImage}
-              className="flex-1 py-3.5 rounded-xl font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] transition-all inline-flex items-center justify-center gap-2"
+              aria-disabled={busy !== null || !logoImage}
+              className={`${getPrimaryActionButtonClass({
+                theme: "emerald",
+                isInactive: busy !== null || !logoImage,
+              })} py-3`}
             >
               {busy === "card" ? (
-                "명함을 디자인하고 있습니다... (1~2분)"
-              ) : cardImage ? (
-                <>
-                  <ArrowClockwise size={16} weight="bold" /> 다른 구성으로 다시
-                </>
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  명함을 디자인하고 있습니다... (1~2분)
+                </span>
               ) : (
                 "명함 만들기"
               )}
             </button>
-            {cardImage && (
-              <button
-                onClick={downloadCard}
-                className="px-4 rounded-xl border-2 border-gray-100 text-gray-600 hover:border-emerald-300 hover:text-emerald-600 transition-all"
-                title="PNG 다운로드 (연락처 포함)"
-              >
-                <DownloadSimple size={18} weight="bold" />
-              </button>
-            )}
-          </div>
-        </section>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-[300px,1fr] gap-4 items-start">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-gray-900">명함</p>
+                  <button
+                    onClick={downloadCard}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
+                  >
+                    <DownloadSimple size={14} weight="bold" />
+                    다운로드
+                  </button>
+                </div>
+                <div className="relative w-full rounded-xl overflow-hidden border border-gray-100 shadow-sm">
+                  <img
+                    src={cardImage}
+                    alt="생성된 명함 디자인"
+                    className="w-full h-auto"
+                  />
+                  {overlayLines.any && (
+                    <div
+                      className="absolute left-[5.5%] bottom-[8%] max-w-[46%] rounded-lg px-3 py-2.5"
+                      style={{ background: "rgba(255,255,255,0.88)" }}
+                    >
+                      {overlayLines.name && (
+                        <p
+                          className="text-sm font-bold leading-tight"
+                          style={{ color: neutralHex }}
+                        >
+                          {overlayLines.name}
+                        </p>
+                      )}
+                      {overlayLines.roleLine && (
+                        <p
+                          className="text-[10px] font-medium mt-0.5"
+                          style={{ color: neutralHex, opacity: 0.8 }}
+                        >
+                          {overlayLines.roleLine}
+                        </p>
+                      )}
+                      {overlayLines.contacts.map((line) => (
+                        <p
+                          key={line}
+                          className="text-[10px] mt-0.5"
+                          style={{ color: neutralHex }}
+                        >
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <RegeneratePanel
+                label="다른 구성으로 다시"
+                note="로고 · 강조색 유지"
+                busy={busy === "card"}
+                busyLabel="디자인 중… (1~2분)"
+                idleLabel="명함 다시 만들기"
+                onClick={generateCard}
+                disabled={!logoImage}
+              />
+            </div>
+          )}
+        </Card>
 
         <p
           aria-live="polite"

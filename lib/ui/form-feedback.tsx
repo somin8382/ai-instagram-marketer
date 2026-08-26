@@ -2,13 +2,15 @@
 
 import { useEffect } from "react";
 
-type FeedbackTheme = "rose" | "violet";
+export type FeedbackTheme = "rose" | "violet" | "emerald";
 
 const ACTIVE_BUTTON_STYLES: Record<FeedbackTheme, string> = {
   rose:
     "bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-md hover:shadow-lg active:scale-[0.98]",
   violet:
     "bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-md hover:shadow-lg active:scale-[0.98]",
+  emerald:
+    "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md hover:shadow-lg active:scale-[0.98]",
 };
 
 const INACTIVE_BUTTON_STYLES =
@@ -19,6 +21,8 @@ const FIELD_ERROR_STYLES: Record<FeedbackTheme, string> = {
     "border-rose-300 bg-rose-50/40 text-gray-900 placeholder:text-rose-300 focus:ring-rose-500/20 focus:border-rose-400",
   violet:
     "border-violet-300 bg-violet-50/40 text-gray-900 placeholder:text-violet-300 focus:ring-violet-500/20 focus:border-violet-400",
+  emerald:
+    "border-emerald-300 bg-emerald-50/40 text-gray-900 placeholder:text-emerald-300 focus:ring-emerald-500/20 focus:border-emerald-400",
 };
 
 const FIELD_DEFAULT_STYLES: Record<FeedbackTheme, string> = {
@@ -26,11 +30,20 @@ const FIELD_DEFAULT_STYLES: Record<FeedbackTheme, string> = {
     "border-gray-200 bg-white placeholder:text-gray-400 focus:ring-rose-500/20 focus:border-rose-300",
   violet:
     "border-gray-200 bg-white placeholder:text-gray-400 focus:ring-violet-500/20 focus:border-violet-300",
+  emerald:
+    "border-gray-200 bg-white placeholder:text-gray-400 focus:ring-emerald-500/20 focus:border-emerald-300",
+};
+
+const TOAST_BORDER_STYLES: Record<FeedbackTheme, string> = {
+  rose: "border-rose-100",
+  violet: "border-violet-100",
+  emerald: "border-emerald-100",
 };
 
 const HELPER_TEXT_STYLES: Record<FeedbackTheme, string> = {
   rose: "text-rose-500",
   violet: "text-violet-500",
+  emerald: "text-emerald-600",
 };
 
 export function getPrimaryActionButtonClass({
@@ -93,9 +106,7 @@ export function ValidationToast({
       <div
         role="status"
         aria-live="polite"
-        className={`pointer-events-auto rounded-full border bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-lg ${
-          theme === "rose" ? "border-rose-100" : "border-violet-100"
-        }`}
+        className={`pointer-events-auto rounded-full border bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-lg ${TOAST_BORDER_STYLES[theme]}`}
       >
         {message}
       </div>

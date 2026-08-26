@@ -56,6 +56,9 @@ import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
 import { checkSocialUrl } from "@/lib/client/social-url";
 import { BrandProfileEditor } from "@/lib/ui/brand-profile-editor";
+import { Card, SectionLabel } from "@/lib/ui/surface-card";
+import { InputField, TextareaField } from "@/lib/ui/form-fields";
+import { WorkspaceHeader } from "@/lib/ui/workspace-header";
 import {
   CONTENT_TONE_OPTIONS,
   EMOJI_USAGE_OPTIONS,
@@ -241,92 +244,6 @@ function getToolsProgress(step: ToolStep) {
   return { current: 2, total: 2 };
 }
 
-function InputField({
-  label,
-  value,
-  onChange,
-  onBlur,
-  placeholder,
-  type = "text",
-  required = false,
-  error,
-  fieldKey,
-  theme = "violet",
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  onBlur?: () => void;
-  placeholder?: string;
-  type?: string;
-  required?: boolean;
-  error?: string;
-  fieldKey?: string;
-  theme?: "rose" | "violet";
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-gray-700">
-        {label}
-        {required && <span className="text-rose-500 ml-0.5">*</span>}
-      </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
-        placeholder={placeholder}
-        data-validation-field={fieldKey}
-        aria-invalid={Boolean(error)}
-        className={getTextFieldClass({
-          theme,
-          hasError: Boolean(error),
-        })}
-      />
-      {error && <p className={getHelperTextClass(theme)}>{error}</p>}
-    </div>
-  );
-}
-
-function TextareaField({
-  label,
-  value,
-  onChange,
-  placeholder,
-  rows = 4,
-  error,
-  fieldKey,
-  theme = "violet",
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  rows?: number;
-  error?: string;
-  fieldKey?: string;
-  theme?: "rose" | "violet";
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-gray-700">{label}</label>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        rows={rows}
-        data-validation-field={fieldKey}
-        aria-invalid={Boolean(error)}
-        className={`${getTextFieldClass({
-          theme,
-          hasError: Boolean(error),
-        })} resize-none`}
-      />
-      {error && <p className={getHelperTextClass(theme)}>{error}</p>}
-    </div>
-  );
-}
-
 function PrefChipRow<T extends string>({
   label,
   options,
@@ -419,98 +336,6 @@ function ReviewUrlRow({
   );
 }
 
-function Card({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-6 ${className}`}
-    >
-      {children}
-    </div>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
-      {children}
-    </p>
-  );
-}
-
-function ToolsHeader({
-  onBack,
-  onHome,
-  onMyPage,
-  progress,
-}: {
-  onBack?: () => void;
-  onHome: () => void;
-  onMyPage: () => void;
-  progress: { current: number; total: number } | null;
-}) {
-  return (
-    <div className="sticky top-0 z-20 bg-[#f8f9fb] pb-3">
-      <div className="space-y-3 rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={onHome}
-              className="text-sm font-bold tracking-tight text-gray-900"
-            >
-              큐밋
-            </button>
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-              >
-                ← 뒤로
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-4">
-            <a
-              href="/pricing"
-              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              가격 안내
-            </a>
-            <button
-              onClick={onMyPage}
-              className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
-            >
-              마이페이지
-            </button>
-          </div>
-        </div>
-        {progress && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-gray-500 font-medium">
-              <span>구독 단계</span>
-              <span>
-                {progress.current}/{progress.total}
-              </span>
-            </div>
-            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-300"
-                style={{
-                  width: `${Math.max((progress.current / progress.total) * 100, 10)}%`,
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export default function ToolsPage() {
   const router = useRouter();
@@ -2085,7 +1910,7 @@ export default function ToolsPage() {
       <>
         <main className={wrapper}>
           <div className="max-w-2xl w-full space-y-6">
-            <ToolsHeader
+            <WorkspaceHeader
               onBack={navigateBack}
               onHome={() => router.push("/")}
               onMyPage={() => router.push("/mypage")}
@@ -2369,7 +2194,7 @@ export default function ToolsPage() {
       <>
         <main className={wrapper}>
           <div className="max-w-2xl w-full space-y-6">
-            <ToolsHeader
+            <WorkspaceHeader
               onBack={navigateBack}
               onHome={() => router.push("/")}
               onMyPage={() => router.push("/mypage")}
@@ -2466,7 +2291,7 @@ export default function ToolsPage() {
     <>
       <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
-          <ToolsHeader
+          <WorkspaceHeader
             onBack={navigateBack}
             onHome={() => router.push("/")}
             onMyPage={() => router.push("/mypage")}
