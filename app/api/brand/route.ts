@@ -189,6 +189,7 @@ const IDENTITY_SYSTEM = `당신은 브랜드 아이덴티티 디렉터입니다.
 2) 그 분석에 근거해 컬러와 타이포그래피 결정
 
 컬러 규칙 (brand-identity 프레임워크):
+- 사용자가 "메인 컬러 요청"을 적었다면 그 서술을 primary로 해석해 반드시 반영하고, 나머지 4색을 그 primary와 어울리도록 구성합니다. 요청이 없을 때만 자유롭게 제안합니다.
 - 정확히 5색: primary / secondary / accent / neutral(본문용 진한 중립) / surface(배경용 밝은 중립)
 - neutral은 surface 위에서 WCAG AA(4.5:1) 이상
 - 업종의 진부한 기본색(카페=갈색, 병원=파랑 등)을 피하고 무드를 우선
@@ -242,6 +243,7 @@ export async function POST(request: Request) {
     brandName?: string;
     industry?: string;
     mood?: string;
+    colorHint?: string;
     palette?: unknown;
     typography?: Typography;
     accentHex?: string;
@@ -280,10 +282,12 @@ export async function POST(request: Request) {
   const brandName = String(body.brandName ?? "").trim().slice(0, 40);
   const industry = String(body.industry ?? "").trim().slice(0, 60);
   const mood = String(body.mood ?? "").trim().slice(0, 120);
+  // 사용자가 원하는 메인 컬러. 서술("깊은 남색")과 hex 코드 둘 다 받는다.
+  const colorHint = String(body.colorHint ?? "").trim().slice(0, 60);
   if (!brandName) {
     return Response.json({ error: "브랜드 이름을 입력해주세요." }, { status: 400 });
   }
-  const brandContext = `브랜드명: ${brandName}\n업종: ${industry || "미입력"}\n원하는 느낌: ${mood || "미입력"}`;
+  const brandContext = `브랜드명: ${brandName}\n업종: ${industry || "미입력"}\n원하는 느낌: ${mood || "미입력"}\n메인 컬러 요청: ${colorHint || "없음 (자유롭게 제안)"}`;
 
   // ── 1단계: 브랜드 분석 → 컬러 + 타이포그래피 ──
   if (body.step === "identity") {
@@ -299,6 +303,12 @@ export async function POST(request: Request) {
       return Response.json(
         { error: "생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
         { status: 502 }
+      );
+    }
+    // hex 를 직접 적어 준 경우 모델이 근사치를 냈더라도 사용자 지정이 이긴다.
+    if (isHex(colorHint)) {
+      identity.colors = identity.colors.map((color) =>
+        color.role === "primary" ? { ...color, hex: colorHint } : color
       );
     }
     return Response.json(identity);

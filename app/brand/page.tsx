@@ -135,6 +135,7 @@ export default function BrandIdentityPage() {
   const [brandName, setBrandName] = useState("");
   const [industry, setIndustry] = useState("");
   const [mood, setMood] = useState("");
+  const [colorHint, setColorHint] = useState("");
 
   const [palette, setPalette] = useState<PaletteColor[] | null>(null);
   const [typography, setTypography] = useState<Typography | null>(null);
@@ -184,6 +185,7 @@ export default function BrandIdentityPage() {
           brandName,
           industry,
           mood,
+          colorHint,
         }),
       });
       const data = (await res.json().catch(() => null)) as
@@ -201,7 +203,7 @@ export default function BrandIdentityPage() {
       }
       return data;
     },
-    [brandName, industry, mood, router]
+    [brandName, industry, mood, colorHint, router]
   );
 
   async function generateIdentity() {
@@ -366,6 +368,19 @@ export default function BrandIdentityPage() {
             placeholder="원하는 느낌 (예: 따뜻하지만 세련된, 수제 감성)"
             className={inputCls}
           />
+          <div className="space-y-1.5">
+            <input
+              value={colorHint}
+              onChange={(e) => setColorHint(e.target.value)}
+              maxLength={60}
+              placeholder="메인 컬러 (예: 깊은 남색 / #1B3A6B) · 비워두면 알아서"
+              className={inputCls}
+            />
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              원하는 색을 말로 적거나 #1B3A6B 처럼 코드로 넣으면 그 색을
+              대표색으로 두고 나머지를 맞춥니다.
+            </p>
+          </div>
           <button
             onClick={generateIdentity}
             disabled={busy !== null}
