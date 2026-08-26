@@ -1,7 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   collectValidationIssues,
@@ -334,6 +340,14 @@ function formatOutcomeDiff(metric: OutcomeMetricKey, value: number): string {
 
 // 신청 플로우는 로그인 전 랜딩과 같은 다크 표면·액센트를 쓴다.
 const FLOW_ACCENT = "#ef4a6b";
+
+// 다크가 기본, 라이트는 선택. 선택은 저장되어 스텝 전환·재방문에도 유지된다.
+type FlowTheme = "dark" | "light";
+const FLOW_THEME_STORAGE_KEY = "qmeet-flow-theme";
+const FlowThemeContext = createContext<{
+  theme: FlowTheme;
+  toggleTheme: () => void;
+}>({ theme: "dark", toggleTheme: () => {} });
 
 // 급행 지원 안내 카드는 당분간 노출하지 않는다. 문구를 그대로 두었으므로
 // 다시 보여줄 때는 이 값만 true 로 바꾸면 된다.
@@ -674,32 +688,73 @@ function StepShell({
   children: React.ReactNode;
   align?: "start" | "center";
 }) {
+  const [theme, setTheme] = useState<FlowTheme>("dark");
+
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
+
+  // StepShell 은 스텝마다 리마운트되므로 저장된 선택을 매번 다시 읽는다.
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(FLOW_THEME_STORAGE_KEY) === "light") {
+        setTheme("light");
+      }
+    } catch {
+      // storage 접근 불가(시크릿 모드 등): 기본 다크 유지
+    }
+  }, []);
+
+  function toggleTheme() {
+    setTheme((prev) => {
+      const next: FlowTheme = prev === "dark" ? "light" : "dark";
+      try {
+        window.localStorage.setItem(FLOW_THEME_STORAGE_KEY, next);
+      } catch {
+        // 저장 실패해도 이번 화면에는 적용된다
+      }
+      return next;
+    });
+  }
+
+  const isDark = theme === "dark";
+
   return (
-    <div
-      className="ink-surface ink-grain ink-form font-sans"
-      style={{ "--ink-accent": FLOW_ACCENT } as React.CSSProperties}
-    >
-      <MotionRoot>
-        <main
-          className={`relative min-h-screen flex ${
-            align === "center" ? "items-center" : "items-start"
-          } justify-center px-4 py-12`}
-        >
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-[36rem]"
-            style={{
-              background:
-                "radial-gradient(58rem 30rem at 50% -6rem, rgba(239,74,107,0.16), transparent 70%)",
-            }}
-          />
-          <div className="relative w-full flex justify-center">{children}</div>
-        </main>
-      </MotionRoot>
-    </div>
+    <FlowThemeContext.Provider value={{ theme, toggleTheme }}>
+      <div
+        className={
+          isDark
+            ? "ink-surface ink-grain ink-form font-sans"
+            : "bg-[#f8f9fb] font-sans"
+        }
+        style={
+          {
+            "--ink-accent": isDark ? FLOW_ACCENT : "#f43f5e",
+          } as React.CSSProperties
+        }
+      >
+        <MotionRoot>
+          <main
+            className={`relative min-h-screen flex ${
+              align === "center" ? "items-center" : "items-start"
+            } justify-center px-4 py-12`}
+          >
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 top-0 h-[36rem]"
+              style={{
+                background: isDark
+                  ? "radial-gradient(58rem 30rem at 50% -6rem, rgba(239,74,107,0.16), transparent 70%)"
+                  : "radial-gradient(52rem 26rem at 50% -8rem, rgba(244,63,94,0.055), transparent 70%)",
+              }}
+            />
+            <div className="relative w-full flex justify-center">
+              {children}
+            </div>
+          </main>
+        </MotionRoot>
+      </div>
+    </FlowThemeContext.Provider>
   );
 }
 
@@ -716,9 +771,12 @@ function StepUtilityHeader({
   onMyPage: () => void;
   progress: { current: number; total: number } | null;
 }) {
+  const { theme, toggleTheme } = useContext(FlowThemeContext);
+
   return (
     <WorkspaceHeader
-      tone="dark"
+      tone={theme}
+      onToggleTone={toggleTheme}
       showHomeLink
       onBack={onBack}
       onHome={onHome}

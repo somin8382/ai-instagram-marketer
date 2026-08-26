@@ -40,6 +40,7 @@ export function WorkspaceHeader({
   progressBarClassName = "bg-gradient-to-r from-violet-500 to-purple-500",
   tone = "light",
   showHomeLink = false,
+  onToggleTone,
 }: {
   onBack?: () => void;
   onHome: () => void;
@@ -51,6 +52,8 @@ export function WorkspaceHeader({
   /** The wordmark already goes home, but that is not a visible affordance.
    *  Multi-step flows spell it out next to 뒤로 so leaving is never a guess. */
   showHomeLink?: boolean;
+  /** When set, shows a 라이트/다크 switch that flips `tone`. */
+  onToggleTone?: () => void;
 }) {
   const styles = TONE_STYLES[tone];
 
@@ -85,6 +88,14 @@ export function WorkspaceHeader({
             )}
           </div>
           <div className="flex items-center gap-4">
+            {onToggleTone && (
+              <button
+                onClick={onToggleTone}
+                className={`text-sm transition-colors ${styles.quietLink}`}
+              >
+                {tone === "dark" ? "라이트 모드" : "다크 모드"}
+              </button>
+            )}
             <a
               href="/pricing"
               className={`text-sm transition-colors ${styles.quietLink}`}
