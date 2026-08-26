@@ -325,23 +325,29 @@ function normalizeInstagramHandle(handle?: string | null) {
   return (handle ?? "").trim().replace(/^@+/, "").replace(/\s+/g, "");
 }
 
-function buildInstagramPageUrl(handle?: string | null) {
+function buildChannelPageUrl(
+  channel: MarketingChannel | "",
+  handle?: string | null
+) {
   const normalizedHandle = normalizeInstagramHandle(handle);
-  return normalizedHandle
-    ? `https://www.instagram.com/${normalizedHandle}`
-    : "";
+  if (!normalizedHandle) return "";
+  return channel === "youtube"
+    ? `https://www.youtube.com/@${normalizedHandle}`
+    : `https://www.instagram.com/${normalizedHandle}`;
 }
 
 function getResolvedChannelUrl(
   channel: MarketingChannel | "",
-  instagramHandle: string,
+  handle: string,
   currentChannelUrl: string
 ) {
   if (channel === "instagram") {
-    return buildInstagramPageUrl(instagramHandle);
+    return buildChannelPageUrl(channel, handle);
   }
 
-  return currentChannelUrl.trim();
+  // 유튜브: 채널이 없어 새로 만드는 흐름에서는 확정한 핸들로 주소를 만들고,
+  // 이미 채널이 있으면 사용자가 직접 입력한 주소를 그대로 쓴다.
+  return buildChannelPageUrl(channel, handle) || currentChannelUrl.trim();
 }
 
 function getIndustrySelectionFromValue(value?: string | null) {
@@ -926,9 +932,11 @@ export default function Home() {
   });
 
   function hasPlanningInput() {
-    const hasRequiredChannelInput = isYoutubeChannel
-      ? isValidHttpUrl(channelUrl)
-      : hasAccount !== true || !!instagramId.trim();
+    // 두 채널 모두 "계정 없음"이면 아직 주소도 아이디도 없다. 기획 단계에서는
+    // 이미 운영 중인 채널의 정보만 요구한다.
+    const hasRequiredChannelInput =
+      hasAccount !== true ||
+      (isYoutubeChannel ? isValidHttpUrl(channelUrl) : !!instagramId.trim());
 
     return (
       !!industry.trim() &&
@@ -943,7 +951,7 @@ export default function Home() {
 
   function hasRecommendedNames() {
     return (
-      marketingChannel === "instagram" &&
+      isMarketingChannel(marketingChannel) &&
       !hasAccount &&
       Boolean(aiResult?.accountNames?.length)
     );
@@ -985,13 +993,16 @@ export default function Home() {
       {
         field: "channelUrl",
         message: "유튜브 채널 URL을 입력해주세요",
-        isMissing: isYoutubeChannel && isBlank(channelUrl),
+        isMissing: isYoutubeChannel && Boolean(hasAccount) && isBlank(channelUrl),
       },
       {
         field: "channelUrl",
         message: "유튜브 채널 URL은 http:// 또는 https://로 시작해야 합니다",
         isMissing:
-          isYoutubeChannel && !isBlank(channelUrl) && !isValidHttpUrl(channelUrl),
+          isYoutubeChannel &&
+          Boolean(hasAccount) &&
+          !isBlank(channelUrl) &&
+          !isValidHttpUrl(channelUrl),
       },
       {
         field: "industry",
@@ -1042,7 +1053,9 @@ export default function Home() {
     return collectValidationIssues<HomeValidationField>([
       {
         field: "finalInstagramId",
-        message: "인스타그램 아이디를 입력해주세요",
+        message: isYoutubeChannel
+          ? "유튜브 핸들을 입력해주세요"
+          : "인스타그램 아이디를 입력해주세요",
         isMissing: isBlank(handle),
       },
     ]);
@@ -1328,9 +1341,6 @@ export default function Home() {
             : "input";
       case "names":
         if (!marketingChannel) return "channel";
-        if (isYoutubeChannel) {
-          return hasPlanningOutput() ? "channel-materials" : "input";
-        }
         return hasRecommendedNames()
           ? "names"
           : hasPlanningOutput()
@@ -1340,9 +1350,6 @@ export default function Home() {
               : "input";
       case "confirm":
         if (!marketingChannel) return "channel";
-        if (isYoutubeChannel) {
-          return hasPlanningOutput() ? "channel-materials" : "input";
-        }
         return hasRecommendedNames()
           ? "confirm"
           : hasPlanningOutput()
@@ -1393,7 +1400,7 @@ export default function Home() {
       case "confirm":
         return "names";
       case "channel-materials":
-        return hasAccount || isYoutubeChannel ? "result" : "confirm";
+        return hasAccount ? "result" : "confirm";
       case "payment":
         return "channel-materials";
       case "status":
@@ -1425,9 +1432,7 @@ export default function Home() {
   function moveToChannelMaterials(nextInstagramId?: string) {
     const issues = [
       ...getResultStepValidationIssues(),
-      ...(marketingChannel === "instagram" && !hasAccount
-        ? getConfirmValidationIssues(nextInstagramId)
-        : []),
+      ...(hasAccount ? [] : getConfirmValidationIssues(nextInstagramId)),
     ];
 
     if (!surfaceValidationIssues(issues)) {
@@ -1438,12 +1443,16 @@ export default function Home() {
       setFinalInstagramId(nextInstagramId);
     }
 
-    if (marketingChannel === "instagram") {
-      setChannelUrl(
-        buildInstagramPageUrl(
-          typeof nextInstagramId === "string" ? nextInstagramId : effectiveInstagramId
-        )
-      );
+    // 인스타그램은 아이디로 페이지 주소가 결정되고, 유튜브는 채널을 새로
+    // 만드는 흐름에서만 확정 핸들로 주소를 만든다. 이미 채널이 있는 경우
+    // 사용자가 직접 입력한 주소를 덮어쓰면 안 된다.
+    if (marketingChannel === "instagram" || !hasAccount) {
+      const handle =
+        typeof nextInstagramId === "string" ? nextInstagramId : effectiveInstagramId;
+      const pageUrl = buildChannelPageUrl(marketingChannel, handle);
+      if (pageUrl) {
+        setChannelUrl(pageUrl);
+      }
     }
 
     if (isExpress && !completionDate) {
@@ -1458,7 +1467,7 @@ export default function Home() {
       return;
     }
 
-    if (hasAccount || isYoutubeChannel) {
+    if (hasAccount) {
       moveToChannelMaterials(isYoutubeChannel ? undefined : instagramId);
       return;
     }
@@ -2111,6 +2120,7 @@ export default function Home() {
           type: "planning",
           industry,
           productService,
+          marketingChannel,
           requestId: crypto.randomUUID(),
           previousResult: aiResult,
         }),
@@ -3533,17 +3543,19 @@ export default function Home() {
             <Reveal>
             <Card className="space-y-5">
               {isYoutubeChannel ? (
-                <InputField
-                  label="유튜브 채널 (URL)"
-                  value={channelUrl}
-                  onChange={setChannelUrl}
-                  onBlur={() => markFieldTouched("channelUrl")}
-                  placeholder="https://www.youtube.com/@our_brand"
-                  type="url"
-                  required
-                  error={planningChannelUrlError}
-                  fieldKey="channelUrl"
-                />
+                hasAccount && (
+                  <InputField
+                    label="유튜브 채널 (URL)"
+                    value={channelUrl}
+                    onChange={setChannelUrl}
+                    onBlur={() => markFieldTouched("channelUrl")}
+                    placeholder="https://www.youtube.com/@our_brand"
+                    type="url"
+                    required
+                    error={planningChannelUrlError}
+                    fieldKey="channelUrl"
+                  />
+                )
               ) : (
                 hasAccount && (
                   <InputField
@@ -3933,13 +3945,16 @@ export default function Home() {
             </div>
             </Reveal>
             <WordReveal
-              lines={["추천 인스타그램 계정명"]}
+              lines={[
+                isYoutubeChannel ? "추천 유튜브 채널명" : "추천 인스타그램 계정명",
+              ]}
               className="text-[2.1rem] leading-snug font-bold tracking-tight text-gray-900"
               delay={0.08}
             />
             <Reveal y={14}>
             <p className="text-sm text-gray-500">
-              AI가 브랜드에 맞는 인스타그램 계정명을 추천해드립니다
+              AI가 브랜드에 맞는 {channelDisplayName} {isYoutubeChannel ? "채널명" : "계정명"}을
+              추천해드립니다
             </p>
             </Reveal>
             {aiSource && (
@@ -3964,7 +3979,9 @@ export default function Home() {
           <Reveal>
           <Card className="space-y-4">
             <div className="flex items-center justify-between">
-              <SectionLabel>추천 계정명</SectionLabel>
+              <SectionLabel>
+                {isYoutubeChannel ? "추천 채널명" : "추천 계정명"}
+              </SectionLabel>
               <button
                 onClick={() => handleGenerate("names")}
                 disabled={loading}
@@ -4038,15 +4055,23 @@ export default function Home() {
 
           <div className="text-center space-y-3 pt-4">
             <WordReveal
-              lines={["인스타그램 계정 생성 확인"]}
+              lines={[
+                isYoutubeChannel
+                  ? "유튜브 채널 생성 확인"
+                  : "인스타그램 계정 생성 확인",
+              ]}
               className="text-[2rem] leading-snug font-bold tracking-tight text-gray-900"
               delay={0.08}
             />
             <Reveal y={14}>
             <p className="text-sm text-gray-500 leading-relaxed max-w-md mx-auto">
-              추천 계정명을 참고해 인스타그램 계정을 생성해주세요.
+              {isYoutubeChannel
+                ? "추천 채널명을 참고해 유튜브 채널을 만들어주세요."
+                : "추천 계정명을 참고해 인스타그램 계정을 생성해주세요."}
               <br />
-              생성 완료 후 최종 아이디를 입력해주세요.
+              {isYoutubeChannel
+                ? "생성 완료 후 채널 핸들을 입력해주세요."
+                : "생성 완료 후 최종 아이디를 입력해주세요."}
             </p>
             </Reveal>
           </div>
@@ -4054,9 +4079,12 @@ export default function Home() {
           {/* 추천 이름 요약 */}
           <Reveal>
           <Card className="space-y-2">
-            <SectionLabel>추천 계정명</SectionLabel>
+            <SectionLabel>
+              {isYoutubeChannel ? "추천 채널명" : "추천 계정명"}
+            </SectionLabel>
             <p className="text-xs text-gray-500">
-              추천 계정명을 누르면 자동 입력됩니다
+              {isYoutubeChannel ? "추천 채널명을" : "추천 계정명을"} 누르면 자동
+              입력됩니다
             </p>
             <div className="flex flex-wrap gap-2">
               {aiResult?.accountNames.map((item, i) => (
@@ -4080,7 +4108,7 @@ export default function Home() {
           <Reveal>
           <Card className="space-y-4">
             <InputField
-              label="최종 인스타그램 아이디"
+              label={isYoutubeChannel ? "최종 유튜브 핸들" : "최종 인스타그램 아이디"}
               value={finalInstagramId}
               onChange={setFinalInstagramId}
               onBlur={() => markFieldTouched("finalInstagramId")}

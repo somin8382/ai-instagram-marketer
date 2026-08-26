@@ -336,6 +336,7 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
   const industry = String(body.industry ?? "").trim();
   const productService = String(body.productService ?? "").trim();
   const requestId = String(body.requestId ?? "").trim();
+  const marketingChannel = String(body.marketingChannel ?? "").trim();
 
   if (!industry || !productService) {
     return Response.json(
@@ -348,6 +349,7 @@ async function handlePlanning(body: AiRequestBody, apiKey: string) {
     apiKey,
     industry,
     productService,
+    marketingChannel,
     requestId,
     previousResult: body.previousResult ?? null,
   });
@@ -1441,12 +1443,14 @@ async function generatePlanningResult({
   apiKey,
   industry,
   productService,
+  marketingChannel,
   requestId,
   previousResult,
 }: {
   apiKey: string;
   industry: string;
   productService: string;
+  marketingChannel: string;
   requestId: string;
   previousResult?: AccountPlanResult | null;
 }) {
@@ -1465,6 +1469,7 @@ async function generatePlanningResult({
           content: buildPlanningPrompt({
             industry,
             productService,
+            marketingChannel,
             requestId,
             previousResult,
             retryReason,
@@ -1510,12 +1515,14 @@ async function generatePlanningResult({
 function buildPlanningPrompt({
   industry,
   productService,
+  marketingChannel,
   requestId,
   previousResult,
   retryReason,
 }: {
   industry: string;
   productService: string;
+  marketingChannel: string;
   requestId: string;
   previousResult?: AccountPlanResult | null;
   retryReason?: string;
@@ -1527,10 +1534,13 @@ function buildPlanningPrompt({
         .join(", ")
     : "";
   const previousPlan = previousResult?.accountPlan;
+  const isYoutube = marketingChannel === "youtube";
+  const channelName = isYoutube ? "유튜브" : "인스타그램";
+  const accountWord = isYoutube ? "채널" : "계정";
 
   return `
-당신은 한국의 인스타그램 마케팅 전문가입니다.
-아래 비즈니스 정보를 바탕으로 인스타그램 계정 기획을 해주세요.
+당신은 한국의 ${channelName} 마케팅 전문가입니다.
+아래 비즈니스 정보를 바탕으로 ${channelName} ${accountWord} 기획을 해주세요.
 
 업종: ${industry}
 판매하는 상품/서비스: ${productService}
@@ -1538,10 +1548,15 @@ function buildPlanningPrompt({
 중요 규칙:
 - accountNames의 name은 반드시 영문 소문자만 사용, 공백 없이, 짧고 브랜드감 있게
 - accountNames의 name에는 숫자, 언더스코어, 하이픈, 특수문자를 넣지 마세요
+- accountNames는 ${channelName} ${accountWord}명으로 바로 쓸 수 있어야 합니다${
+    isYoutube ? " (유튜브 핸들 @이름 형태로 쓰이므로 @는 빼고 이름만)" : ""
+  }
 - 업종을 직접적으로 포함하지 마세요. 창의적이고 기억하기 쉬운 이름으로
 - meaning은 왜 이 이름을 추천하는지 한국어로 짧게 설명 (1문장)
 - accountPlan의 모든 내용은 한국어, 이 비즈니스에 맞는 구체적 내용이어야 합니다
-- bio는 인스타그램 소개란에 들어갈 2줄 매력적인 문구 (이모지 포함)
+- bio는 ${channelName} ${
+    isYoutube ? "채널 설명란" : "소개란"
+  }에 들어갈 2줄 매력적인 문구 (이모지 포함)
 - 매번 완전히 새로운 결과를 생성하세요. 이전 결과를 반복하지 마세요.
 - accountNames는 반드시 서로 달라야 하며, 정확히 3개만 제안하세요.
 - generation_id(${requestId || "none"})를 참고해 이전 응답과 다른 표현을 사용하세요.
