@@ -843,27 +843,6 @@ export default function MyPage() {
     router.push("/");
   }
 
-  function handleGoHome() {
-    if (typeof window !== "undefined") {
-      try {
-        const rawAppState = window.localStorage.getItem(APP_STORAGE_KEY);
-        const parsedAppState = rawAppState
-          ? (JSON.parse(rawAppState) as Record<string, unknown>)
-          : {};
-        window.localStorage.setItem(
-          APP_STORAGE_KEY,
-          JSON.stringify({ ...parsedAppState, step: "landing" })
-        );
-      } catch {
-        window.localStorage.setItem(
-          APP_STORAGE_KEY,
-          JSON.stringify({ step: "landing" })
-        );
-      }
-    }
-    router.push("/");
-  }
-
   useEffect(() => {
     let active = true;
     let authSubscription: { unsubscribe: () => void } | null = null;
@@ -1245,12 +1224,19 @@ export default function MyPage() {
     <main className="min-h-screen bg-[#f8f9fb] px-4 py-12">
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between gap-3">
-          <button
-            onClick={handleGoHome}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 홈으로
-          </button>
+          <div className="flex items-center gap-4">
+            <span className="text-sm font-bold tracking-tight text-gray-900">
+              큐밋
+            </span>
+            {/* /preview/home: the visitors' landing, reachable while signed in
+                (a bare `/` document load would bounce back here). */}
+            <button
+              onClick={() => router.push("/preview/home")}
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              서비스 소개
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             {isTestAccountAuthenticated && (
               <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
@@ -1292,39 +1278,87 @@ export default function MyPage() {
         </div>
 
         {/* Product rail: the signed-in route into the other products, since
-            `/` now sends customers straight here instead of the landing page. */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button
-            onClick={handleGoHome}
-            className="group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 hover:border-rose-300 hover:shadow-md active:scale-[0.99] transition-all"
-          >
-            <p className="text-xs font-semibold text-rose-500">AI 마케터</p>
-            <p className="mt-1 text-sm font-bold text-gray-900 group-hover:text-rose-600 transition-colors">
-              신규 신청 · 연장
-            </p>
-          </button>
-          <button
-            onClick={() => router.push("/tools")}
-            className="group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 hover:border-violet-300 hover:shadow-md active:scale-[0.99] transition-all"
-          >
-            <p className="text-xs font-semibold text-violet-500">
-              게시물 AI 생성기
-            </p>
-            <p className="mt-1 text-sm font-bold text-gray-900 group-hover:text-violet-600 transition-colors">
-              게시물 만들기
-            </p>
-          </button>
-          <button
-            onClick={() => router.push("/landing-ai")}
-            className="group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 hover:border-blue-300 hover:shadow-md active:scale-[0.99] transition-all"
-          >
-            <p className="text-xs font-semibold text-blue-500">
-              랜딩페이지 개발 AI
-            </p>
-            <p className="mt-1 text-sm font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
-              준비 중 · 사전 신청
-            </p>
-          </button>
+            `/` now sends customers straight here instead of the landing page.
+            Cards are status-aware: badge = where I stand, button = what I can
+            do next, so they read as part of the dashboard rather than ads. */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            서비스 바로가기
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {(() => {
+              const marketerStatus = loading
+                ? null
+                : snapshot.application
+                  ? { label: snapshot.application.status, cls: "bg-rose-50 text-rose-600" }
+                  : { label: "미신청", cls: "bg-gray-100 text-gray-500" };
+              const generatorStatus = loading
+                ? null
+                : snapshot.usage.hasActiveSubscription
+                  ? {
+                      label: `구독중 · ${snapshot.usage.remainingPostCount}회 남음`,
+                      cls: "bg-emerald-50 text-emerald-600",
+                    }
+                  : !snapshot.usage.freeTrialUsed
+                    ? { label: "무료 체험 가능", cls: "bg-violet-50 text-violet-600" }
+                    : { label: "미구독", cls: "bg-gray-100 text-gray-500" };
+              const rail = [
+                {
+                  name: "AI 마케터",
+                  nameCls: "text-rose-500",
+                  hoverCls: "hover:border-rose-300",
+                  status: marketerStatus,
+                  action: snapshot.application ? "연장 · 추가 신청" : "신청하기",
+                  onClick: () => router.push("/?screen=apply"),
+                },
+                {
+                  name: "게시물 AI 생성기",
+                  nameCls: "text-violet-500",
+                  hoverCls: "hover:border-violet-300",
+                  status: generatorStatus,
+                  action: "게시물 만들기",
+                  onClick: () => router.push("/tools"),
+                },
+                {
+                  name: "랜딩페이지 개발 AI",
+                  nameCls: "text-blue-500",
+                  hoverCls: "hover:border-blue-300",
+                  status: { label: "준비 중", cls: "bg-blue-50 text-blue-600" },
+                  action: "사전 신청",
+                  onClick: () => router.push("/landing-ai"),
+                },
+              ];
+              return rail.map((item) => (
+                <button
+                  key={item.name}
+                  onClick={item.onClick}
+                  className={`group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 ${item.hoverCls} hover:shadow-md active:scale-[0.99] transition-all`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={`text-xs font-semibold ${item.nameCls}`}>
+                      {item.name}
+                    </p>
+                    {item.status && (
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${item.status.cls}`}
+                      >
+                        {item.status.label}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-sm font-bold text-gray-900 flex items-center gap-1">
+                    {item.action}
+                    <span
+                      aria-hidden="true"
+                      className="text-gray-300 group-hover:text-gray-500 group-hover:translate-x-0.5 transition-all"
+                    >
+                      →
+                    </span>
+                  </p>
+                </button>
+              ));
+            })()}
+          </div>
         </div>
 
         {/* One-time popup for admin-issued bonus credits */}
@@ -2252,10 +2286,10 @@ export default function MyPage() {
                             : `월 구독 시작하기 (${POST_GENERATOR_MONTHLY_PRICE.toLocaleString()}원)`}
                       </button>
                       <button
-                        onClick={handleGoHome}
+                        onClick={() => router.push("/?screen=apply")}
                         className="w-full py-3 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                       >
-                        AI 마케팅 서비스 보기
+                        AI 마케터 신청하기
                       </button>
                     </div>
                   </div>
