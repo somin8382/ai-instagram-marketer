@@ -24,6 +24,7 @@ export type Database = {
           youtube_url: string | null;
           company_name: string | null;
           generation_prefs: Json | null;
+          partner_program: string | null;
         };
         Insert: {
           id: string;
@@ -39,6 +40,7 @@ export type Database = {
           youtube_url?: string | null;
           company_name?: string | null;
           generation_prefs?: Json | null;
+          partner_program?: string | null;
         };
         Update: {
           id?: string;
@@ -54,6 +56,7 @@ export type Database = {
           youtube_url?: string | null;
           company_name?: string | null;
           generation_prefs?: Json | null;
+          partner_program?: string | null;
         };
       };
       applications: {

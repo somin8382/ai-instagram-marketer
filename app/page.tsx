@@ -833,6 +833,9 @@ export default function Home() {
   const [postGeneratorSubscription, setPostGeneratorSubscription] =
     useState<SavedSubscription | null>(null);
   const [isRequestLinked, setIsRequestLinked] = useState(false);
+  // 모두의창업 참여자에게만 전용 혜택 안내를 띄운다. 로그아웃 상태와 일반
+  // 가입자는 false 라 노출되지 않는다.
+  const [isPartnerMember, setIsPartnerMember] = useState(false);
   const [applicationId, setApplicationId] = useState("");
   const [paymentId, setPaymentId] = useState("");
   const [submissionError, setSubmissionError] = useState<string | null>(null);
@@ -1998,6 +2001,7 @@ export default function Home() {
         setUserId("");
         setPostGeneratorSubscription(null);
         setIsRequestLinked(false);
+        setIsPartnerMember(false);
         return;
       }
 
@@ -2013,6 +2017,7 @@ export default function Home() {
       setAuthName(snapshot.authName);
       setUserId(snapshot.userId);
       setIsRequestLinked(snapshot.isRequestLinked);
+      setIsPartnerMember(snapshot.isPartnerMember);
     };
 
     void syncAuth();
@@ -2029,6 +2034,7 @@ export default function Home() {
         setUserId("");
         setPostGeneratorSubscription(null);
         setIsRequestLinked(false);
+        setIsPartnerMember(false);
         return;
       }
 
@@ -2043,6 +2049,7 @@ export default function Home() {
         setAuthName(snapshot.authName);
         setUserId(snapshot.userId);
         setIsRequestLinked(snapshot.isRequestLinked);
+        setIsPartnerMember(snapshot.isPartnerMember);
       });
     });
 
@@ -2961,6 +2968,7 @@ export default function Home() {
     setUserId("");
     setPostGeneratorSubscription(null);
     setIsRequestLinked(false);
+    setIsPartnerMember(false);
     setHasTestAccess(false);
   }
 
@@ -5752,6 +5760,7 @@ export default function Home() {
                     {formattedSubscriptionPrice}원
                   </p>
                 </div>
+                {isPartnerMember && (
                 <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4 space-y-3">
                   <p className="text-xs font-semibold text-violet-500">
                     모두의창업 이용자 전용 혜택
@@ -5773,6 +5782,7 @@ export default function Home() {
                     1:1 카카오톡으로 문의해주세요.
                   </p>
                 </div>
+                )}
               </div>
             </Card>
 

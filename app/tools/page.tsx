@@ -353,6 +353,9 @@ export default function ToolsPage() {
   const [authName, setAuthName] = useState("");
   const [userId, setUserId] = useState("");
   const [isRequestLinked, setIsRequestLinked] = useState(false);
+  // 모두의창업 참여자에게만 전용 혜택 안내를 띄운다. 로그아웃 상태와 일반
+  // 가입자는 false 라 노출되지 않는다.
+  const [isPartnerMember, setIsPartnerMember] = useState(false);
 
   const [contextIndustry, setContextIndustry] = useState("");
   const [contextProductService, setContextProductService] = useState("");
@@ -952,6 +955,7 @@ export default function ToolsPage() {
         setAuthName("");
         setUserId("");
         setIsRequestLinked(false);
+        setIsPartnerMember(false);
         return;
       }
 
@@ -970,6 +974,7 @@ export default function ToolsPage() {
       setAuthName(snapshot.authName);
       setUserId(snapshot.userId);
       setIsRequestLinked(snapshot.isRequestLinked);
+      setIsPartnerMember(snapshot.isPartnerMember);
     };
 
     void syncAuth();
@@ -985,6 +990,7 @@ export default function ToolsPage() {
         setAuthName("");
         setUserId("");
         setIsRequestLinked(false);
+        setIsPartnerMember(false);
         return;
       }
 
@@ -999,6 +1005,7 @@ export default function ToolsPage() {
         setAuthName(snapshot.authName);
         setUserId(snapshot.userId);
         setIsRequestLinked(snapshot.isRequestLinked);
+        setIsPartnerMember(snapshot.isPartnerMember);
       });
     });
 
@@ -1501,6 +1508,7 @@ export default function ToolsPage() {
     setAuthName("");
     setUserId("");
     setIsRequestLinked(false);
+    setIsPartnerMember(false);
     setHasTestAccess(false);
     setPostGeneratorSubscription(null);
   }
@@ -1950,6 +1958,7 @@ export default function ToolsPage() {
                     {formattedSubscriptionPrice}원
                   </p>
                 </div>
+                {isPartnerMember && (
                 <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4 space-y-3">
                   <p className="text-xs font-semibold text-violet-500">
                     모두의창업 이용자 전용 혜택
@@ -1971,6 +1980,7 @@ export default function ToolsPage() {
                     1:1 카카오톡으로 문의해주세요.
                   </p>
                 </div>
+                )}
               </div>
             </Card>
 
@@ -2415,6 +2425,7 @@ export default function ToolsPage() {
                     </p>
                   </div>
                 </div>
+                {isPartnerMember && (
                 <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <svg
@@ -2447,6 +2458,7 @@ export default function ToolsPage() {
                     </div>
                   </div>
                 </div>
+                )}
               </div>
               {hasHydrated && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

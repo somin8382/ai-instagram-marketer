@@ -20,6 +20,9 @@ import {
   POST_GENERATOR_PLAN_TYPE,
 } from "../post-generator/subscription";
 
+/** profiles.partner_program 에 들어가는 값. 모두의창업 참여자 표시. */
+export const PARTNER_PROGRAM_MODU = "모두의창업";
+
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
 const PENDING_POSTS_STORAGE_KEY = "qmeet-pending-generated-posts";
 
@@ -29,6 +32,8 @@ export type AuthSnapshot = {
   authName: string;
   userId: string;
   isRequestLinked: boolean;
+  /** 모두의창업 참여자만 전용 혜택 안내를 본다. 프로필의 partner_program 값. */
+  isPartnerMember: boolean;
 };
 
 type PendingGeneratedPost = {
@@ -281,6 +286,9 @@ function buildAuthSnapshot(user: User, requestEmail?: string | null): AuthSnapsh
     authEmail,
     authName,
     userId: user.id,
+    // 프로필을 읽기 전이므로 일반 사용자로 시작한다. syncProfileAndLinkData 가
+    // 지원 이력 반영 뒤 실제 값으로 덮어쓴다.
+    isPartnerMember: false,
     isRequestLinked:
       !!requestEmail &&
       normalizeEmail(requestEmail) === normalizeEmail(authEmail),
@@ -810,6 +818,21 @@ export async function redeemServiceGrants({
 
         if (updateResponse.error) {
           errors.push(`service_grants_update:${updateResponse.error.message}`);
+        } else {
+          // 지원 이력이 붙는 순간이 곧 '모두의창업 참여자'가 되는 시점이다.
+          // 프로필에 표시해 두면 화면마다 service_grants 를 조인하지 않아도 된다.
+          const markResponse = (await ((
+            supabase
+              .from("profiles")
+              .update({ partner_program: PARTNER_PROGRAM_MODU } as never)
+              .eq("id", userId) as unknown
+          ) as Promise<{ error: { message: string } | null }>)) as {
+            error: { message: string } | null;
+          };
+
+          if (markResponse.error) {
+            errors.push(`profile_partner:${markResponse.error.message}`);
+          }
         }
       }
     }
@@ -884,6 +907,24 @@ export async function syncProfileAndLinkData({
   await flushPendingGeneratedPosts({
     email: snapshot.authEmail || emailCandidates[0] || null,
   });
+
+  // redeem 이 방금 표시했을 수 있으므로 그 뒤에 읽는다.
+  const partnerResponse = (await ((
+    getSupabaseBrowserClient()
+      .from("profiles")
+      .select("partner_program")
+      .eq("id", user.id)
+      .maybeSingle() as unknown
+  ) as Promise<{
+    data: { partner_program: string | null } | null;
+    error: { message: string } | null;
+  }>)) as {
+    data: { partner_program: string | null } | null;
+    error: { message: string } | null;
+  };
+
+  // 조회에 실패하면 혜택을 노출하지 않는 쪽(false)이 안전하다.
+  snapshot.isPartnerMember = Boolean(partnerResponse.data?.partner_program);
 
   saveAuthSnapshot(snapshot);
 
