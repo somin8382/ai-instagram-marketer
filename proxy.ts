@@ -6,8 +6,9 @@ import { NextResponse, type NextRequest } from "next/server";
 const SIGNED_IN_COOKIE = "qmeet_signed_in";
 
 /**
- * Signed-in visitors landing on `/` are sent to their dashboard instead of the
- * marketing page. A customer who already pays does not need to be sold again.
+ * Signed-in visitors landing on `/` are sent to the service hub (/home) instead
+ * of the marketing page. A customer who already pays does not need to be sold
+ * again; they need a launcher for the tools they bought.
  *
  * Deliberately narrow:
  * - Only full document loads. In-app client navigations to `/` (including the
@@ -26,7 +27,7 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  return NextResponse.redirect(new URL("/mypage", request.url));
+  return NextResponse.redirect(new URL("/home", request.url));
 }
 
 export const config = {

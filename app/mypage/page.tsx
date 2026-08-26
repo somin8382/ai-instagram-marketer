@@ -1225,9 +1225,12 @@ export default function MyPage() {
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-4">
-            <span className="text-sm font-bold tracking-tight text-gray-900">
-              큐밋
-            </span>
+            <button
+              onClick={() => router.push("/home")}
+              className="text-sm font-bold tracking-tight text-gray-900"
+            >
+              ← 큐밋 홈
+            </button>
             {/* /preview/home: the visitors' landing, reachable while signed in
                 (a bare `/` document load would bounce back here). */}
             <button
