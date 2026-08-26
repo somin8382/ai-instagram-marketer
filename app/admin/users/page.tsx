@@ -408,7 +408,7 @@ const EXPORT_COLUMNS: Array<{
   { header: "브랜드", modes: ["normal"], get: (u) => u.brandName ?? "" },
   { header: "주관기관", modes: ["normal", "capture"], get: (u) => u.hostOrg ?? "" },
   { header: "멘토기관", modes: WIDE_MODES, get: (u) => u.mentorOrg ?? "" },
-  { header: "전화", modes: ["normal"], get: (u) => u.phone ?? "" },
+  { header: "전화", modes: ["normal", "userdb"], get: (u) => u.phone ?? "" },
   { header: "무료 유저", modes: ["normal"], get: (u) => (u.freeUser ? "O" : "") },
   { header: "AI 마케터 구독", modes: ["normal", "capture"], get: (u) => (u.aiMarketerSub ? "O" : "") },
   { header: "AI 생성기 구독", modes: ["normal", "capture"], get: (u) => (u.aiGeneratorSub ? "O" : "") },
@@ -1784,6 +1784,7 @@ export default function AdminUsersPage() {
                     사용자{sortIndicator("name")}
                   </th>
                   <th className={plainHeaderCls}>플랫폼</th>
+                  <th className={plainHeaderCls}>전화</th>
                   <th className={plainHeaderCls}>구독 중인 서비스</th>
                   <th className={plainHeaderCls}>마케팅 진행중인 정보</th>
                   <th className={plainHeaderCls}>마지막 접속일</th>
@@ -1810,6 +1811,9 @@ export default function AdminUsersPage() {
                         : user.marketingChannel === "instagram"
                           ? "인스타그램"
                           : "—"}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
+                      {user.phone ?? <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       {subscribedServices(user).length ? (
@@ -1846,7 +1850,7 @@ export default function AdminUsersPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="px-3 py-10 text-center text-gray-400"
                     >
                       조건에 맞는 사용자가 없습니다
