@@ -1961,7 +1961,7 @@ export default function ToolsPage() {
                 {isPartnerMember && (
                 <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-4 space-y-3">
                   <p className="text-xs font-semibold text-violet-500">
-                    모두의창업 이용자 전용 혜택
+                    특별 혜택
                   </p>
                   <div className="space-y-1.5">
                     <p className="text-sm font-medium text-gray-600">
@@ -2444,7 +2444,7 @@ export default function ToolsPage() {
                       <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
                     </svg>
                     <p className="text-sm font-semibold text-emerald-800">
-                      모두의창업 이용자 전용 혜택
+                      특별 혜택
                     </p>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
