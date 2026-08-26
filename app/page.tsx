@@ -722,7 +722,6 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [aiSource, setAiSource] = useState<"api" | null>(null);
   const [postError, setPostError] = useState<string | null>(null);
 
   // Confirm (for no-account flow)
@@ -2139,7 +2138,6 @@ export default function Home() {
         throw new Error("실제 OpenRouter API 응답이 아닙니다.");
       }
 
-      setAiSource("api");
       setAiResult(data);
       goToStep(targetStep);
     } catch (err) {
@@ -2149,7 +2147,6 @@ export default function Home() {
           ? err.message
           : "AI 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
       setAiError(message);
-      setAiSource(null);
       goToStep(targetStep);
     } finally {
       setLoading(false);
