@@ -60,6 +60,7 @@ import { WorkspaceHeader } from "@/lib/ui/workspace-header";
 import { MotionRoot } from "@/lib/ui/motion/motion-root";
 import { Reveal, WordReveal } from "@/lib/ui/motion/reveal";
 import "@/lib/ui/motion/motion.css";
+import "@/lib/ui/ink-form.css";
 import {
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
@@ -319,6 +320,9 @@ function formatOutcomeDiff(metric: OutcomeMetricKey, value: number): string {
 
   return `+${value.toLocaleString()}개 이상`;
 }
+
+// 신청 플로우는 로그인 전 랜딩과 같은 다크 표면·액센트를 쓴다.
+const FLOW_ACCENT = "#ef4a6b";
 
 // 급행 지원 안내 카드는 당분간 노출하지 않는다. 문구를 그대로 두었으므로
 // 다시 보여줄 때는 이 값만 true 로 바꾸면 된다.
@@ -663,14 +667,25 @@ function StepShell({
     window.scrollTo(0, 0);
   }, []);
   return (
-    <div style={{ "--ink-accent": "#f43f5e" } as React.CSSProperties}>
+    <div
+      className="ink-surface ink-grain ink-form font-sans"
+      style={{ "--ink-accent": FLOW_ACCENT } as React.CSSProperties}
+    >
       <MotionRoot>
         <main
-          className={`min-h-screen bg-[#f8f9fb] bg-[radial-gradient(52rem_26rem_at_50%_-8rem,rgba(244,63,94,0.055),transparent_70%)] flex ${
+          className={`relative min-h-screen flex ${
             align === "center" ? "items-center" : "items-start"
           } justify-center px-4 py-12`}
         >
-          {children}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-[36rem]"
+            style={{
+              background:
+                "radial-gradient(58rem 30rem at 50% -6rem, rgba(239,74,107,0.16), transparent 70%)",
+            }}
+          />
+          <div className="relative w-full flex justify-center">{children}</div>
         </main>
       </MotionRoot>
     </div>
@@ -692,6 +707,7 @@ function StepUtilityHeader({
 }) {
   return (
     <WorkspaceHeader
+      tone="dark"
       onBack={onBack}
       onHome={onHome}
       onMyPage={onMyPage}
@@ -2967,17 +2983,17 @@ export default function Home() {
 
   if (isMarketerFormStep && !grantSubmitted && isAppliedCheckPending) {
     return (
-      <main className={wrapper}>
+      <StepShell>
         <div className="max-w-2xl w-full flex justify-center py-24">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-rose-500" />
         </div>
-      </main>
+      </StepShell>
     );
   }
 
   if (isMarketerFormStep && !grantSubmitted && isAlreadyApplied) {
     return (
-      <main className={wrapper}>
+      <StepShell>
         <div className="max-w-2xl w-full space-y-6">
           <StepUtilityHeader
             onBack={() => goToStep("landing")}
@@ -3013,7 +3029,7 @@ export default function Home() {
             </button>
           </Card>
         </div>
-      </main>
+      </StepShell>
     );
   }
 
@@ -3683,7 +3699,7 @@ export default function Home() {
   if (activeStep === "result") {
     if (loading) {
       return (
-        <main className={wrapper}>
+        <StepShell>
           <div className="max-w-2xl w-full space-y-6">
             <StepUtilityHeader
               onBack={() => navigateBack("result")}
@@ -3698,7 +3714,7 @@ export default function Home() {
               </p>
             </div>
           </div>
-        </main>
+        </StepShell>
       );
     }
 
@@ -4514,11 +4530,11 @@ export default function Home() {
     if (marketerGrantState.status === "idle") {
       // Waiting for grant check to resolve — show spinner to prevent paid-UI flash.
       return (
-        <main className={wrapper}>
+        <StepShell>
           <div className="max-w-2xl w-full flex justify-center py-24">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-rose-500" />
           </div>
-        </main>
+        </StepShell>
       );
     }
 
@@ -4527,7 +4543,7 @@ export default function Home() {
         // Completion screen for granted users.
         return (
           <>
-          <main className={wrapper}>
+          <StepShell>
             <div className="max-w-2xl w-full space-y-6">
               <StepUtilityHeader
                 onBack={() => goToStep("landing")}
@@ -4579,7 +4595,7 @@ export default function Home() {
                 마이페이지로 이동
               </button>
             </div>
-          </main>
+          </StepShell>
           </>
         );
       }
@@ -4588,7 +4604,7 @@ export default function Home() {
         // Error state with retry.
         return (
           <>
-          <main className={wrapper}>
+          <StepShell>
             <div className="max-w-2xl w-full space-y-6">
               <StepUtilityHeader
                 onBack={() => goToStep("landing")}
@@ -4611,14 +4627,14 @@ export default function Home() {
                 </button>
               </Card>
             </div>
-          </main>
+          </StepShell>
           </>
         );
       }
 
       // Pre-check in progress or submitting.
       return (
-        <main className={wrapper}>
+        <StepShell>
           <div className="max-w-2xl w-full space-y-6">
             <StepUtilityHeader
               onBack={() => goToStep("landing")}
@@ -4633,7 +4649,7 @@ export default function Home() {
               </p>
             </Card>
           </div>
-        </main>
+        </StepShell>
       );
     }
     // marketerGrantState.status === "none": fall through to the existing paid flow.
