@@ -7,10 +7,31 @@ import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { MotionRoot } from "@/lib/ui/motion/motion-root";
 import { HorizontalPan } from "@/lib/ui/motion/horizontal-pan";
 import { Reveal, ScrubbedSentence, WordReveal } from "@/lib/ui/motion/reveal";
+import { CountUp } from "@/lib/ui/motion/count-up";
 import { REVIEWS, quoteLength } from "@/lib/ui/reviews";
 import "@/lib/ui/motion/motion.css";
 
 const ACCENT = "#ef4a6b";
+
+/** 신청 플로우가 실제로 안내하는 범위에 맞춘 핵심 기능. */
+const CAPABILITIES = [
+  {
+    title: "계정 기획",
+    body: "브랜드에 맞는 계정 방향과 소개글, 운영 컨셉을 먼저 정리합니다.",
+  },
+  {
+    title: "계정명 추천",
+    body: "계정이 없다면 이름 후보부터 제안하고, 만든 뒤 그대로 이어서 운영합니다.",
+  },
+  {
+    title: "콘텐츠 기획",
+    body: "무엇을 언제 올릴지 월 1~2회 업로드 기준으로 기획해 드립니다.",
+  },
+  {
+    title: "노출과 반응 운영",
+    body: "팔로워와 좋아요, 댓글이 실제로 쌓이도록 목표를 두고 운영합니다.",
+  },
+];
 
 /**
  * Renders `**...**` spans as bold in the same typeface. Mixed-family emphasis
@@ -60,11 +81,31 @@ export function HomeLanding({
       price: "월 2만원",
       href: "/tools",
     },
+  ];
+
+  // 실제 고객이 경험한 변화. 스크롤이 닿으면 뒤 숫자가 앞 숫자에서부터 오른다.
+  const stats = [
     {
-      name: "랜딩페이지 개발 AI",
-      summary: "한 문장으로 인스타 프로필에 걸 페이지 한 장을 만듭니다.",
-      price: "준비 중",
-      href: "/landing-ai",
+      label: "구독자 달성 사례",
+      from: 0,
+      to: 500,
+      suffix: "+",
+      beforeLabel: "0",
+    },
+    {
+      label: "고객 만족도",
+      from: 0,
+      to: 10,
+      suffix: "/10",
+      beforeLabel: "0",
+    },
+    {
+      label: "비용 비교",
+      from: 3_000_000,
+      to: 300_000,
+      prefix: "₩",
+      beforeLabel: "₩3,000,000",
+      footnote: true,
     },
   ];
 
@@ -182,19 +223,141 @@ export function HomeLanding({
             </div>
           </section>
 
-          {/* Positioning. Scroll paces the sentence one beat at a time. */}
+          {/* Problem. Scroll paces the sentence one beat at a time. */}
           <section className="mx-auto max-w-4xl px-5 py-28 sm:px-8 sm:py-36">
             <ScrubbedSentence
-              text="마케터 한 명을 채용하면 월 급여만 300만원이 넘습니다. 같은 일을 10분의 1 비용으로 맡길 수 있다면 어떨까요."
+              text="마케터를 직접 채용하기에는 비용도, 관리도 부담됩니다."
               className="text-2xl font-medium leading-[1.6] tracking-tight sm:text-4xl sm:leading-[1.5]"
             />
+          </section>
+
+          {/* Proof. The numbers carry this section, so each one counts up from
+              its "before" value the moment it lands in view. */}
+          <section className="mx-auto max-w-6xl px-5 pb-28 sm:px-8 sm:pb-36">
+            <WordReveal
+              as="h2"
+              lines={["실제 고객이", "경험한 변화"]}
+              accentWords={["변화"]}
+              className="text-4xl font-semibold leading-[1.1] tracking-tighter sm:text-6xl"
+            />
+
+            <Reveal className="mt-14">
+              <div
+                className="border-t"
+                style={{ borderColor: "var(--ink-line)" }}
+              >
+                {stats.map((stat) => (
+                  <div
+                    key={stat.label}
+                    data-reveal-item
+                    className="grid grid-cols-1 gap-4 border-b py-9 md:grid-cols-12 md:items-center md:gap-6 md:py-11"
+                    style={{ borderColor: "var(--ink-line)" }}
+                  >
+                    <p
+                      className="text-sm font-medium md:col-span-4 sm:text-base"
+                      style={{ color: "var(--ink-muted)" }}
+                    >
+                      {stat.label}
+                      {stat.footnote ? (
+                        <span style={{ color: "var(--ink-accent)" }}>*</span>
+                      ) : null}
+                    </p>
+
+                    <div className="flex flex-wrap items-baseline gap-3 md:col-span-8 sm:gap-4">
+                      <span
+                        className="font-mono text-2xl tabular-nums sm:text-3xl"
+                        style={{ color: "var(--ink-muted)" }}
+                      >
+                        {stat.beforeLabel}
+                      </span>
+                      <ArrowRight
+                        size={20}
+                        weight="bold"
+                        className="shrink-0 translate-y-[-0.15em]"
+                        style={{ color: "var(--ink-accent)" }}
+                      />
+                      <CountUp
+                        from={stat.from}
+                        to={stat.to}
+                        prefix={stat.prefix}
+                        suffix={stat.suffix}
+                        className="font-mono text-4xl font-semibold tracking-tight sm:text-6xl"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Reveal>
+
+            <Reveal className="mt-6">
+              <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
+                * 마케터 1인을 직접 채용했을 때의 월 급여와 AI 마케터 1명 월
+                이용료를 비교한 금액입니다.
+              </p>
+            </Reveal>
+          </section>
+
+          {/* What the 마케터 actually does. */}
+          <section className="mx-auto max-w-6xl px-5 pb-28 sm:px-8 sm:pb-36">
+            <div className="grid grid-cols-1 gap-14 md:grid-cols-12 md:gap-10">
+              <div className="md:col-span-5">
+                <WordReveal
+                  as="h2"
+                  lines={["맡기면", "이렇게 합니다"]}
+                  className="text-4xl font-semibold leading-[1.1] tracking-tighter sm:text-5xl"
+                />
+                <Reveal className="mt-6">
+                  <p
+                    className="text-base leading-relaxed sm:text-lg"
+                    style={{ color: "var(--ink-muted)" }}
+                  >
+                    계정이 아직 없어도 괜찮습니다. 이름을 정하는 일부터
+                    같이 시작합니다.
+                  </p>
+                </Reveal>
+              </div>
+
+              <Reveal className="md:col-span-6 md:col-start-7">
+                <div
+                  className="border-t"
+                  style={{ borderColor: "var(--ink-line)" }}
+                >
+                  {CAPABILITIES.map((item, index) => (
+                    <div
+                      key={item.title}
+                      data-reveal-item
+                      className="flex gap-5 border-b py-7"
+                      style={{ borderColor: "var(--ink-line)" }}
+                    >
+                      <span
+                        className="font-mono text-sm tabular-nums"
+                        style={{ color: "var(--ink-accent)" }}
+                      >
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <div className="space-y-2">
+                        <h3 className="text-xl font-semibold tracking-tight sm:text-2xl">
+                          {item.title}
+                        </h3>
+                        <p
+                          className="text-sm leading-relaxed sm:text-base"
+                          style={{ color: "var(--ink-muted)" }}
+                        >
+                          {item.body}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Reveal>
+            </div>
           </section>
 
           {/* Products */}
           <section className="mx-auto max-w-6xl px-5 pb-28 sm:px-8 sm:pb-36">
             <WordReveal
               as="h2"
-              lines={["세 가지로", "나눠 두었습니다"]}
+              lines={["두 가지로", "나눠 두었습니다"]}
               className="text-4xl font-semibold leading-[1.1] tracking-tighter sm:text-6xl"
             />
 
