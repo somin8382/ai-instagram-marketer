@@ -266,6 +266,66 @@ const AUG_SUB_CLS: Record<string, string> = {
 const JULY_MONTH = "2026-07";
 const AUGUST_MONTH = "2026-08";
 
+/** 제출한 채널·게시물 주소를 한 칸에 라벨과 함께 쌓아 보여준다. */
+function UrlPair({
+  channel,
+  post,
+}: {
+  channel: string | null;
+  post: string | null;
+}) {
+  if (!channel && !post) {
+    return <span className="text-gray-300">—</span>;
+  }
+
+  const linkCls =
+    "block max-w-[18rem] truncate text-blue-600 underline underline-offset-2 hover:text-blue-800";
+
+  return (
+    <div className="space-y-0.5">
+      {[
+        { label: "채널", url: channel },
+        { label: "게시물", url: post },
+      ].map(({ label, url }) => (
+        <div key={label} className="flex items-baseline gap-1.5">
+          <span className="text-[10px] text-gray-400 shrink-0">{label}</span>
+          {url ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={url}
+              className={linkCls}
+            >
+              {url}
+            </a>
+          ) : (
+            <span className="text-gray-300">—</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 구독 중인 서비스 이름들. 없으면 빈 배열. */
+function subscribedServices(u: UserRow): string[] {
+  const names: string[] = [];
+  if (u.aiMarketerSub) names.push("AI 마케터");
+  if (u.aiGeneratorSub) names.push("AI 생성기");
+  return names;
+}
+
+/** 마케터가 제출한 주소. 8월이 현재 월 기준이고 7월 값이 유지될 수 있어,
+ *  8월이 비면 7월로 내려간다. */
+function submittedUrls(u: UserRow): { channel: string | null; post: string | null } {
+  return {
+    channel: u.augustChannelUrl ?? u.julyChannelUrl ?? null,
+    post: u.augustPostUrl ?? u.julyPostUrl ?? null,
+  };
+}
+
 const EXPORT_COLUMNS: Array<{
   header: string;
   modes: ViewMode[];
@@ -370,6 +430,22 @@ const EXPORT_COLUMNS: Array<{
     header: "마지막 접속일",
     modes: ["normal", "userdb"],
     get: (u) => u.lastActivityAt?.slice(0, 10) ?? "",
+  },
+  {
+    header: "구독 중인 서비스",
+    modes: ["userdb"],
+    get: (u) => subscribedServices(u).join(", "),
+  },
+  {
+    header: "제출 채널 주소",
+    modes: ["userdb"],
+    // 마케터 구독자만 제출 대상이라 그 외에는 비워 둔다.
+    get: (u) => (u.aiMarketerSub ? (submittedUrls(u).channel ?? "") : ""),
+  },
+  {
+    header: "제출 게시물 주소",
+    modes: ["userdb"],
+    get: (u) => (u.aiMarketerSub ? (submittedUrls(u).post ?? "") : ""),
   },
   { header: "로그인 수", modes: ["normal"], get: (u) => u.loginCount },
   { header: "AI 생성 수", modes: ["normal"], get: (u) => u.aiGenerationCount },
@@ -1708,7 +1784,9 @@ export default function AdminUsersPage() {
                     사용자{sortIndicator("name")}
                   </th>
                   <th className={plainHeaderCls}>플랫폼</th>
+                  <th className={plainHeaderCls}>구독 중인 서비스</th>
                   <th className={plainHeaderCls}>AI 마케터 제출 내역</th>
+                  <th className={plainHeaderCls}>제출한 주소</th>
                   <th className={plainHeaderCls}>마지막 접속일</th>
                 </tr>
               </thead>
@@ -1735,6 +1813,22 @@ export default function AdminUsersPage() {
                           : "—"}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
+                      {subscribedServices(user).length ? (
+                        <span className="inline-flex flex-wrap gap-1">
+                          {subscribedServices(user).map((name) => (
+                            <span
+                              key={name}
+                              className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-700"
+                            >
+                              {name}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
                       {!user.aiMarketer ? (
                         <span className="text-xs text-gray-300">대상 아님</span>
                       ) : user.marketerSubmitted ? (
@@ -1747,6 +1841,15 @@ export default function AdminUsersPage() {
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-2.5">
+                      {!user.aiMarketerSub ? (
+                        <span className="text-xs text-gray-300">
+                          마케터 구독 아님
+                        </span>
+                      ) : (
+                        <UrlPair {...submittedUrls(user)} />
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
                       {user.lastActivityAt?.slice(0, 10) ?? (
                         <span className="text-gray-300">—</span>
@@ -1757,7 +1860,7 @@ export default function AdminUsersPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={4}
+                      colSpan={6}
                       className="px-3 py-10 text-center text-gray-400"
                     >
                       조건에 맞는 사용자가 없습니다
