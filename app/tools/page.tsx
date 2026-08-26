@@ -458,32 +458,32 @@ function ToolsHeader({
     <div className="sticky top-0 z-20 bg-[#f8f9fb] pb-3">
       <div className="space-y-3 rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
         <div className="flex items-center justify-between gap-3">
-          {onBack ? (
+          <div className="flex items-center gap-4">
             <button
-              onClick={onBack}
-              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
+              onClick={onHome}
+              className="text-sm font-bold tracking-tight text-gray-900"
             >
-              ← 뒤로
+              큐밋
             </button>
-          ) : (
-            <div className="h-5" aria-hidden="true" />
-          )}
-          <div className="flex items-center gap-2">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                ← 뒤로
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-4">
             <a
               href="/pricing"
-              className="text-xs font-medium text-violet-600 hover:text-violet-700 transition-colors border border-violet-100 rounded-full px-3 py-1.5 bg-violet-50"
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
             >
               가격 안내
             </a>
             <button
-              onClick={onHome}
-              className="text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors border border-gray-200 rounded-full px-3 py-1.5 bg-white"
-            >
-              홈
-            </button>
-            <button
               onClick={onMyPage}
-              className="text-xs font-medium text-rose-600 hover:text-rose-700 transition-colors border border-rose-100 rounded-full px-3 py-1.5 bg-rose-50"
+              className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
             >
               마이페이지
             </button>

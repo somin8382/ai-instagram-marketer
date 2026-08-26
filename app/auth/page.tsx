@@ -76,11 +76,11 @@ function AuthInput({
         data-validation-field={fieldKey}
         aria-invalid={Boolean(error)}
         className={getTextFieldClass({
-          theme: "violet",
+          theme: "rose",
           hasError: Boolean(error),
         })}
       />
-      {error && <p className={getHelperTextClass("violet")}>{error}</p>}
+      {error && <p className={getHelperTextClass("rose")}>{error}</p>}
     </div>
   );
 }
@@ -778,7 +778,7 @@ function AuthPageInner() {
           </button>
 
           <div className="text-center space-y-2">
-            <div className="inline-flex items-center gap-2 bg-violet-50 text-violet-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-violet-100">
+            <div className="inline-flex items-center gap-2 bg-rose-50 text-rose-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-rose-100">
               계정 연결
             </div>
             <h1 className="text-3xl font-bold text-gray-900">
@@ -808,7 +808,7 @@ function AuthPageInner() {
                 }}
                 className={`py-3 rounded-xl text-sm font-semibold transition-colors ${
                   tab === "signup"
-                    ? "bg-white text-violet-600 shadow-sm"
+                    ? "bg-white text-rose-600 shadow-sm"
                     : "text-gray-500 hover:text-gray-700"
                 }`}
               >
@@ -826,7 +826,7 @@ function AuthPageInner() {
                 }}
                 className={`py-3 rounded-xl text-sm font-semibold transition-colors ${
                   tab === "login"
-                    ? "bg-white text-violet-600 shadow-sm"
+                    ? "bg-white text-rose-600 shadow-sm"
                     : "text-gray-500 hover:text-gray-700"
                 }`}
               >
@@ -838,7 +838,7 @@ function AuthPageInner() {
               <div className="space-y-4">
                 {duplicateSignupEmail ? (
                   <div className="space-y-4">
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
+                    <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-5 space-y-3">
                       <div className="space-y-1">
                         <p className="text-lg font-bold text-gray-900">
                           이미 가입된 이메일입니다
@@ -862,7 +862,7 @@ function AuthPageInner() {
                           setDuplicateSignupEmail("");
                           setAuthError("");
                         }}
-                        className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+                        className="w-full py-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
                       >
                         로그인하기
                       </button>
@@ -880,12 +880,12 @@ function AuthPageInner() {
                   </div>
                 ) : signupPendingEmail ? (
                   <div className="space-y-4">
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-5 space-y-3">
+                    <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-5 space-y-3">
                       <div className="space-y-1">
                         <p className="text-lg font-bold text-gray-900">
                           인증 메일을 발송했습니다.
                         </p>
-                        <p className="text-sm font-medium text-violet-700">
+                        <p className="text-sm font-medium text-rose-700">
                           {signupPendingEmail}
                         </p>
                       </div>
@@ -904,7 +904,7 @@ function AuthPageInner() {
                           setLoginEmail(signupEmail.trim() || signupPendingEmail);
                           setAuthError("");
                         }}
-                        className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
+                        className="w-full py-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg active:scale-[0.98] transition-all"
                       >
                         인증 후 로그인하기
                       </button>
@@ -974,7 +974,7 @@ function AuthPageInner() {
                         disabled={submitting || isSignupCoolingDown}
                         aria-disabled={submitting || isSignupCoolingDown || !isSignupReady}
                         className={`${getPrimaryActionButtonClass({
-                          theme: "violet",
+                          theme: "rose",
                           isInactive: submitting || isSignupCoolingDown || !isSignupReady,
                         })} py-3`}
                       >
@@ -1023,7 +1023,7 @@ function AuthPageInner() {
                     disabled={submitting}
                     aria-disabled={submitting || !isLoginReady}
                     className={`${getPrimaryActionButtonClass({
-                      theme: "violet",
+                      theme: "rose",
                       isInactive: submitting || !isLoginReady,
                     })} py-3`}
                   >
@@ -1089,7 +1089,7 @@ function AuthPageInner() {
                       setAuthError("");
                     }}
                     className={`${getPrimaryActionButtonClass({
-                      theme: "violet",
+                      theme: "rose",
                       isInactive: false,
                     })} py-3`}
                   >
@@ -1108,7 +1108,7 @@ function AuthPageInner() {
                     onChange={(e) => setResetEmail(e.target.value)}
                     placeholder="예: brand@company.com"
                     className={getTextFieldClass({
-                      theme: "violet",
+                      theme: "rose",
                       hasError: false,
                     })}
                   />
@@ -1119,7 +1119,7 @@ function AuthPageInner() {
                     onClick={() => void handleSendResetEmail()}
                     disabled={resetSending || !resetEmail.trim()}
                     className={`${getPrimaryActionButtonClass({
-                      theme: "violet",
+                      theme: "rose",
                       isInactive: resetSending || !resetEmail.trim(),
                     })} py-3`}
                   >
@@ -1138,7 +1138,7 @@ function AuthPageInner() {
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="새 비밀번호"
                   className={getTextFieldClass({
-                    theme: "violet",
+                    theme: "rose",
                     hasError: false,
                   })}
                 />
@@ -1148,7 +1148,7 @@ function AuthPageInner() {
                   onChange={(e) => setNewPasswordConfirm(e.target.value)}
                   placeholder="새 비밀번호 확인"
                   className={getTextFieldClass({
-                    theme: "violet",
+                    theme: "rose",
                     hasError: false,
                   })}
                 />
@@ -1159,7 +1159,7 @@ function AuthPageInner() {
                   onClick={() => void handleUpdatePassword()}
                   disabled={resetSaving || !newPassword || !newPasswordConfirm}
                   className={`${getPrimaryActionButtonClass({
-                    theme: "violet",
+                    theme: "rose",
                     isInactive:
                       resetSaving || !newPassword || !newPasswordConfirm,
                   })} py-3`}
@@ -1175,7 +1175,7 @@ function AuthPageInner() {
       <ValidationToast
         message={validationToast}
         onClose={() => setValidationToast(null)}
-        theme="violet"
+        theme="rose"
       />
     </>
   );
