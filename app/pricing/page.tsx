@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppSurface, ThemeToggle } from "@/lib/ui/theme";
 
 export const metadata = {
   title: "가격 안내 · AI 인스타그램 마케터",
@@ -22,7 +23,8 @@ function comma(n: number): string {
 
 export default function PricingPage() {
   return (
-    <div className="min-h-screen bg-[#f8f9fb] text-gray-900">
+    <AppSurface accent="violet" className="text-gray-900">
+    <div className="relative min-h-screen">
       <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12 space-y-8">
         {/* 상단 네비 */}
         <div className="flex items-center justify-between">
@@ -32,12 +34,15 @@ export default function PricingPage() {
           >
             ← 홈으로
           </Link>
+          <div className="flex items-center gap-3">
+          <ThemeToggle className="text-sm text-gray-500 hover:text-gray-700 transition-colors" />
           <Link
             href="/mypage"
             className="text-xs font-medium text-rose-600 hover:text-rose-700 transition-colors border border-rose-100 rounded-full px-3 py-1.5 bg-rose-50"
           >
             마이페이지
           </Link>
+          </div>
         </div>
 
         {/* 헤더 */}
@@ -95,7 +100,7 @@ export default function PricingPage() {
           <p className="text-xs font-semibold text-violet-500">크레딧 사용 안내</p>
           <p className="text-base font-bold text-gray-900">
             AI 마케터 30일 운영 기준{" "}
-            <span className="text-violet-600">30만 크레딧</span> 차감
+            <span className="text-violet-600">33만 크레딧</span> 차감
           </p>
           <p className="text-xs text-gray-500 leading-relaxed">
             충전한 크레딧에서 이용한 만큼 차감됩니다. 필요한 만큼 충전해 사용하실
@@ -119,5 +124,6 @@ export default function PricingPage() {
         </div>
       </div>
     </div>
+    </AppSurface>
   );
 }

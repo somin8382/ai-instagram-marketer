@@ -1,0 +1,371 @@
+/* Dark theme layer for every page authored against the light palette.
+
+   The app's pages were built light and are spread over many thousands of lines
+   of JSX. Rather than fork every utility inline — which would bury the layout
+   in `var(--ink-*)` noise and leave two palettes to keep in sync — a page opts
+   in with `.ink-app` and this file retones the utilities it uses.
+   `.ink-surface` (motion.css) supplies the neutral tokens.
+
+   Rules of the mapping:
+   - Light tints (50/100) become a low-alpha wash of the same hue. They are
+     backgrounds behind coloured text, so they must stay subordinate.
+   - Solid mid tones (500/600/700) are left alone: those are CTAs and badges
+     that already carry white text, and they should stay vivid on dark.
+   - Text shades pale upward — a `text-emerald-800` written for a mint chip has
+     to become legible mint on near-black, not stay near-black.
+   - `text-white` is never remapped; it belongs to the vivid fills above.
+   - Two-class specificity (0,2,0) beats Tailwind's single-class utilities. */
+
+.ink-app {
+  --tint-rose: 244, 63, 94;
+  --tint-violet: 139, 92, 246;
+  --tint-emerald: 16, 185, 129;
+  --tint-blue: 59, 130, 246;
+  --tint-amber: 245, 158, 11;
+  --tint-red: 239, 68, 68;
+  --tint-orange: 249, 115, 22;
+  --tint-green: 34, 197, 94;
+
+  --on-rose: #ff8098;
+  --on-violet: #c4b5fd;
+  --on-emerald: #34d399;
+  --on-emerald-strong: #6ee7b7;
+  --on-blue: #8ab0ff;
+  --on-amber: #fbbf24;
+  --on-red: #fca5a5;
+  --on-orange: #fdba74;
+  --on-green: #86efac;
+
+  color-scheme: dark;
+  /* .ink-surface breaks long unbroken strings for landing copy; here it splits
+     figures like "+1,000" mid-number. 어절 단위(keep-all)만 남긴다. */
+  overflow-wrap: normal;
+}
+
+/* ── Neutral surfaces ─────────────────────────────────────────────────── */
+
+.ink-app .bg-white,
+.ink-app .bg-white\/95,
+.ink-app .bg-white\/90,
+.ink-app .bg-white\/80,
+.ink-app .bg-white\/70 {
+  background-color: var(--ink-raised);
+}
+
+.ink-app .bg-gray-50,
+.ink-app .bg-gray-50\/60 {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.ink-app .bg-gray-100 {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.ink-app .bg-gray-200 {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Already-dark surfaces (summary cards, tooltips) only need to separate from
+   the page behind them. */
+.ink-app .bg-gray-700,
+.ink-app .bg-gray-800,
+.ink-app .bg-gray-900 {
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+/* Shadows lift a card off white. On near-black they read as a smudge, so the
+   hairline does the lifting instead. */
+.ink-app [class*="shadow-"] {
+  box-shadow: none;
+}
+
+/* ── Neutral text ─────────────────────────────────────────────────────── */
+
+.ink-app .text-gray-900,
+.ink-app .text-black {
+  color: var(--ink-text);
+}
+
+.ink-app .text-gray-800,
+.ink-app .text-gray-700 {
+  color: var(--ink-text-soft);
+}
+
+.ink-app .text-gray-600,
+.ink-app .text-gray-500,
+.ink-app .text-gray-400,
+.ink-app .text-gray-300 {
+  color: var(--ink-muted);
+}
+
+/* ── Neutral hairlines ────────────────────────────────────────────────── */
+
+.ink-app .border-gray-100,
+.ink-app .divide-gray-100 > * + * {
+  border-color: var(--ink-line);
+}
+
+.ink-app .border-gray-200,
+.ink-app .border-gray-300,
+.ink-app .border-gray-400,
+.ink-app .border-gray-900,
+.ink-app .border-white,
+.ink-app .border-white\/30 {
+  border-color: var(--ink-line-strong);
+}
+
+/* ── Hue tints: backgrounds ───────────────────────────────────────────── */
+
+.ink-app [class*="bg-rose-50"],
+.ink-app .bg-rose-100 {
+  background-color: rgba(var(--tint-rose), 0.12);
+}
+.ink-app [class*="bg-violet-50"],
+.ink-app .bg-violet-100 {
+  background-color: rgba(var(--tint-violet), 0.14);
+}
+.ink-app [class*="bg-emerald-50"],
+.ink-app .bg-emerald-100 {
+  background-color: rgba(var(--tint-emerald), 0.12);
+}
+.ink-app [class*="bg-blue-50"],
+.ink-app .bg-blue-100 {
+  background-color: rgba(var(--tint-blue), 0.12);
+}
+.ink-app [class*="bg-amber-50"],
+.ink-app .bg-amber-100 {
+  background-color: rgba(var(--tint-amber), 0.12);
+}
+.ink-app [class*="bg-red-50"],
+.ink-app .bg-red-100 {
+  background-color: rgba(var(--tint-red), 0.12);
+}
+.ink-app [class*="bg-orange-50"],
+.ink-app .bg-orange-100 {
+  background-color: rgba(var(--tint-orange), 0.12);
+}
+.ink-app [class*="bg-green-50"],
+.ink-app .bg-green-100 {
+  background-color: rgba(var(--tint-green), 0.12);
+}
+
+/* Mid-weight chips that sit on a tint (progress dots, step markers). */
+.ink-app .bg-emerald-200,
+.ink-app .bg-emerald-300 {
+  background-color: rgba(var(--tint-emerald), 0.24);
+}
+
+/* ── Hue tints: borders ───────────────────────────────────────────────── */
+
+.ink-app .border-rose-100,
+.ink-app .border-rose-200,
+.ink-app .border-rose-300 {
+  border-color: rgba(var(--tint-rose), 0.28);
+}
+.ink-app .border-violet-100,
+.ink-app .border-violet-200,
+.ink-app .border-violet-300 {
+  border-color: rgba(var(--tint-violet), 0.3);
+}
+.ink-app .border-emerald-100,
+.ink-app .border-emerald-200,
+.ink-app .border-emerald-300 {
+  border-color: rgba(var(--tint-emerald), 0.26);
+}
+.ink-app .border-blue-100,
+.ink-app .border-blue-200,
+.ink-app .border-blue-300 {
+  border-color: rgba(var(--tint-blue), 0.26);
+}
+.ink-app .border-amber-100,
+.ink-app .border-amber-200 {
+  border-color: rgba(var(--tint-amber), 0.26);
+}
+.ink-app .border-red-100,
+.ink-app .border-red-200 {
+  border-color: rgba(var(--tint-red), 0.28);
+}
+.ink-app .border-orange-100 {
+  border-color: rgba(var(--tint-orange), 0.26);
+}
+
+/* Selected states keep the full-strength edge. */
+.ink-app .border-rose-400,
+.ink-app .border-rose-500 {
+  border-color: rgb(var(--tint-rose));
+}
+.ink-app .border-violet-400,
+.ink-app .border-violet-500 {
+  border-color: rgb(var(--tint-violet));
+}
+.ink-app .border-emerald-400,
+.ink-app .border-emerald-500 {
+  border-color: rgb(var(--tint-emerald));
+}
+
+/* ── Hue tints: text ──────────────────────────────────────────────────── */
+
+.ink-app .text-rose-500,
+.ink-app .text-rose-600,
+.ink-app .text-rose-700,
+.ink-app .text-rose-800,
+.ink-app .text-rose-900 {
+  color: var(--on-rose);
+}
+.ink-app .text-violet-500,
+.ink-app .text-violet-600,
+.ink-app .text-violet-700,
+.ink-app .text-violet-800,
+.ink-app .text-violet-900 {
+  color: var(--on-violet);
+}
+.ink-app .text-emerald-500,
+.ink-app .text-emerald-600,
+.ink-app .text-emerald-800,
+.ink-app .text-emerald-900 {
+  color: var(--on-emerald);
+}
+.ink-app .text-emerald-700 {
+  color: var(--on-emerald-strong);
+}
+.ink-app .text-blue-500,
+.ink-app .text-blue-600,
+.ink-app .text-blue-700,
+.ink-app .text-blue-800 {
+  color: var(--on-blue);
+}
+.ink-app .text-amber-500,
+.ink-app .text-amber-600,
+.ink-app .text-amber-700,
+.ink-app .text-amber-800,
+.ink-app .text-amber-900 {
+  color: var(--on-amber);
+}
+.ink-app .text-red-500,
+.ink-app .text-red-600,
+.ink-app .text-red-700,
+.ink-app .text-red-800,
+.ink-app .text-red-900 {
+  color: var(--on-red);
+}
+.ink-app .text-orange-600,
+.ink-app .text-orange-700 {
+  color: var(--on-orange);
+}
+.ink-app .text-green-600,
+.ink-app .text-green-700 {
+  color: var(--on-green);
+}
+
+/* ── Focus rings ──────────────────────────────────────────────────────── */
+
+.ink-app .ring-rose-100 {
+  --tw-ring-color: rgba(var(--tint-rose), 0.22);
+}
+.ink-app .ring-violet-200,
+.ink-app .ring-violet-400 {
+  --tw-ring-color: rgba(var(--tint-violet), 0.3);
+}
+.ink-app .ring-emerald-100 {
+  --tw-ring-color: rgba(var(--tint-emerald), 0.22);
+}
+
+/* ── Gradients that assumed a white ground ────────────────────────────── */
+
+.ink-app .from-gray-900.to-gray-800 {
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ink-line-strong);
+}
+
+.ink-app .from-rose-50.to-white,
+.ink-app .from-rose-50.via-white.to-pink-50 {
+  background-image: none;
+  background-color: rgba(var(--tint-rose), 0.09);
+}
+
+.ink-app .from-emerald-50.to-white,
+.ink-app .from-emerald-50.via-white.to-teal-50 {
+  background-image: none;
+  background-color: rgba(var(--tint-emerald), 0.09);
+}
+
+.ink-app .from-violet-50.to-white,
+.ink-app .from-violet-50.via-sky-50.to-blue-50 {
+  background-image: none;
+  background-color: rgba(var(--tint-violet), 0.1);
+}
+
+/* ── Hover states ─────────────────────────────────────────────────────── */
+/* The light build brightens on hover (gray-50/white fills, lifted shadows).
+   On dark a bright fill flashes, so hover reads as a faint overlay. */
+
+.ink-app .hover\:bg-gray-50:hover,
+.ink-app .hover\:bg-gray-100:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.ink-app .hover\:bg-white:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.ink-app .hover\:border-gray-200:hover,
+.ink-app .hover\:border-gray-300:hover,
+.ink-app .hover\:border-gray-400:hover {
+  border-color: var(--ink-line-strong);
+}
+
+.ink-app .hover\:text-gray-700:hover,
+.ink-app .hover\:text-gray-800:hover,
+.ink-app .hover\:text-gray-900:hover {
+  color: var(--ink-text);
+}
+
+.ink-app .hover\:text-rose-600:hover,
+.ink-app .hover\:text-rose-700:hover {
+  color: var(--on-rose);
+}
+.ink-app .hover\:text-violet-700:hover {
+  color: var(--on-violet);
+}
+.ink-app .hover\:text-red-700:hover {
+  color: var(--on-red);
+}
+
+.ink-app .hover\:border-rose-200:hover,
+.ink-app .hover\:border-rose-300:hover {
+  border-color: rgba(var(--tint-rose), 0.55);
+}
+.ink-app .hover\:border-violet-200:hover,
+.ink-app .hover\:border-violet-300:hover {
+  border-color: rgba(var(--tint-violet), 0.55);
+}
+
+/* ── Form controls ────────────────────────────────────────────────────── */
+
+.ink-app input,
+.ink-app textarea,
+.ink-app select {
+  color: var(--ink-text);
+}
+
+.ink-app input::placeholder,
+.ink-app textarea::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.7;
+}
+
+/* Read-only fields should read as "given", not "empty". */
+.ink-app input[readonly] {
+  background-color: rgba(255, 255, 255, 0.03);
+  color: var(--ink-muted);
+}
+
+/* ── Overlays ─────────────────────────────────────────────────────────── */
+/* Modal scrims are already dark; deepen them so the dialog still separates. */
+
+.ink-app .bg-black\/40,
+.ink-app .bg-black\/50,
+.ink-app .bg-black\/70 {
+  background-color: rgba(0, 0, 0, 0.72);
+}

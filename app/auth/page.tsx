@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { AppSurface, ThemeToggle } from "@/lib/ui/theme";
 import {
   getFieldError,
   getFirstValidationIssue,
@@ -768,14 +769,18 @@ function AuthPageInner() {
 
   return (
     <>
-      <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4 py-12">
+      <AppSurface accent="rose">
+      <main className="relative min-h-screen flex items-center justify-center px-4 py-12">
         <div className="max-w-xl w-full space-y-6">
-          <button
-            onClick={() => router.push(redirectHref)}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-          >
-            ← 뒤로
-          </button>
+          <div className="flex items-center justify-between gap-3">
+            <button
+              onClick={() => router.push(redirectHref)}
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
+            >
+              ← 뒤로
+            </button>
+            <ThemeToggle className="text-sm text-gray-500 hover:text-gray-700 transition-colors" />
+          </div>
 
           <div className="text-center space-y-2">
             <div className="inline-flex items-center gap-2 bg-rose-50 text-rose-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-rose-100">
@@ -1171,6 +1176,8 @@ function AuthPageInner() {
           </div>
         </div>
       )}
+
+      </AppSurface>
 
       <ValidationToast
         message={validationToast}

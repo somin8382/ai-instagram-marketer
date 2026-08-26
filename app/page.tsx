@@ -1,14 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   collectValidationIssues,
@@ -67,7 +60,7 @@ import { WorkspaceHeader } from "@/lib/ui/workspace-header";
 import { MotionRoot } from "@/lib/ui/motion/motion-root";
 import { Reveal, WordReveal } from "@/lib/ui/motion/reveal";
 import "@/lib/ui/motion/motion.css";
-import "@/lib/ui/ink-form.css";
+import { AppSurface, useAppTheme } from "@/lib/ui/theme";
 import {
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
@@ -339,39 +332,8 @@ function formatOutcomeDiff(metric: OutcomeMetricKey, value: number): string {
   return `+${value.toLocaleString()}개 이상`;
 }
 
-// 신청 플로우는 로그인 전 랜딩과 같은 다크 표면·액센트를 쓴다.
+// 신청 플로우는 로그인 전 랜딩과 같은 액센트를 쓴다.
 const FLOW_ACCENT = "#ef4a6b";
-
-// 다크가 기본, 라이트는 선택. 선택은 저장되어 스텝 전환·재방문에도 유지된다.
-// localStorage 는 외부 스토어이므로 useSyncExternalStore 로 읽는다 - 서버
-// 스냅샷은 항상 다크라 하이드레이션이 어긋나지 않고, effect 내 setState 도 없다.
-type FlowTheme = "dark" | "light";
-const FLOW_THEME_STORAGE_KEY = "qmeet-flow-theme";
-const FLOW_THEME_CHANGE_EVENT = "qmeet-flow-theme-change";
-
-function subscribeFlowTheme(callback: () => void) {
-  window.addEventListener("storage", callback);
-  window.addEventListener(FLOW_THEME_CHANGE_EVENT, callback);
-  return () => {
-    window.removeEventListener("storage", callback);
-    window.removeEventListener(FLOW_THEME_CHANGE_EVENT, callback);
-  };
-}
-
-function getFlowThemeSnapshot(): FlowTheme {
-  try {
-    return window.localStorage.getItem(FLOW_THEME_STORAGE_KEY) === "light"
-      ? "light"
-      : "dark";
-  } catch {
-    return "dark";
-  }
-}
-
-const FlowThemeContext = createContext<{
-  theme: FlowTheme;
-  toggleTheme: () => void;
-}>({ theme: "dark", toggleTheme: () => {} });
 
 // 급행 지원 안내 카드는 당분간 노출하지 않는다. 문구를 그대로 두었으므로
 // 다시 보여줄 때는 이 값만 true 로 바꾸면 된다.
@@ -712,66 +674,40 @@ function StepShell({
   children: React.ReactNode;
   align?: "start" | "center";
 }) {
-  const theme = useSyncExternalStore(
-    subscribeFlowTheme,
-    getFlowThemeSnapshot,
-    () => "dark" as const
-  );
+  const { isDark } = useAppTheme();
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
-  function toggleTheme() {
-    try {
-      window.localStorage.setItem(
-        FLOW_THEME_STORAGE_KEY,
-        theme === "dark" ? "light" : "dark"
-      );
-    } catch {
-      // storage 접근 불가(시크릿 모드 등): 전환을 저장할 수 없으면 유지
-    }
-    window.dispatchEvent(new Event(FLOW_THEME_CHANGE_EVENT));
-  }
-
-  const isDark = theme === "dark";
-
   return (
-    <FlowThemeContext.Provider value={{ theme, toggleTheme }}>
-      <div
-        className={
-          isDark
-            ? "ink-surface ink-grain ink-form font-sans"
-            : "bg-[#f8f9fb] font-sans"
-        }
-        style={
-          {
-            "--ink-accent": isDark ? FLOW_ACCENT : "#f43f5e",
-          } as React.CSSProperties
-        }
-      >
-        <MotionRoot>
-          <main
-            className={`relative min-h-screen flex ${
-              align === "center" ? "items-center" : "items-start"
-            } justify-center px-4 py-12`}
-          >
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 top-0 h-[36rem]"
-              style={{
-                background: isDark
-                  ? "radial-gradient(58rem 30rem at 50% -6rem, rgba(239,74,107,0.16), transparent 70%)"
-                  : "radial-gradient(52rem 26rem at 50% -8rem, rgba(244,63,94,0.055), transparent 70%)",
-              }}
-            />
-            <div className="relative w-full flex justify-center">
-              {children}
-            </div>
-          </main>
-        </MotionRoot>
-      </div>
-    </FlowThemeContext.Provider>
+    <div
+      className={
+        isDark
+          ? "ink-surface ink-grain ink-app font-sans"
+          : "bg-[#f8f9fb] font-sans"
+      }
+      style={{ "--ink-accent": FLOW_ACCENT } as React.CSSProperties}
+    >
+      <MotionRoot>
+        <main
+          className={`relative min-h-screen flex ${
+            align === "center" ? "items-center" : "items-start"
+          } justify-center px-4 py-12`}
+        >
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-[36rem]"
+            style={{
+              background: isDark
+                ? "radial-gradient(58rem 30rem at 50% -6rem, rgba(239,74,107,0.16), transparent 70%)"
+                : "radial-gradient(52rem 26rem at 50% -8rem, rgba(244,63,94,0.055), transparent 70%)",
+            }}
+          />
+          <div className="relative w-full flex justify-center">{children}</div>
+        </main>
+      </MotionRoot>
+    </div>
   );
 }
 
@@ -788,7 +724,7 @@ function StepUtilityHeader({
   onMyPage: () => void;
   progress: { current: number; total: number } | null;
 }) {
-  const { theme, toggleTheme } = useContext(FlowThemeContext);
+  const { theme, toggleTheme } = useAppTheme();
 
   return (
     <WorkspaceHeader

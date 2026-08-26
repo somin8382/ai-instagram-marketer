@@ -59,6 +59,7 @@ import { BrandProfileEditor } from "@/lib/ui/brand-profile-editor";
 import { Card, SectionLabel } from "@/lib/ui/surface-card";
 import { InputField, TextareaField } from "@/lib/ui/form-fields";
 import { WorkspaceHeader } from "@/lib/ui/workspace-header";
+import { AppSurface, useAppTheme } from "@/lib/ui/theme";
 import {
   CONTENT_TONE_OPTIONS,
   EMOJI_USAGE_OPTIONS,
@@ -1901,16 +1902,20 @@ export default function ToolsPage() {
     }
   }
 
+  const { theme, toggleTheme } = useAppTheme();
   const wrapper =
-    "min-h-screen bg-[#f8f9fb] flex items-start justify-center px-4 py-12";
+    "relative min-h-screen flex items-start justify-center px-4 py-12";
   const progress = getToolsProgress(step);
 
   if (step === "postsub-payment") {
     return (
       <>
+        <AppSurface>
         <main className={wrapper}>
           <div className="max-w-2xl w-full space-y-6">
             <WorkspaceHeader
+              tone={theme}
+              onToggleTone={toggleTheme}
               onBack={navigateBack}
               onHome={() => router.push("/")}
               onMyPage={() => router.push("/mypage")}
@@ -2180,6 +2185,7 @@ export default function ToolsPage() {
             </button>
           </div>
         </main>
+        </AppSurface>
         <ValidationToast
           message={validationToast}
           onClose={() => setValidationToast(null)}
@@ -2192,9 +2198,12 @@ export default function ToolsPage() {
   if (step === "postsub-status") {
     return (
       <>
+        <AppSurface>
         <main className={wrapper}>
           <div className="max-w-2xl w-full space-y-6">
             <WorkspaceHeader
+              tone={theme}
+              onToggleTone={toggleTheme}
               onBack={navigateBack}
               onHome={() => router.push("/")}
               onMyPage={() => router.push("/mypage")}
@@ -2278,6 +2287,7 @@ export default function ToolsPage() {
             </div>
           </div>
         </main>
+        </AppSurface>
         <ValidationToast
           message={validationToast}
           onClose={() => setValidationToast(null)}
@@ -2289,9 +2299,12 @@ export default function ToolsPage() {
 
   return (
     <>
-      <main className={wrapper}>
+      <AppSurface>
+        <main className={wrapper}>
         <div className="max-w-2xl w-full space-y-6">
           <WorkspaceHeader
+            tone={theme}
+            onToggleTone={toggleTheme}
             onBack={navigateBack}
             onHome={() => router.push("/")}
             onMyPage={() => router.push("/mypage")}
@@ -3037,6 +3050,7 @@ export default function ToolsPage() {
           </div>
         </div>
       </main>
+        </AppSurface>
       {showPaymentRequiredModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 space-y-5 shadow-xl">

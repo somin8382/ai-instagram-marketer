@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { AppSurface } from "@/lib/ui/theme";
 
 const MONTH = "2026-08";
 
@@ -103,21 +104,25 @@ export default function MarketingAugustPage() {
 
   if (state === "loading") {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center text-gray-500">
-        로딩 중...
-      </div>
+      <AppSurface>
+        <div className="relative min-h-screen flex items-center justify-center text-gray-500">
+          로딩 중...
+        </div>
+      </AppSurface>
     );
   }
   if (state === "no_session") {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center text-gray-500">
+      <AppSurface>
+        <div className="relative min-h-screen flex items-center justify-center text-gray-500">
         <p>
           로그인이 필요합니다.{" "}
           <Link href="/auth?tab=login" className="underline text-gray-700">
             로그인
           </Link>
         </p>
-      </div>
+        </div>
+      </AppSurface>
     );
   }
 
@@ -140,7 +145,8 @@ export default function MarketingAugustPage() {
   );
 
   return (
-    <div className="min-h-screen bg-[#f8f9fb] text-gray-900">
+    <AppSurface>
+      <div className="relative min-h-screen text-gray-900">
       <div className="max-w-lg mx-auto px-4 py-8 space-y-6">
         <Link
           href="/mypage"
@@ -320,6 +326,7 @@ export default function MarketingAugustPage() {
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </AppSurface>
   );
 }

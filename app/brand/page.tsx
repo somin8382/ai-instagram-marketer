@@ -10,6 +10,7 @@ import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import { Card, SectionLabel } from "@/lib/ui/surface-card";
 import { InputField, TextareaField } from "@/lib/ui/form-fields";
 import { WorkspaceHeader } from "@/lib/ui/workspace-header";
+import { AppSurface, useAppTheme } from "@/lib/ui/theme";
 import { getPrimaryActionButtonClass } from "@/lib/ui/form-feedback";
 
 // ── 브랜드 아이덴티티 제작 ──
@@ -191,6 +192,7 @@ function RegeneratePanel({
 
 export default function BrandIdentityPage() {
   const router = useRouter();
+  const { theme, toggleTheme } = useAppTheme();
 
   const [brandName, setBrandName] = useState("");
   const [industry, setIndustry] = useState("");
@@ -359,9 +361,12 @@ export default function BrandIdentityPage() {
   }, [cardInfo, brandName]);
 
   return (
-    <main className="min-h-screen bg-[#f8f9fb] px-4 py-12">
+    <AppSurface accent="emerald">
+    <main className="relative min-h-screen px-4 py-12">
       <div className="max-w-2xl mx-auto space-y-4">
         <WorkspaceHeader
+          tone={theme}
+          onToggleTone={toggleTheme}
           onBack={() => router.push("/home")}
           onHome={() => router.push("/home")}
           onMyPage={() => router.push("/mypage")}
@@ -763,5 +768,6 @@ export default function BrandIdentityPage() {
         </p>
       </div>
     </main>
+    </AppSurface>
   );
 }

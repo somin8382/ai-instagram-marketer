@@ -9,6 +9,7 @@ import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
 import { Palette } from "@phosphor-icons/react/dist/csr/Palette";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
+import { AppSurface, ThemeToggle } from "@/lib/ui/theme";
 
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
 
@@ -98,13 +99,15 @@ export default function HomeHubPage() {
   ];
 
   return (
-    <main className="min-h-screen bg-[#f8f9fb] px-4 py-12">
+    <AppSurface>
+    <main className="relative min-h-screen px-4 py-12">
       <div className="max-w-xl mx-auto space-y-10">
         <div className="flex items-center justify-between gap-3">
           <span className="text-sm font-bold tracking-tight text-gray-900">
             큐밋
           </span>
           <div className="flex items-center gap-4">
+            <ThemeToggle className="text-sm text-gray-500 hover:text-gray-700 transition-colors" />
             <button
               onClick={() => router.push("/preview/home")}
               className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
@@ -173,5 +176,6 @@ export default function HomeHubPage() {
         </button>
       </div>
     </main>
+    </AppSurface>
   );
 }

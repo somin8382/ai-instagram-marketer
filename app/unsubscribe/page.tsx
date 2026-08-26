@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppSurface } from "@/lib/ui/theme";
 
 type SearchParams = { status?: string };
 
@@ -29,7 +30,8 @@ export default async function UnsubscribePage({
           };
 
   return (
-    <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
+    <AppSurface>
+    <main className="relative min-h-screen flex items-center justify-center px-4">
       <div className="max-w-md w-full bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-center space-y-3">
         <div
           className={`w-14 h-14 rounded-full mx-auto flex items-center justify-center text-2xl ${
@@ -48,5 +50,6 @@ export default async function UnsubscribePage({
         </Link>
       </div>
     </main>
+    </AppSurface>
   );
 }

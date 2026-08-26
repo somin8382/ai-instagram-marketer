@@ -25,6 +25,7 @@ import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
 import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
 import { Palette } from "@phosphor-icons/react/dist/csr/Palette";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
+import { AppSurface, ThemeToggle } from "@/lib/ui/theme";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
 import { CreditGrantPopup } from "@/lib/ui/credit-grant-popup";
 import { AugustMarketingPopup } from "@/lib/ui/august-marketing-popup";
@@ -1228,7 +1229,8 @@ export default function MyPage() {
   const currentStage = getApplicationStageIndex(snapshot.application?.status);
 
   return (
-    <main className="min-h-screen bg-[#f8f9fb] px-4 py-12">
+    <AppSurface accent="rose">
+    <main className="relative min-h-screen px-4 py-12">
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-4">
@@ -1248,6 +1250,7 @@ export default function MyPage() {
             </button>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle className="text-sm text-gray-500 hover:text-gray-700 transition-colors" />
             {isTestAccountAuthenticated && (
               <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
                 체험 계정
@@ -2473,5 +2476,6 @@ export default function MyPage() {
         )}
       </div>
     </main>
+    </AppSurface>
   );
 }
