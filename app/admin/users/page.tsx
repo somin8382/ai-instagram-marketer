@@ -217,8 +217,9 @@ function parseMonths(list: string | null | undefined): number[] {
     .sort((a, b) => a - b);
 }
 
-type ViewMode = "normal" | "capture" | "marketer";
-const ALL_MODES: ViewMode[] = ["normal", "capture", "marketer"];
+type ViewMode = "normal" | "capture" | "marketer" | "userdb";
+// 넓은 표를 그리는 세 모드. "userdb" 는 열 구성이 전혀 달라 전용 표로 그린다.
+const WIDE_MODES: ViewMode[] = ["normal", "capture", "marketer"];
 
 type MetricKey =
   | "instagram"
@@ -270,14 +271,14 @@ const EXPORT_COLUMNS: Array<{
   modes: ViewMode[];
   get: (u: UserRow) => string | number;
 }> = [
-  { header: "이름", modes: ALL_MODES, get: (u) => u.name ?? "" },
-  { header: "이메일", modes: ALL_MODES, get: (u) => u.email ?? "" },
+  { header: "이름", modes: [...WIDE_MODES, "userdb"], get: (u) => u.name ?? "" },
+  { header: "이메일", modes: [...WIDE_MODES, "userdb"], get: (u) => u.email ?? "" },
   { header: "구분", modes: ["normal", "marketer"], get: (u) => (u.signedUp ? "가입" : "미가입") },
-  { header: "분야", modes: ALL_MODES, get: (u) => fieldLabel(u.field) },
+  { header: "분야", modes: WIDE_MODES, get: (u) => fieldLabel(u.field) },
   { header: "메모", modes: ["normal", "marketer"], get: (u) => u.note ?? "" },
   {
     header: "플랫폼",
-    modes: ["normal", "marketer"],
+    modes: ["normal", "marketer", "userdb"],
     get: (u) =>
       u.marketingChannel === "youtube"
         ? "유튜브"
@@ -343,10 +344,10 @@ const EXPORT_COLUMNS: Array<{
             ? "변경"
             : "미정",
   },
-  { header: "회사", modes: ALL_MODES, get: (u) => u.companyName ?? "" },
+  { header: "회사", modes: WIDE_MODES, get: (u) => u.companyName ?? "" },
   { header: "브랜드", modes: ["normal"], get: (u) => u.brandName ?? "" },
   { header: "주관기관", modes: ["normal", "capture"], get: (u) => u.hostOrg ?? "" },
-  { header: "멘토기관", modes: ALL_MODES, get: (u) => u.mentorOrg ?? "" },
+  { header: "멘토기관", modes: WIDE_MODES, get: (u) => u.mentorOrg ?? "" },
   { header: "전화", modes: ["normal"], get: (u) => u.phone ?? "" },
   { header: "무료 유저", modes: ["normal"], get: (u) => (u.freeUser ? "O" : "") },
   { header: "AI 마케터 구독", modes: ["normal", "capture"], get: (u) => (u.aiMarketerSub ? "O" : "") },
@@ -365,7 +366,11 @@ const EXPORT_COLUMNS: Array<{
   { header: "최초 접속일", modes: ["normal", "capture"], get: (u) => (u.firstAccessAt ?? u.createdAt)?.slice(0, 10) ?? "-" },
   { header: "접속 횟수", modes: ["normal"], get: (u) => (u.accessCount === null ? "-" : u.accessCount) },
   { header: "최근 로그인", modes: ["normal"], get: (u) => u.lastLoginAt?.slice(0, 10) ?? "" },
-  { header: "최근 활동", modes: ["normal"], get: (u) => u.lastActivityAt?.slice(0, 10) ?? "" },
+  {
+    header: "마지막 접속일",
+    modes: ["normal", "userdb"],
+    get: (u) => u.lastActivityAt?.slice(0, 10) ?? "",
+  },
   { header: "로그인 수", modes: ["normal"], get: (u) => u.loginCount },
   { header: "AI 생성 수", modes: ["normal"], get: (u) => u.aiGenerationCount },
   {
@@ -380,7 +385,7 @@ const EXPORT_COLUMNS: Array<{
   },
   {
     header: "생성기 잔여 횟수",
-    modes: ALL_MODES,
+    modes: WIDE_MODES,
     get: (u) =>
       u.remainingCredits !== null
         ? u.remainingCredits
@@ -389,8 +394,8 @@ const EXPORT_COLUMNS: Array<{
           : "",
   },
   {
-    header: "마케터 제출",
-    modes: ["normal", "marketer"],
+    header: "AI 마케터 제출 내역",
+    modes: ["normal", "marketer", "userdb"],
     get: (u) =>
       u.aiMarketer ? (u.marketerSubmitted ? "제출완료" : "미제출") : "",
   },
@@ -457,7 +462,13 @@ async function exportXlsx(rows: UserRow[], viewMode: ViewMode = "normal") {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "사용자");
   const modeTag =
-    viewMode === "capture" ? "_캡쳐용" : viewMode === "marketer" ? "_마케터" : "";
+    viewMode === "capture"
+      ? "_캡쳐용"
+      : viewMode === "marketer"
+        ? "_마케터"
+        : viewMode === "userdb"
+          ? "_유저DB"
+          : "";
   XLSX.writeFile(
     workbook,
     `users${modeTag}_${new Date().toISOString().slice(0, 10)}.xlsx`
@@ -572,11 +583,12 @@ export default function AdminUsersPage() {
   // 표 보기 모드 (상호 배타):
   //  - "capture" (캡쳐용): 구분·메모·가입등록일·최근활동·접속·로그인·AI생성·무료·마케터제출 숨김
   //  - "marketer" (마케터 검토용): 사용자·구분·분야·회사·메모·멘토기관·생성기횟수·마케터제출만
-  const [viewMode, setViewMode] = useState<"normal" | "capture" | "marketer">(
+  const [viewMode, setViewMode] = useState<ViewMode>(
     "normal"
   );
   const cap = viewMode === "capture";
   const mkt = viewMode === "marketer";
+  const udb = viewMode === "userdb";
 
   // 마케터 검토용: 팔로워/구독자/좋아요/댓글 인라인 입력 (draft = 편집 중 값)
   //   metricDraft[userId][metricKey] = 편집 중 문자열
@@ -1409,6 +1421,19 @@ export default function AdminUsersPage() {
             </button>
             <button
               onClick={() =>
+                setViewMode((v) => (v === "userdb" ? "normal" : "userdb"))
+              }
+              title="사용자·플랫폼·AI 마케터 제출 내역·마지막 접속일만 표시 — 유저 DB 캡쳐용"
+              className={`text-sm px-4 py-2 rounded-xl border transition-colors ${
+                udb
+                  ? "border-gray-900 bg-gray-900 text-white hover:bg-gray-700"
+                  : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              유저DB캡쳐{udb ? " ✓" : ""}
+            </button>
+            <button
+              onClick={() =>
                 setViewMode((v) => (v === "marketer" ? "normal" : "marketer"))
               }
               title="사용자·구분·분야·회사·메모·멘토기관·생성기횟수·마케터제출만 표시 — 마케터 검토용"
@@ -1434,12 +1459,21 @@ export default function AdminUsersPage() {
                   ? "마케터 검토용 열 구성으로 내보내기"
                   : cap
                     ? "캡쳐용 열 구성으로 내보내기"
-                    : "전체 열로 내보내기"
+                    : udb
+                      ? "유저DB캡쳐 열 구성으로 내보내기"
+                      : "전체 열로 내보내기"
               }
               className="text-sm px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors disabled:opacity-40"
             >
               엑셀 내보내기 ({filtered.length}
-              {mkt ? " · 마케터" : cap ? " · 캡쳐용" : ""})
+              {mkt
+                ? " · 마케터"
+                : cap
+                  ? " · 캡쳐용"
+                  : udb
+                    ? " · 유저DB"
+                    : ""}
+              )
             </button>
           </div>
         </div>
@@ -1662,7 +1696,78 @@ export default function AdminUsersPage() {
           </div>
         )}
 
-        {/* Table */}
+        {/* 유저DB캡쳐: 열 구성이 넓은 표와 전혀 달라 따로 그린다. 넓은 표에
+            네 번째 플래그를 끼워 넣으면 40여 개 열의 헤더·셀 짝이 어긋나기
+            쉬워, 필요한 네 칸만 담은 표를 쓴다. */}
+        {udb ? (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-gray-100">
+                <tr>
+                  <th className={headerCls} onClick={() => toggleSort("name")}>
+                    사용자{sortIndicator("name")}
+                  </th>
+                  <th className={plainHeaderCls}>플랫폼</th>
+                  <th className={plainHeaderCls}>AI 마케터 제출 내역</th>
+                  <th className={plainHeaderCls}>마지막 접속일</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filtered.map((user) => (
+                  <tr
+                    key={user.id}
+                    onClick={() => setSelectedUser(user)}
+                    className="hover:bg-gray-50 cursor-pointer transition-colors"
+                  >
+                    <td className="px-3 py-2.5">
+                      <p className="font-medium text-gray-900">
+                        {user.name ?? "—"}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {user.email ?? "—"}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
+                      {user.marketingChannel === "youtube"
+                        ? "유튜브"
+                        : user.marketingChannel === "instagram"
+                          ? "인스타그램"
+                          : "—"}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      {!user.aiMarketer ? (
+                        <span className="text-xs text-gray-300">대상 아님</span>
+                      ) : user.marketerSubmitted ? (
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                          제출완료
+                        </span>
+                      ) : (
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                          미제출
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
+                      {user.lastActivityAt?.slice(0, 10) ?? (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-3 py-10 text-center text-gray-400"
+                    >
+                      조건에 맞는 사용자가 없습니다
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-gray-100">
@@ -2125,6 +2230,7 @@ export default function AdminUsersPage() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       {/* ── Detail modal ─────────────────────────────────────────────────────── */}
