@@ -106,7 +106,10 @@ type AccountName = {
 };
 
 type AiResult = {
+  // 인스타그램은 계정 아이디, 유튜브는 주소가 되는 영문 핸들.
   accountNames: AccountName[];
+  // 유튜브 전용. 화면에 보이는 한글 채널명 후보.
+  channelNames?: AccountName[];
   accountPlan: {
     direction: string;
     bio: string;
@@ -3720,11 +3723,6 @@ export default function Home() {
               아래 전략을 바탕으로 {channelDisplayName}를 운영해 보세요
             </p>
             </Reveal>
-            {aiSource && (
-              <span className={`inline-block text-[10px] font-mono px-2 py-0.5 rounded-full ${aiSource === "api" ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"}`}>
-                {aiSource === "api" ? "API 결과" : "예비 결과"}
-              </span>
-            )}
           </div>
 
           {aiError && (
@@ -3957,11 +3955,6 @@ export default function Home() {
               추천해드립니다
             </p>
             </Reveal>
-            {aiSource && (
-              <span className={`inline-block text-[10px] font-mono px-2 py-0.5 rounded-full ${aiSource === "api" ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"}`}>
-                {aiSource === "api" ? "API 결과" : "예비 결과"}
-              </span>
-            )}
           </div>
 
           {aiError && (
@@ -3991,6 +3984,11 @@ export default function Home() {
               </button>
             </div>
             <div className="space-y-3">
+              {isYoutubeChannel && (
+                <p className="text-xs font-medium text-gray-500">
+                  채널 주소가 되는 영문 핸들입니다
+                </p>
+              )}
               {aiResult?.accountNames.map((item, i) => (
                 <div
                   key={i}
@@ -4007,6 +4005,29 @@ export default function Home() {
                 </div>
               ))}
             </div>
+
+            {isYoutubeChannel && Boolean(aiResult?.channelNames?.length) && (
+              <div className="space-y-3 border-t border-gray-100 pt-4">
+                <p className="text-xs font-medium text-gray-500">
+                  시청자에게 보이는 한글 채널명입니다
+                </p>
+                {aiResult?.channelNames?.map((item, i) => (
+                  <div
+                    key={i}
+                    data-reveal-item
+                    className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-white border border-rose-100 flex items-center justify-center text-rose-500 font-bold text-sm flex-shrink-0">
+                      {item.name.charAt(0)}
+                    </div>
+                    <div className="space-y-0.5">
+                      <p className="font-semibold text-gray-900">{item.name}</p>
+                      <p className="text-sm text-gray-500">{item.meaning}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
           </Reveal>
 

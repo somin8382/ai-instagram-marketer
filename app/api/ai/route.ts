@@ -59,7 +59,11 @@ async function writeGenerationLog(input: {
 }
 
 type AccountPlanResult = {
+  // 인스타그램: 계정 아이디 후보 3개.
+  // 유튜브: 영문 핸들 후보 2개 (채널 주소가 되는 값).
   accountNames: Array<{ name: string; meaning: string }>;
+  // 유튜브 전용. 화면에 표시되는 한글 채널명 후보 2개.
+  channelNames?: Array<{ name: string; meaning: string }>;
   accountPlan: {
     direction: string;
     bio: string;
@@ -1454,6 +1458,7 @@ async function generatePlanningResult({
   requestId: string;
   previousResult?: AccountPlanResult | null;
 }) {
+  const isYoutube = marketingChannel === "youtube";
   let lastError =
     "AI 기획 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
   let retryReason = "";
@@ -1496,8 +1501,8 @@ async function generatePlanningResult({
       continue;
     }
 
-    const normalized = normalizePlanningResult(parsed);
-    const issues = getPlanningValidationIssues(normalized);
+    const normalized = normalizePlanningResult(parsed, isYoutube);
+    const issues = getPlanningValidationIssues(normalized, isYoutube);
 
     if (issues.length === 0) {
       return { ok: true as const, data: normalized };
@@ -1550,6 +1555,12 @@ function buildPlanningPrompt({
 - accountNames의 name에는 숫자, 언더스코어, 하이픈, 특수문자를 넣지 마세요
 - accountNames는 ${channelName} ${accountWord}명으로 바로 쓸 수 있어야 합니다${
     isYoutube ? " (유튜브 핸들 @이름 형태로 쓰이므로 @는 빼고 이름만)" : ""
+  }${
+    isYoutube
+      ? `
+- channelNames는 시청자에게 보이는 한글 채널명 후보입니다. 단어 조합이나 짧은 문장 모두 가능하며, 영문 핸들과 결이 맞아야 합니다 (예: "새벽 로스팅", "오늘도 원두 한 잔")
+- channelNames의 name에는 이모지와 특수문자를 넣지 마세요. 한글 위주로 15자 이내`
+      : ""
   }
 - 업종을 직접적으로 포함하지 마세요. 창의적이고 기억하기 쉬운 이름으로
 - meaning은 왜 이 이름을 추천하는지 한국어로 짧게 설명 (1문장)
@@ -1558,7 +1569,13 @@ function buildPlanningPrompt({
     isYoutube ? "채널 설명란" : "소개란"
   }에 들어갈 2줄 매력적인 문구 (이모지 포함)
 - 매번 완전히 새로운 결과를 생성하세요. 이전 결과를 반복하지 마세요.
-- accountNames는 반드시 서로 달라야 하며, 정확히 3개만 제안하세요.
+- accountNames는 반드시 서로 달라야 하며, 정확히 ${
+    isYoutube ? "2" : "3"
+  }개만 제안하세요.${
+    isYoutube
+      ? "\n- channelNames도 반드시 서로 달라야 하며, 정확히 2개만 제안하세요."
+      : ""
+  }
 - generation_id(${requestId || "none"})를 참고해 이전 응답과 다른 표현을 사용하세요.
 - 설명 문장, 머리말, 코드블록 없이 JSON 객체만 출력하세요
 
@@ -1577,7 +1594,24 @@ ${
     : ""
 }
 다음 JSON 형식으로만 답변하세요. 설명 없이 JSON만 출력하세요:
-{
+${
+  isYoutube
+    ? `{
+  "accountNames": [
+    { "name": "englishnameone", "meaning": "추천 이유 한국어 설명" },
+    { "name": "englishnametwo", "meaning": "추천 이유 한국어 설명" }
+  ],
+  "channelNames": [
+    { "name": "한글 채널명 하나", "meaning": "추천 이유 한국어 설명" },
+    { "name": "한글 채널명 둘", "meaning": "추천 이유 한국어 설명" }
+  ],
+  "accountPlan": {
+    "direction": "추천 채널 방향",
+    "bio": "채널 설명 2줄",
+    "concept": "운영 컨셉"
+  }
+}`
+    : `{
   "accountNames": [
     { "name": "englishnameone", "meaning": "추천 이유 한국어 설명" },
     { "name": "englishnametwo", "meaning": "추천 이유 한국어 설명" },
@@ -1588,57 +1622,86 @@ ${
     "bio": "소개글 2줄",
     "concept": "운영 컨셉"
   }
+}`
 }
 `;
 }
 
-function normalizePlanningResult(parsed: AccountPlanResult): AccountPlanResult {
-  const seenNames = new Set<string>();
-  const normalizedNames = Array.isArray(parsed.accountNames)
-    ? parsed.accountNames
-        .map((item) => {
-          const normalizedName = String(item?.name ?? "")
-            .trim()
-            .toLowerCase()
-            .replace(/[^a-z]/g, "");
-          const rawMeaning = String(item?.meaning ?? "")
-            .replace(/\s+/g, " ")
-            .trim();
+function normalizeMeaning(rawMeaning: string) {
+  const meaning = String(rawMeaning ?? "").replace(/\s+/g, " ").trim();
+  return /[가-힣]/.test(meaning)
+    ? meaning
+    : "브랜드 방향과 어울리는 이름입니다.";
+}
 
+/** 중복을 걸러내며 정해진 개수만 남긴다. */
+function takeUniqueNames(
+  items: unknown,
+  limit: number,
+  normalizeName: (raw: string) => string
+) {
+  const seen = new Set<string>();
+  return Array.isArray(items)
+    ? items
+        .map((item) => {
+          const source = item as { name?: unknown; meaning?: unknown };
           return {
-            name: normalizedName,
-            meaning: /[가-힣]/.test(rawMeaning)
-              ? rawMeaning
-              : "브랜드 방향과 어울리는 이름입니다.",
+            name: normalizeName(String(source?.name ?? "")),
+            meaning: normalizeMeaning(String(source?.meaning ?? "")),
           };
         })
         .filter((item) => {
-          if (!item.name || seenNames.has(item.name)) {
+          if (!item.name || seen.has(item.name)) {
             return false;
           }
-
-          seenNames.add(item.name);
+          seen.add(item.name);
           return true;
         })
-        .slice(0, 3)
+        .slice(0, limit)
     : [];
-
-  return {
-    accountNames: normalizedNames,
-    accountPlan: {
-      direction: String(parsed.accountPlan?.direction ?? "").trim(),
-      bio: String(parsed.accountPlan?.bio ?? "").trim(),
-      concept: String(parsed.accountPlan?.concept ?? "").trim(),
-    },
-  };
 }
 
-function getPlanningValidationIssues(result: AccountPlanResult) {
+function normalizePlanningResult(
+  parsed: AccountPlanResult,
+  isYoutube: boolean
+): AccountPlanResult {
+  // 유튜브는 영문 핸들 2개 + 한글 채널명 2개, 인스타그램은 아이디 3개.
+  const handleLimit = isYoutube ? 2 : 3;
+  const accountNames = takeUniqueNames(parsed.accountNames, handleLimit, (raw) =>
+    raw.trim().toLowerCase().replace(/[^a-z]/g, "")
+  );
+
+  const accountPlan = {
+    direction: String(parsed.accountPlan?.direction ?? "").trim(),
+    bio: String(parsed.accountPlan?.bio ?? "").trim(),
+    concept: String(parsed.accountPlan?.concept ?? "").trim(),
+  };
+
+  if (!isYoutube) {
+    return { accountNames, accountPlan };
+  }
+
+  const channelNames = takeUniqueNames(parsed.channelNames, 2, (raw) =>
+    // 한글 채널명은 띄어쓰기를 살린다. 이모지·특수문자만 걷어낸다.
+    raw
+      .replace(/[^가-힣a-zA-Z0-9 ]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+
+  return { accountNames, channelNames, accountPlan };
+}
+
+function getPlanningValidationIssues(
+  result: AccountPlanResult,
+  isYoutube: boolean
+) {
   const issues: string[] = [];
   const accountNames = result.accountNames ?? [];
+  const expectedHandles = isYoutube ? 2 : 3;
 
-  if (accountNames.length !== 3) {
-    issues.push("accountNames는 정확히 3개여야 합니다");
+  if (accountNames.length !== expectedHandles) {
+    issues.push(`accountNames는 정확히 ${expectedHandles}개여야 합니다`);
   }
 
   if (!accountNames.every((item) => /^[a-z]+$/.test(String(item.name ?? "")))) {
@@ -1651,6 +1714,22 @@ function getPlanningValidationIssues(result: AccountPlanResult) {
 
   if (!accountNames.every((item) => String(item.meaning ?? "").trim())) {
     issues.push("각 계정명에는 meaning이 필요합니다");
+  }
+
+  if (isYoutube) {
+    const channelNames = result.channelNames ?? [];
+
+    if (channelNames.length !== 2) {
+      issues.push("channelNames는 정확히 2개여야 합니다");
+    }
+
+    if (!channelNames.every((item) => /[가-힣]/.test(String(item.name ?? "")))) {
+      issues.push("channelNames의 name은 한글을 포함해야 합니다");
+    }
+
+    if (!channelNames.every((item) => String(item.meaning ?? "").trim())) {
+      issues.push("각 채널명에는 meaning이 필요합니다");
+    }
   }
 
   if (!result.accountPlan.direction.trim()) {
