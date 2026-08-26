@@ -7,6 +7,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -342,8 +343,31 @@ function formatOutcomeDiff(metric: OutcomeMetricKey, value: number): string {
 const FLOW_ACCENT = "#ef4a6b";
 
 // 다크가 기본, 라이트는 선택. 선택은 저장되어 스텝 전환·재방문에도 유지된다.
+// localStorage 는 외부 스토어이므로 useSyncExternalStore 로 읽는다 - 서버
+// 스냅샷은 항상 다크라 하이드레이션이 어긋나지 않고, effect 내 setState 도 없다.
 type FlowTheme = "dark" | "light";
 const FLOW_THEME_STORAGE_KEY = "qmeet-flow-theme";
+const FLOW_THEME_CHANGE_EVENT = "qmeet-flow-theme-change";
+
+function subscribeFlowTheme(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener(FLOW_THEME_CHANGE_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(FLOW_THEME_CHANGE_EVENT, callback);
+  };
+}
+
+function getFlowThemeSnapshot(): FlowTheme {
+  try {
+    return window.localStorage.getItem(FLOW_THEME_STORAGE_KEY) === "light"
+      ? "light"
+      : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
 const FlowThemeContext = createContext<{
   theme: FlowTheme;
   toggleTheme: () => void;
@@ -688,33 +712,26 @@ function StepShell({
   children: React.ReactNode;
   align?: "start" | "center";
 }) {
-  const [theme, setTheme] = useState<FlowTheme>("dark");
+  const theme = useSyncExternalStore(
+    subscribeFlowTheme,
+    getFlowThemeSnapshot,
+    () => "dark" as const
+  );
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
-  // StepShell 은 스텝마다 리마운트되므로 저장된 선택을 매번 다시 읽는다.
-  useEffect(() => {
-    try {
-      if (window.localStorage.getItem(FLOW_THEME_STORAGE_KEY) === "light") {
-        setTheme("light");
-      }
-    } catch {
-      // storage 접근 불가(시크릿 모드 등): 기본 다크 유지
-    }
-  }, []);
-
   function toggleTheme() {
-    setTheme((prev) => {
-      const next: FlowTheme = prev === "dark" ? "light" : "dark";
-      try {
-        window.localStorage.setItem(FLOW_THEME_STORAGE_KEY, next);
-      } catch {
-        // 저장 실패해도 이번 화면에는 적용된다
-      }
-      return next;
-    });
+    try {
+      window.localStorage.setItem(
+        FLOW_THEME_STORAGE_KEY,
+        theme === "dark" ? "light" : "dark"
+      );
+    } catch {
+      // storage 접근 불가(시크릿 모드 등): 전환을 저장할 수 없으면 유지
+    }
+    window.dispatchEvent(new Event(FLOW_THEME_CHANGE_EVENT));
   }
 
   const isDark = theme === "dark";
