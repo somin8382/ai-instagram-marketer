@@ -320,6 +320,10 @@ function formatOutcomeDiff(metric: OutcomeMetricKey, value: number): string {
   return `+${value.toLocaleString()}개 이상`;
 }
 
+// 급행 지원 안내 카드는 당분간 노출하지 않는다. 문구를 그대로 두었으므로
+// 다시 보여줄 때는 이 값만 true 로 바꾸면 된다.
+const SHOW_EXPRESS_SUPPORT_NOTICE = false;
+
 function isMarketingChannel(value?: string | null): value is MarketingChannel {
   return value === "instagram" || value === "youtube";
 }
@@ -4372,6 +4376,7 @@ export default function Home() {
             </Reveal>
 
             {/* 급행 지원 안내 박스 — Tailwind v4, 아이콘 라이브러리 불필요(인라인 SVG) */}
+            {SHOW_EXPRESS_SUPPORT_NOTICE && (
             <Reveal>
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <div className="mb-4 flex items-center gap-3">
@@ -4471,6 +4476,7 @@ export default function Home() {
               </div>
             </div>
             </Reveal>
+            )}
 
             <Reveal y={12} className="grid grid-cols-2 gap-3">
               <button
