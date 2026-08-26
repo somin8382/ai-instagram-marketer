@@ -266,6 +266,17 @@ function getPrice(plan: number, duration: number): number {
   return 330000;
 }
 
+/** 정가(1명 1개월가 × 인원 × 개월) 대비 깎아 드리는 금액.
+ *  가격표가 바뀌면 이 값도 따라 움직이므로 뱃지가 실제와 어긋나지 않는다. */
+function getNegotiatedDiscount(plan: number, duration: number): number {
+  const listPrice = getPrice(1, 1) * plan * duration;
+  return Math.max(listPrice - getPrice(plan, duration), 0);
+}
+
+function formatManwon(amount: number): string {
+  return `${Math.round(amount / 10000).toLocaleString()}만원`;
+}
+
 function getExpressFee(isExpress: boolean): number {
   return isExpress ? 10000 : 0;
 }
@@ -4658,6 +4669,13 @@ export default function Home() {
     const basePrice = getPrice(selectedPlan, selectedDuration);
     const expressFee = getExpressFee(isExpress);
     const totalPrice = basePrice + expressFee;
+    // 뱃지는 카드별(고른 기간 기준), 아래 안내는 지금 고른 조합 기준.
+    const planOneDiscount = getNegotiatedDiscount(1, selectedDuration);
+    const planTwoDiscount = getNegotiatedDiscount(2, selectedDuration);
+    const selectedDurationDiscount = getNegotiatedDiscount(
+      selectedPlan,
+      selectedDuration
+    );
 
     return (
       <>
@@ -4708,9 +4726,11 @@ export default function Home() {
                   <p className="font-bold text-gray-900 text-lg">
                     AI 마케터 1명
                   </p>
-                  <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2.5 py-1 rounded-full">
-                    2개월 17% 할인
-                  </span>
+                  {planOneDiscount > 0 && (
+                    <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 px-2.5 py-1 rounded-full">
+                      {formatManwon(planOneDiscount)} 네고
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-gray-500 mt-1">
                   가볍게 시작하는 기본 운영
@@ -4770,9 +4790,11 @@ export default function Home() {
                   <p className="font-bold text-gray-900 text-lg">
                     AI 마케터 2명
                   </p>
-                  <span className="text-[10px] font-semibold bg-rose-100 text-rose-500 px-2.5 py-1 rounded-full">
-                    2개월 20% 할인
-                  </span>
+                  {planTwoDiscount > 0 && (
+                    <span className="text-[10px] font-semibold bg-rose-100 text-rose-500 px-2.5 py-1 rounded-full">
+                      {formatManwon(planTwoDiscount)} 네고
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-rose-500 font-medium mt-1">
                   더 빠르게 키우는 파워 운영
@@ -4865,9 +4887,12 @@ export default function Home() {
                 {selectedDurationError}
               </p>
             )}
-            <p className="text-xs text-emerald-600 mt-3 font-medium">
-              2개월 운영이 더 경제적입니다
-            </p>
+            {selectedDurationDiscount > 0 && (
+              <p className="text-xs text-emerald-600 mt-3 font-medium">
+                현재 선택 기준 {formatManwon(selectedDurationDiscount)} 네고해
+                드립니다
+              </p>
+            )}
           </div>
           </Reveal>
 
