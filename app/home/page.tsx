@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 
 /**
  * Signed-in home: the service hub. `/` (marketing) redirects customers here;
@@ -20,7 +21,9 @@ export default function HomeHubPage() {
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       if (!data.session) {
-        // Not signed in (stale cookie or direct visit): back to the pitch.
+        // Not signed in (stale cookie or direct visit). Clear the hint first,
+        // otherwise `/` would bounce straight back here forever.
+        clearSignedInCookie();
         router.replace("/");
         return;
       }

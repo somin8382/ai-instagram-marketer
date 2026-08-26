@@ -26,6 +26,19 @@ function writeCookie(signedIn: boolean) {
   document.cookie = `${SIGNED_IN_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
 }
 
+/** Reads the routing hint synchronously, so a guard can act before any await. */
+export function hasSignedInCookie() {
+  if (typeof document === "undefined") return false;
+  return document.cookie
+    .split("; ")
+    .some((entry) => entry === `${SIGNED_IN_COOKIE}=1`);
+}
+
+/** Clears a hint that outlived its session, breaking any redirect ping-pong. */
+export function clearSignedInCookie() {
+  writeCookie(false);
+}
+
 export function AuthCookieSync() {
   useEffect(() => {
     const supabase = getSupabaseBrowserClientOrNull();

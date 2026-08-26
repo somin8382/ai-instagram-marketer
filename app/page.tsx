@@ -51,6 +51,7 @@ import {
   getTextFieldClass,
   ValidationToast,
 } from "@/lib/ui/form-feedback";
+import { hasSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { HomeLanding } from "@/lib/ui/home-landing";
 import {
   fetchPostGeneratorSubscription,
@@ -1495,6 +1496,31 @@ export default function Home() {
 
   const activeStep = hasHydrated ? getSafeStep(step) : step;
   const serviceFlowProgress = getServiceFlowProgress(activeStep);
+
+  // Signed-in visitors belong on the service hub, not the pitch page. proxy.ts
+  // covers fresh document loads, but browser Back restores `/` from cache with
+  // no server request, so the guard has to exist on the client too.
+  //
+  // Keyed off the same cookie proxy reads rather than `isAuthenticated`, which
+  // only settles after the Supabase session round-trip and would let the hero
+  // flash first. A cookie that outlived its session is reconciled by /home,
+  // which clears it and sends the visitor back here.
+  const isOnLanding = activeStep === "landing";
+  useEffect(() => {
+    if (!isOnLanding) return;
+
+    const redirectIfSignedIn = () => {
+      if (hasSignedInCookie()) router.replace("/home");
+    };
+    redirectIfSignedIn();
+
+    // bfcache restores skip effects, so re-check when the page is shown again.
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) redirectIfSignedIn();
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, [isOnLanding, router]);
 
   /* ─── Handlers ─── */
 
