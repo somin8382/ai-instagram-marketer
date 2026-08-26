@@ -9,10 +9,45 @@ import { HorizontalPan } from "@/lib/ui/motion/horizontal-pan";
 import { Reveal, ScrubbedSentence, WordReveal } from "@/lib/ui/motion/reveal";
 import { CountUp } from "@/lib/ui/motion/count-up";
 import { GrowthCurve } from "@/lib/ui/motion/growth-curve";
+import { BarCompare, type CompareRow } from "@/lib/ui/motion/bar-compare";
 import { REVIEWS, quoteLength } from "@/lib/ui/reviews";
 import "@/lib/ui/motion/motion.css";
 
 const ACCENT = "#ef4a6b";
+
+/** 마케터 1명 1개월 가격. 히어로·제품 목록·비용 비교가 같은 값을 쓴다. */
+const MARKETER_MONTHLY_PRICE = 300_000;
+const HIRE_MONTHLY_COST = 3_000_000;
+
+/** A row of 실제 고객이 경험한 변화. Rows carry a counted value, a chart, or
+ *  both; `beforeLabel` marks the ones that are a 이전 → 이후 comparison. */
+type Stat = {
+  label: string;
+  from?: number;
+  to?: number;
+  prefix?: string;
+  suffix?: string;
+  decimals?: number;
+  beforeLabel?: string;
+  note?: string;
+  footnote?: boolean;
+  curve?: { startLabel: string; endLabel: string };
+  bars?: CompareRow[];
+};
+
+const COST_ROWS: CompareRow[] = [
+  {
+    label: "마케터 직접 채용",
+    value: HIRE_MONTHLY_COST,
+    valueLabel: `₩${HIRE_MONTHLY_COST.toLocaleString("ko-KR")}`,
+  },
+  {
+    label: "AI 마케터",
+    value: MARKETER_MONTHLY_PRICE,
+    valueLabel: `₩${MARKETER_MONTHLY_PRICE.toLocaleString("ko-KR")}`,
+    highlight: true,
+  },
+];
 
 /** 신청 플로우가 실제로 안내하는 범위에 맞춘 핵심 기능. */
 const CAPABILITIES = [
@@ -86,7 +121,7 @@ export function HomeLanding({
 
   // 실제 고객이 경험한 변화. 스크롤이 닿으면 뒤 숫자가 앞 숫자에서부터 오른다.
   // beforeLabel 이 없는 항목은 "이전 → 이후"가 아니라 값 하나를 세는 지표다.
-  const stats = [
+  const stats: Stat[] = [
     {
       label: "팔로우 달성 사례",
       from: 13,
@@ -105,11 +140,8 @@ export function HomeLanding({
     },
     {
       label: "비용 비교",
-      from: 3_000_000,
-      to: 300_000,
-      prefix: "₩",
-      beforeLabel: "₩3,000,000",
       footnote: true,
+      bars: COST_ROWS,
     },
   ];
 
@@ -268,7 +300,11 @@ export function HomeLanding({
                     </p>
 
                     <div className="space-y-6 md:col-span-8">
-                      <div className="flex flex-wrap items-baseline gap-3 sm:gap-4">
+                      <div
+                        className={`flex-wrap items-baseline gap-3 sm:gap-4 ${
+                          stat.to === undefined ? "hidden" : "flex"
+                        }`}
+                      >
                         {stat.beforeLabel ? (
                           <>
                             <span
@@ -293,14 +329,16 @@ export function HomeLanding({
                             {stat.note}
                           </span>
                         ) : null}
-                        <CountUp
-                          from={stat.from}
-                          to={stat.to}
-                          prefix={stat.prefix}
-                          suffix={stat.suffix}
-                          decimals={stat.decimals}
-                          className="font-mono text-4xl font-semibold tracking-tight sm:text-6xl"
-                        />
+                        {stat.to === undefined ? null : (
+                          <CountUp
+                            from={stat.from ?? 0}
+                            to={stat.to}
+                            prefix={stat.prefix}
+                            suffix={stat.suffix}
+                            decimals={stat.decimals}
+                            className="font-mono text-4xl font-semibold tracking-tight sm:text-6xl"
+                          />
+                        )}
                       </div>
 
                       {stat.curve ? (
@@ -309,6 +347,8 @@ export function HomeLanding({
                           endLabel={stat.curve.endLabel}
                         />
                       ) : null}
+
+                      {stat.bars ? <BarCompare rows={stat.bars} /> : null}
                     </div>
                   </div>
                 ))}
