@@ -11,6 +11,10 @@ import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { AppSurface, ThemeToggle } from "@/lib/ui/theme";
 
+// 아직 공개하지 않는 서비스. 카드 정의는 그대로 두고 노출만 막는다 -
+// 다시 열 때는 hidden 을 지우면 된다.
+const HIDDEN_SERVICES = new Set(["브랜드 아이덴티티", "랜딩페이지 개발 AI"]);
+
 const AUTH_STORAGE_KEY = "qmeet-auth-state";
 
 /**
@@ -131,7 +135,9 @@ export default function HomeHubPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3">
-          {services.map((service) => (
+          {services
+            .filter((service) => !HIDDEN_SERVICES.has(service.name))
+            .map((service) => (
             <button
               key={service.name}
               onClick={service.onClick}
