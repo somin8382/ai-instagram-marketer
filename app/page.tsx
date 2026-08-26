@@ -51,7 +51,10 @@ import {
   getTextFieldClass,
   ValidationToast,
 } from "@/lib/ui/form-feedback";
-import { hasSignedInCookie } from "@/lib/ui/auth-cookie-sync";
+import {
+  clearSignedInCookie,
+  hasSignedInCookie,
+} from "@/lib/ui/auth-cookie-sync";
 import { HomeLanding } from "@/lib/ui/home-landing";
 import {
   fetchPostGeneratorSubscription,
@@ -2902,6 +2905,7 @@ export default function Home() {
 
     const supabase = getSupabaseBrowserClientOrNull();
     if (supabase) {
+      clearSignedInCookie();
       await supabase.auth.signOut();
     }
 

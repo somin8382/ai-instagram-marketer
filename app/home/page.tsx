@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { Megaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
+import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
+import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
+
+const AUTH_STORAGE_KEY = "qmeet-auth-state";
 
 /**
  * Signed-in home: the service hub. `/` (marketing) redirects customers here;
@@ -36,6 +42,10 @@ export default function HomeHubPage() {
   }, [router]);
 
   async function handleLogout() {
+    // Cookie first, synchronously: the landing guard reads it, so leaving it
+    // until onAuthStateChange fires would bounce `/` right back here.
+    clearSignedInCookie();
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
     const supabase = getSupabaseBrowserClientOrNull();
     if (supabase) {
       await supabase.auth.signOut();
@@ -45,8 +55,8 @@ export default function HomeHubPage() {
 
   const services = [
     {
-      icon: "🤖",
-      iconCls: "from-rose-400 to-pink-500",
+      Icon: Megaphone,
+      chipCls: "bg-rose-50 text-rose-500",
       hoverCls: "hover:border-rose-300",
       nameHoverCls: "group-hover:text-rose-600",
       name: "AI 마케터",
@@ -55,8 +65,8 @@ export default function HomeHubPage() {
       onClick: () => router.push("/?screen=apply"),
     },
     {
-      icon: "✨",
-      iconCls: "from-violet-400 to-purple-500",
+      Icon: MagicWand,
+      chipCls: "bg-violet-50 text-violet-500",
       hoverCls: "hover:border-violet-300",
       nameHoverCls: "group-hover:text-violet-600",
       name: "게시물 AI 생성기",
@@ -65,13 +75,13 @@ export default function HomeHubPage() {
       onClick: () => router.push("/tools"),
     },
     {
-      icon: "🧩",
-      iconCls: "from-blue-400 to-sky-500",
+      Icon: Browser,
+      chipCls: "bg-blue-50 text-blue-500",
       hoverCls: "hover:border-blue-300",
       nameHoverCls: "group-hover:text-blue-600",
       name: "랜딩페이지 개발 AI",
       desc: "한 문장으로 인스타 프로필에 걸 페이지 한 장을 만듭니다.",
-      meta: "준비 중 · 사전 신청",
+      meta: "준비 중",
       onClick: () => router.push("/landing-ai"),
     },
   ];
@@ -103,9 +113,7 @@ export default function HomeHubPage() {
           <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-gray-900">
             {displayName ? `${displayName}님, 안녕하세요` : "안녕하세요"}
           </h1>
-          <p className="text-sm text-gray-500">
-            이용하실 서비스를 선택하세요.
-          </p>
+          <p className="text-sm text-gray-500">이용하실 서비스를 선택하세요.</p>
         </div>
 
         <div className="grid grid-cols-1 gap-3">
@@ -113,26 +121,33 @@ export default function HomeHubPage() {
             <button
               key={service.name}
               onClick={service.onClick}
-              className={`group text-left p-6 rounded-2xl bg-white border-2 border-gray-100 ${service.hoverCls} hover:shadow-lg active:scale-[0.99] transition-all`}
+              className={`group text-left p-5 rounded-2xl bg-white border-2 border-gray-100 ${service.hoverCls} hover:shadow-lg active:scale-[0.99] transition-all`}
             >
               <div className="flex items-start gap-4">
                 <div
-                  className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${service.iconCls} flex items-center justify-center text-white text-xl flex-shrink-0`}
+                  className={`w-11 h-11 rounded-xl ${service.chipCls} flex items-center justify-center flex-shrink-0`}
                 >
-                  {service.icon}
+                  <service.Icon size={22} weight="duotone" />
                 </div>
-                <div className="space-y-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
                     <p
                       className={`font-bold text-gray-900 text-lg ${service.nameHoverCls} transition-colors`}
                     >
                       {service.name}
                     </p>
-                    <span className="text-[10px] font-semibold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full whitespace-nowrap">
+                    <span className="text-[11px] font-semibold text-gray-400 whitespace-nowrap">
                       {service.meta}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-500">{service.desc}</p>
+                  <p className="text-sm text-gray-500 flex items-center justify-between gap-2">
+                    {service.desc}
+                    <ArrowRight
+                      size={16}
+                      weight="bold"
+                      className="shrink-0 text-gray-300 group-hover:text-gray-500 group-hover:translate-x-0.5 transition-all"
+                    />
+                  </p>
                 </div>
               </div>
             </button>

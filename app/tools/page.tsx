@@ -52,6 +52,7 @@ import {
   type SavedGeneratedPost,
   type SavedSubscription,
 } from "@/lib/supabase/persistence";
+import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
 import { checkSocialUrl } from "@/lib/client/social-url";
 import { BrandProfileEditor } from "@/lib/ui/brand-profile-editor";
@@ -1660,6 +1661,7 @@ export default function ToolsPage() {
 
     const supabase = getSupabaseBrowserClientOrNull();
     if (supabase) {
+      clearSignedInCookie();
       await supabase.auth.signOut();
     }
 

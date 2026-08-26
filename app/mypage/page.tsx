@@ -19,6 +19,11 @@ import {
   type UserNotice,
   type SavedGeneratedPost,
 } from "@/lib/supabase/persistence";
+import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { Megaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
+import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
+import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
+import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
 import { CreditGrantPopup } from "@/lib/ui/credit-grant-popup";
 import { AugustMarketingPopup } from "@/lib/ui/august-marketing-popup";
@@ -792,6 +797,7 @@ export default function MyPage() {
     const supabase = getSupabaseBrowserClientOrNull();
 
     if (supabase) {
+      clearSignedInCookie();
       await supabase.auth.signOut();
     }
 
@@ -1307,24 +1313,27 @@ export default function MyPage() {
                     : { label: "미구독", cls: "bg-gray-100 text-gray-500" };
               const rail = [
                 {
+                  Icon: Megaphone,
+                  chipCls: "bg-rose-50 text-rose-500",
                   name: "AI 마케터",
-                  nameCls: "text-rose-500",
                   hoverCls: "hover:border-rose-300",
                   status: marketerStatus,
                   action: snapshot.application ? "연장 · 추가 신청" : "신청하기",
                   onClick: () => router.push("/?screen=apply"),
                 },
                 {
+                  Icon: MagicWand,
+                  chipCls: "bg-violet-50 text-violet-500",
                   name: "게시물 AI 생성기",
-                  nameCls: "text-violet-500",
                   hoverCls: "hover:border-violet-300",
                   status: generatorStatus,
                   action: "게시물 만들기",
                   onClick: () => router.push("/tools"),
                 },
                 {
+                  Icon: Browser,
+                  chipCls: "bg-blue-50 text-blue-500",
                   name: "랜딩페이지 개발 AI",
-                  nameCls: "text-blue-500",
                   hoverCls: "hover:border-blue-300",
                   status: { label: "준비 중", cls: "bg-blue-50 text-blue-600" },
                   action: "사전 신청",
@@ -1338,9 +1347,11 @@ export default function MyPage() {
                   className={`group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 ${item.hoverCls} hover:shadow-md active:scale-[0.99] transition-all`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <p className={`text-xs font-semibold ${item.nameCls}`}>
-                      {item.name}
-                    </p>
+                    <span
+                      className={`w-8 h-8 rounded-lg ${item.chipCls} flex items-center justify-center`}
+                    >
+                      <item.Icon size={17} weight="duotone" />
+                    </span>
                     {item.status && (
                       <span
                         className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${item.status.cls}`}
@@ -1349,14 +1360,16 @@ export default function MyPage() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-2 text-sm font-bold text-gray-900 flex items-center gap-1">
+                  <p className="mt-3 text-xs font-semibold text-gray-500">
+                    {item.name}
+                  </p>
+                  <p className="mt-0.5 text-sm font-bold text-gray-900 flex items-center gap-1">
                     {item.action}
-                    <span
-                      aria-hidden="true"
+                    <ArrowRight
+                      size={14}
+                      weight="bold"
                       className="text-gray-300 group-hover:text-gray-500 group-hover:translate-x-0.5 transition-all"
-                    >
-                      →
-                    </span>
+                    />
                   </p>
                 </button>
               ));
