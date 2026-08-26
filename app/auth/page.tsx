@@ -143,7 +143,8 @@ function AuthPageInner() {
 
   const redirectHref = useMemo(() => {
     if (redirectTarget === "landing") {
-      return "/?screen=landing";
+      // Signed-in home is the dashboard now; `/` is the visitors' pitch page.
+      return "/mypage";
     }
 
     if (redirectTarget === "tools") {

@@ -1291,6 +1291,42 @@ export default function MyPage() {
           )}
         </div>
 
+        {/* Product rail: the signed-in route into the other products, since
+            `/` now sends customers straight here instead of the landing page. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <button
+            onClick={handleGoHome}
+            className="group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 hover:border-rose-300 hover:shadow-md active:scale-[0.99] transition-all"
+          >
+            <p className="text-xs font-semibold text-rose-500">AI 마케터</p>
+            <p className="mt-1 text-sm font-bold text-gray-900 group-hover:text-rose-600 transition-colors">
+              신규 신청 · 연장
+            </p>
+          </button>
+          <button
+            onClick={() => router.push("/tools")}
+            className="group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 hover:border-violet-300 hover:shadow-md active:scale-[0.99] transition-all"
+          >
+            <p className="text-xs font-semibold text-violet-500">
+              게시물 AI 생성기
+            </p>
+            <p className="mt-1 text-sm font-bold text-gray-900 group-hover:text-violet-600 transition-colors">
+              게시물 만들기
+            </p>
+          </button>
+          <button
+            onClick={() => router.push("/landing-ai")}
+            className="group text-left p-4 rounded-2xl bg-white border-2 border-gray-100 hover:border-blue-300 hover:shadow-md active:scale-[0.99] transition-all"
+          >
+            <p className="text-xs font-semibold text-blue-500">
+              랜딩페이지 개발 AI
+            </p>
+            <p className="mt-1 text-sm font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
+              준비 중 · 사전 신청
+            </p>
+          </button>
+        </div>
+
         {/* One-time popup for admin-issued bonus credits */}
         {authUserId && !isTestAccountAuthenticated && (
           <CreditGrantPopup userId={authUserId} />

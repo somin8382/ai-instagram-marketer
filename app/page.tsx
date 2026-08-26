@@ -51,6 +51,7 @@ import {
   getTextFieldClass,
   ValidationToast,
 } from "@/lib/ui/form-feedback";
+import { HomeLanding } from "@/lib/ui/home-landing";
 import {
   fetchPostGeneratorSubscription,
   fetchSavedGeneratedPosts,
@@ -2020,6 +2021,10 @@ export default function Home() {
       resolvedStep = "landing";
     }
 
+    if (screen === "apply") {
+      resolvedStep = "channel";
+    }
+
     if (screen === "status") {
       if (hasApplicationReady) resolvedStep = "status";
       else if (hasPaymentReady && hasChannelMaterialsReady)
@@ -2907,164 +2912,9 @@ export default function Home() {
   /* ═══════════════ LANDING ═══════════════ */
 
   if (activeStep === "landing") {
-    return (
-      <main className="min-h-screen bg-[#f8f9fb] flex items-center justify-center px-4">
-        <div className="max-w-xl w-full text-center space-y-10">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                onClick={() => router.push("/landing-ai")}
-                className="inline-flex items-center gap-1.5 text-sm font-semibold text-blue-600 bg-blue-50 border border-blue-100 rounded-full px-3 py-1.5 hover:bg-blue-100 transition-colors"
-              >
-                랜딩페이지 개발 AI
-              </button>
-              {hasHydrated ? (
-                isAuthenticated ? (
-                  <>
-                    {isTestAccountAuthenticated && (
-                      <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
-                        체험 계정
-                      </span>
-                    )}
-                    <button
-                      onClick={() => router.push("/mypage")}
-                      className="text-sm font-medium text-rose-600 hover:text-rose-700 transition-colors"
-                    >
-                      마이페이지
-                    </button>
-                    <span className="text-xs font-medium text-gray-500 bg-white border border-gray-200 px-3 py-1.5 rounded-full">
-                      {authName
-                        ? `${authName}님 로그인됨`
-                        : authEmail
-                          ? `${authEmail} 로그인됨`
-                          : "로그인됨"}
-                    </span>
-                    <button
-                      onClick={handleLogout}
-                      className="text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
-                    >
-                      로그아웃
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                    onClick={() => openAuthPage("landing", "login")}
-                      className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
-                    >
-                      로그인
-                    </button>
-                    <button
-                    onClick={() => openAuthPage("landing", "signup")}
-                      className="text-sm font-medium text-violet-600 hover:text-violet-700 transition-colors"
-                    >
-                      회원가입
-                    </button>
-                  </>
-                )
-              ) : (
-                <div className="h-6 w-32" aria-hidden="true" />
-              )}
-            </div>
-            {hasHydrated && isTestAccountAuthenticated && (
-              <p className="text-xs text-violet-600 text-right">
-                현재 체험 계정으로 로그인되어 있으며 일부 기능이 미리 활성화되어 있습니다.
-              </p>
-            )}
-          </div>
-
-          {/* Hero */}
-          <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 bg-rose-50 text-rose-600 text-xs font-semibold px-4 py-1.5 rounded-full border border-rose-100">
-              AI 마케팅 서비스
-            </div>
-            <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-gray-900 leading-tight">
-              AI 마케터를
-              <br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-pink-500">
-                월 30만원
-              </span>
-              에 고용하세요
-            </h1>
-            <p className="text-gray-500 text-base leading-relaxed max-w-md mx-auto">
-              일반 마케터 대비 최대 90% 비용 절감
-              <br />
-              전문 마케터 수준의 결과를 더 빠르고 합리적인 비용으로
-            </p>
-          </div>
-
-          {/* Feature selection */}
-          <div className="space-y-4">
-            <p className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
-              원하시는 서비스를 선택하세요
-            </p>
-            <div className="grid grid-cols-1 gap-3">
-              {/* Feature 1: AI 마케터 */}
-              <button
-                onClick={() => goToStep("channel")}
-                className="group text-left p-6 rounded-2xl bg-white border-2 border-gray-100 hover:border-rose-300 hover:shadow-lg active:scale-[0.99] transition-all"
-              >
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-400 to-pink-500 flex items-center justify-center text-white text-xl flex-shrink-0">
-                    🤖
-                  </div>
-                  <div className="space-y-1">
-                    <p className="font-bold text-gray-900 text-lg group-hover:text-rose-600 transition-colors">
-                      AI 마케터
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      AI가 계정 기획부터 마케팅 전략까지 한번에
-                    </p>
-                  </div>
-                </div>
-              </button>
-
-              {/* Feature 2: 게시물 AI 생성 */}
-              <button
-                onClick={() => router.push("/tools")}
-                className={`group text-left p-6 rounded-2xl border-2 transition-all ${
-                  canGeneratePost ||
-                  hasActivePostGeneratorSubscription ||
-                  isAuthenticated
-                    ? "bg-white border-gray-100 hover:border-violet-300 hover:shadow-lg active:scale-[0.99]"
-                    : "bg-gray-50 border-gray-100 opacity-70"
-                }`}
-              >
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center text-white text-xl flex-shrink-0">
-                    ✨
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-bold text-gray-900 text-lg group-hover:text-violet-600 transition-colors">
-                        게시물 AI 생성기
-                      </p>
-                      {!hasConsumedFreeTrial ? (
-                        <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
-                          1회 무료 체험
-                        </span>
-                      ) : hasActivePostGeneratorSubscription ? (
-                        <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded-full">
-                          월 구독 이용중
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-semibold bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full">
-                          월 {formattedSubscriptionPrice}원
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-gray-500">
-                      무료 체험 뒤 월 구독으로 이어지고, 이후 AI 마케터 서비스로 확장할 수 있습니다
-                    </p>
-                  </div>
-                </div>
-              </button>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
+    return <HomeLanding onApply={() => goToStep("channel")} />;
   }
+
 
   /* ═══════════════ ALREADY-APPLIED GUARD ═══════════════ */
   // Covers channel → channel-materials + payment. Bypassed when the grant
