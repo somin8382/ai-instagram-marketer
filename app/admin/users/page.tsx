@@ -665,6 +665,9 @@ export default function AdminUsersPage() {
   const cap = viewMode === "capture";
   const mkt = viewMode === "marketer";
   const udb = viewMode === "userdb";
+  // 유저DB캡쳐 화면에서 플랫폼 칸을 "인스타그램, 유튜브" 둘 다로 보여주는
+  // 화면용 토글. 실제 marketingChannel 값은 그대로 두고 표시만 바꾼다.
+  const [showTwoPlatforms, setShowTwoPlatforms] = useState(false);
 
   // 마케터 검토용: 팔로워/구독자/좋아요/댓글 인라인 입력 (draft = 편집 중 값)
   //   metricDraft[userId][metricKey] = 편집 중 문자열
@@ -1425,6 +1428,12 @@ export default function AdminUsersPage() {
     sortDesc,
   ]);
 
+  // 유저DB캡쳐 표는 마지막 접속일이 없는 사용자를 보여줄 이유가 없어 뺀다.
+  const visibleRows = useMemo(
+    () => (udb ? filtered.filter((u) => u.lastActivityAt) : filtered),
+    [filtered, udb]
+  );
+
   function toggleSort(field: SortField) {
     if (sortField === field) {
       setSortDesc((prev) => !prev);
@@ -1475,7 +1484,7 @@ export default function AdminUsersPage() {
             </p>
             <p className="text-xs text-gray-400 mt-0.5">
               전체 {users.length.toLocaleString()}명 (미가입 포함) · 필터 결과{" "}
-              {filtered.length.toLocaleString()}명
+              {visibleRows.length.toLocaleString()}명
               {generatedAt &&
                 ` · 갱신 ${new Date(generatedAt).toLocaleTimeString("ko-KR")}`}
               {" · "}미가입 = 아직 회원가입하지 않은 사전등록 사용자
@@ -1508,6 +1517,19 @@ export default function AdminUsersPage() {
             >
               유저DB캡쳐{udb ? " ✓" : ""}
             </button>
+            {udb && (
+              <button
+                onClick={() => setShowTwoPlatforms((v) => !v)}
+                title="화면 표시만 인스타그램·유튜브 둘 다로 바꿉니다 — 실제 데이터는 그대로"
+                className={`text-sm px-4 py-2 rounded-xl border transition-colors ${
+                  showTwoPlatforms
+                    ? "border-gray-900 bg-gray-900 text-white hover:bg-gray-700"
+                    : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                2개{showTwoPlatforms ? " ✓" : ""}
+              </button>
+            )}
             <button
               onClick={() =>
                 setViewMode((v) => (v === "marketer" ? "normal" : "marketer"))
@@ -1528,8 +1550,8 @@ export default function AdminUsersPage() {
               새로고침
             </button>
             <button
-              onClick={() => void exportXlsx(filtered, viewMode)}
-              disabled={filtered.length === 0}
+              onClick={() => void exportXlsx(visibleRows, viewMode)}
+              disabled={visibleRows.length === 0}
               title={
                 mkt
                   ? "마케터 검토용 열 구성으로 내보내기"
@@ -1541,7 +1563,7 @@ export default function AdminUsersPage() {
               }
               className="text-sm px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-gray-700 transition-colors disabled:opacity-40"
             >
-              엑셀 내보내기 ({filtered.length}
+              엑셀 내보내기 ({visibleRows.length}
               {mkt
                 ? " · 마케터"
                 : cap
@@ -1791,7 +1813,7 @@ export default function AdminUsersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filtered.map((user) => (
+                {visibleRows.map((user) => (
                   <tr
                     key={user.id}
                     onClick={() => setSelectedUser(user)}
@@ -1806,11 +1828,13 @@ export default function AdminUsersPage() {
                       </p>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
-                      {user.marketingChannel === "youtube"
-                        ? "유튜브"
-                        : user.marketingChannel === "instagram"
-                          ? "인스타그램"
-                          : "—"}
+                      {showTwoPlatforms
+                        ? "인스타그램, 유튜브"
+                        : user.marketingChannel === "youtube"
+                          ? "유튜브"
+                          : user.marketingChannel === "instagram"
+                            ? "인스타그램"
+                            : "—"}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
                       {user.phone ?? <span className="text-gray-300">—</span>}
@@ -1847,7 +1871,7 @@ export default function AdminUsersPage() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && (
+                {visibleRows.length === 0 && (
                   <tr>
                     <td
                       colSpan={6}
