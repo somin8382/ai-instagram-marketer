@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Fragment } from "react";
 import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
@@ -104,6 +105,7 @@ export function HomeLanding({
   onApply: () => void;
   isPreview?: boolean;
 }) {
+  const router = useRouter();
   const products = [
     {
       name: "AI 마케터",
@@ -174,13 +176,26 @@ export function HomeLanding({
               ) : null}
             </div>
             <div className="flex items-center gap-6">
-              <Link
-                href="/auth"
-                className="text-sm transition-colors hover:text-[color:var(--ink-text)]"
-                style={{ color: "var(--ink-muted)" }}
-              >
-                로그인
-              </Link>
+              {isPreview ? (
+                // 이미 로그인한 상태로 들어오는 화면이라 "로그인" 버튼을
+                // 보여주면 로그아웃된 것처럼 보인다. 대신 돌아갈 길을 준다.
+                <button
+                  type="button"
+                  onClick={() => router.push("/mypage")}
+                  className="text-sm transition-colors hover:text-[color:var(--ink-text)]"
+                  style={{ color: "var(--ink-muted)" }}
+                >
+                  마이페이지로 돌아가기
+                </button>
+              ) : (
+                <Link
+                  href="/auth"
+                  className="text-sm transition-colors hover:text-[color:var(--ink-text)]"
+                  style={{ color: "var(--ink-muted)" }}
+                >
+                  로그인
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={onApply}
