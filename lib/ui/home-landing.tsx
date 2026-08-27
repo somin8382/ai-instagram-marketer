@@ -61,12 +61,12 @@ const CAPABILITIES = [
     body: "계정이 없다면 이름 후보부터 제안하고, 만든 뒤 그대로 이어서 운영합니다.",
   },
   {
-    title: "콘텐츠 기획",
-    body: "무엇을 언제 올릴지 월 1~2회 업로드 기준으로 기획해 드립니다.",
+    title: "계정 분석",
+    body: "현재 계정 상태와 경쟁 계정을 분석해 개선 방향을 잡습니다.",
   },
   {
-    title: "노출과 반응 운영",
-    body: "팔로워와 좋아요, 댓글이 실제로 쌓이도록 목표를 두고 운영합니다.",
+    title: "에이전트가 마케팅을 시작합니다",
+    body: "인스타그램 기준 1달 운영 시 팔로워 500명, 유튜브 기준 1달 운영 시 팔로워 200명이 평균입니다.",
   },
 ];
 
@@ -115,7 +115,8 @@ export function HomeLanding({
     },
     {
       name: "게시물 AI 생성기",
-      summary: "프롬프트를 넣으면 게시물 문구와 이미지가 함께 나옵니다.",
+      summary:
+        "스타트업과 비즈니스 계정에 최적화된 SNS 게시물을 AI가 간편하게 만들어드립니다.",
       price: "월 2만 2천원",
       href: "/tools",
     },
@@ -176,6 +177,13 @@ export function HomeLanding({
               ) : null}
             </div>
             <div className="flex items-center gap-6">
+              <Link
+                href="/pricing"
+                className="text-sm transition-colors hover:text-[color:var(--ink-text)]"
+                style={{ color: "var(--ink-muted)" }}
+              >
+                가격 안내
+              </Link>
               {isPreview ? (
                 // 이미 로그인한 상태로 들어오는 화면이라 "로그인" 버튼을
                 // 보여주면 로그아웃된 것처럼 보인다. 대신 돌아갈 길을 준다.

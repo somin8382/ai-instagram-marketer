@@ -1224,6 +1224,12 @@ export default function MyPage() {
             >
               서비스 소개
             </button>
+            <button
+              onClick={() => router.push("/pricing")}
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              가격 안내
+            </button>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle className="text-sm text-gray-500 hover:text-gray-700 transition-colors" />
