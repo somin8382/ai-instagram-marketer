@@ -22,8 +22,6 @@ import {
 import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { Megaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
 import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
-import { Browser } from "@phosphor-icons/react/dist/csr/Browser";
-import { Palette } from "@phosphor-icons/react/dist/csr/Palette";
 import { clearSignedInCookie } from "@/lib/ui/auth-cookie-sync";
 import { AppSurface, ThemeToggle } from "@/lib/ui/theme";
 import { trackLoginEventOnce } from "@/lib/client/track-login";
@@ -1311,24 +1309,6 @@ export default function MyPage() {
                   status: generatorStatus,
                   action: "게시물 만들기",
                   onClick: () => router.push("/tools"),
-                },
-                {
-                  Icon: Palette,
-                  chipCls: "bg-emerald-50 text-emerald-500",
-                  name: "브랜드 아이덴티티",
-                  hoverCls: "hover:border-emerald-300",
-                  status: { label: "베타", cls: "bg-emerald-50 text-emerald-600" },
-                  action: "컬러 · 로고 · 명함",
-                  onClick: () => router.push("/brand"),
-                },
-                {
-                  Icon: Browser,
-                  chipCls: "bg-blue-50 text-blue-500",
-                  name: "랜딩페이지 개발 AI",
-                  hoverCls: "hover:border-blue-300",
-                  status: { label: "준비 중", cls: "bg-blue-50 text-blue-600" },
-                  action: "사전 신청",
-                  onClick: () => router.push("/landing-ai"),
                 },
               ];
               return rail.map((item) => (
