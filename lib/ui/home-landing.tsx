@@ -109,7 +109,7 @@ export function HomeLanding({
   const products = [
     {
       name: "AI 마케터",
-      summary: "계정 기획부터 콘텐츠 운영, 마케팅 전략까지 맡깁니다.",
+      summary: "계정 기획부터, 마케팅까지 AI에이전트에게 맡깁니다.",
       price: "월 33만원부터",
       onClick: onApply,
     },
