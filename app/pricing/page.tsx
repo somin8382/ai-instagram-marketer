@@ -6,15 +6,22 @@ export const metadata = {
   description: "크레딧 충전 요금 안내",
 };
 
-const KAKAO_URL = "https://open.kakao.com/o/s0Viuxzi";
-
 // 1원 = 1크레딧. 충전 금액만큼 크레딧이 지급됩니다.
 const PLANS: Array<{ won: number; man: number; highlight?: boolean }> = [
-  { won: 150000, man: 15 },
-  { won: 300000, man: 30, highlight: true },
-  { won: 600000, man: 60 },
-  { won: 900000, man: 90 },
-  { won: 1200000, man: 120 },
+  { won: 330000, man: 33, highlight: true },
+  { won: 660000, man: 66 },
+  { won: 990000, man: 99 },
+  { won: 1320000, man: 132 },
+];
+
+// 월 이용료(정액 구독) 안내. 크레딧과 별개로, 서비스별로 정해진 금액이다.
+const SERVICES: Array<{ name: string; won: number; accentCls: string }> = [
+  { name: "AI 마케터", won: 330000, accentCls: "text-rose-600 bg-rose-50" },
+  {
+    name: "게시물 AI 생성기",
+    won: 22000,
+    accentCls: "text-violet-600 bg-violet-50",
+  },
 ];
 
 function comma(n: number): string {
@@ -54,11 +61,30 @@ export default function PricingPage() {
             가격 안내
           </h1>
           <p className="text-sm text-gray-500 leading-relaxed">
-            서비스는 <b>크레딧</b>으로 이용합니다. 충전 금액만큼 크레딧이
-            지급됩니다.
+            AI 마케터는 <b>크레딧</b>으로, 게시물 AI 생성기는 월 정액으로
+            이용합니다.
             <br />
-            <span className="text-gray-400">(1원 = 1크레딧)</span>
+            <span className="text-gray-400">(크레딧은 1원 = 1크레딧으로 충전됩니다)</span>
           </p>
+        </div>
+
+        {/* 서비스별 월 이용료 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {SERVICES.map((s) => (
+            <div
+              key={s.name}
+              className="rounded-2xl border border-gray-200 p-5 bg-white shadow-sm flex items-center justify-between gap-2"
+            >
+              <span className="text-sm font-semibold text-gray-500">
+                {s.name}
+              </span>
+              <span
+                className={`text-lg font-extrabold tracking-tight rounded-full px-3 py-1 ${s.accentCls}`}
+              >
+                월 {comma(s.won)}원
+              </span>
+            </div>
+          ))}
         </div>
 
         {/* 플랜 카드 */}
@@ -99,28 +125,13 @@ export default function PricingPage() {
         <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-5 space-y-2">
           <p className="text-xs font-semibold text-violet-500">크레딧 사용 안내</p>
           <p className="text-base font-bold text-gray-900">
-            AI 마케터 30일 운영 기준{" "}
+            AI 마케터 1명 30일 운영 기준{" "}
             <span className="text-violet-600">33만 크레딧</span> 차감
           </p>
           <p className="text-xs text-gray-500 leading-relaxed">
             충전한 크레딧에서 이용한 만큼 차감됩니다. 필요한 만큼 충전해 사용하실
             수 있습니다.
           </p>
-        </div>
-
-        {/* 문의 CTA */}
-        <div className="text-center space-y-3">
-          <p className="text-sm text-gray-500">
-            충전·결제나 요금이 궁금하시면 1:1로 문의해주세요.
-          </p>
-          <a
-            href={KAKAO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-r from-violet-500 to-purple-500 text-white font-semibold px-6 py-3 shadow-sm hover:from-violet-600 hover:to-purple-600 transition-colors"
-          >
-            카카오톡으로 문의하기
-          </a>
         </div>
       </div>
     </div>
