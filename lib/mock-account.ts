@@ -1,3 +1,5 @@
+import { POST_GENERATOR_MONTHLY_CREDITS } from "@/lib/post-generator/subscription";
+
 export const TEST_ACCOUNT_NAME = "체험 계정";
 export const TEST_ACCOUNT_USER_ID = "mock-user-test";
 export const TEST_ACCOUNT_EMAIL = "user-test@gmail.com";
@@ -8,7 +10,8 @@ const TEST_ACCOUNT_ACCESS_STORAGE_KEY = "qmeet-test-account-access";
 
 export const TEST_ACCOUNT_DEFAULT_PLAN = 2;
 export const TEST_ACCOUNT_DEFAULT_DURATION = 1;
-export const TEST_ACCOUNT_DEFAULT_REMAINING_POSTS = 30;
+// 신규 로그인 시 미사용 상태로 보이도록 실제 월 제공량과 맞춘다.
+export const TEST_ACCOUNT_DEFAULT_REMAINING_POSTS = POST_GENERATOR_MONTHLY_CREDITS;
 
 function setLocalTestAccountAccess(active: boolean) {
   if (typeof window === "undefined") {
