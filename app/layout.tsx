@@ -53,15 +53,6 @@ export default function RootLayout({
               </a>
             </p>
             <p>
-              1:1 문의{" "}
-              <a
-                href="https://open.kakao.com/o/s0Viuxzi"
-                className="underline underline-offset-2 hover:text-gray-700 transition-colors"
-              >
-                https://open.kakao.com/o/s0Viuxzi
-              </a>
-            </p>
-            <p>
               비즈니스 문의{" "}
               <a
                 href="mailto:ceo.qmeet@gmail.com"
