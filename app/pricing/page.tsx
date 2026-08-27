@@ -7,11 +7,21 @@ export const metadata = {
 };
 
 // 1원 = 1크레딧. 충전 금액만큼 크레딧이 지급됩니다.
-const PLANS: Array<{ won: number; man: number; highlight?: boolean }> = [
-  { won: 330000, man: 33, highlight: true },
-  { won: 660000, man: 66 },
-  { won: 990000, man: 99 },
-  { won: 1320000, man: 132 },
+const PLANS: Array<{
+  won: number;
+  man: number;
+  highlight?: boolean;
+  desc: string;
+}> = [
+  {
+    won: 330000,
+    man: 33,
+    highlight: true,
+    desc: "AI 마케터 1명 이용 가능 (채널 1개 가능)",
+  },
+  { won: 660000, man: 66, desc: "AI 마케터 2명 이용 가능 (채널 2개까지 가능)" },
+  { won: 990000, man: 99, desc: "AI 마케터 3명 이용 가능 (채널 3개까지 가능)" },
+  { won: 1320000, man: 132, desc: "AI 마케터 4명 이용 가능 (채널 4개까지 가능)" },
 ];
 
 // 월 이용료(정액 구독) 안내. 크레딧과 별개로, 서비스별로 정해진 금액이다.
@@ -54,84 +64,103 @@ export default function PricingPage() {
 
         {/* 헤더 */}
         <div className="text-center space-y-2">
-          <span className="inline-flex items-center rounded-full bg-violet-100 text-violet-700 text-xs font-semibold px-3 py-1">
-            크레딧 충전 요금
-          </span>
           <h1 className="text-3xl font-extrabold tracking-tight text-gray-900">
             가격 안내
           </h1>
           <p className="text-sm text-gray-500 leading-relaxed">
-            AI 마케터는 <b>크레딧</b>으로, 게시물 AI 생성기는 월 정액으로
-            이용합니다.
-            <br />
-            <span className="text-gray-400">(크레딧은 1원 = 1크레딧으로 충전됩니다)</span>
+            서비스별로 이용 방식이 다릅니다 - 월 구독과 크레딧 결제를 나눠
+            안내해 드립니다.
           </p>
         </div>
 
-        {/* 서비스별 월 이용료 */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {SERVICES.map((s) => (
-            <div
-              key={s.name}
-              className="rounded-2xl border border-gray-200 p-5 bg-white shadow-sm flex items-center justify-between gap-2"
-            >
-              <span className="text-sm font-semibold text-gray-500">
-                {s.name}
-              </span>
-              <span
-                className={`text-lg font-extrabold tracking-tight rounded-full px-3 py-1 ${s.accentCls}`}
+        {/* 월 구독 */}
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">월 구독</h2>
+            <p className="text-xs text-gray-500">
+              매달 정해진 금액으로 이용합니다.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {SERVICES.map((s) => (
+              <div
+                key={s.name}
+                className="rounded-2xl border border-gray-200 p-5 bg-white shadow-sm flex items-center justify-between gap-2"
               >
-                월 {comma(s.won)}원
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* 플랜 카드 */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {PLANS.map((p) => (
-            <div
-              key={p.won}
-              className={`rounded-2xl border p-5 bg-white shadow-sm flex flex-col gap-2 ${
-                p.highlight
-                  ? "border-violet-300 ring-1 ring-violet-200"
-                  : "border-gray-200"
-              }`}
-            >
-              <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold text-gray-500">
-                  {p.man}만원 플랜
+                  {s.name}
                 </span>
-                {p.highlight && (
-                  <span className="text-[11px] font-bold text-violet-600 bg-violet-50 rounded-full px-2 py-0.5">
-                    인기
-                  </span>
-                )}
-              </div>
-              <p className="text-2xl font-extrabold tracking-tight text-gray-900">
-                {comma(p.won)}원
-              </p>
-              <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-lg font-bold text-violet-600">
-                  {comma(p.won)} 크레딧
+                <span
+                  className={`text-lg font-extrabold tracking-tight rounded-full px-3 py-1 ${s.accentCls}`}
+                >
+                  월 {comma(s.won)}원
                 </span>
-                <span className="text-xs text-gray-400">지급</span>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
-        {/* 사용 안내 */}
-        <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-5 space-y-2">
-          <p className="text-xs font-semibold text-violet-500">크레딧 사용 안내</p>
-          <p className="text-base font-bold text-gray-900">
-            AI 마케터 1명 30일 운영 기준{" "}
-            <span className="text-violet-600">33만 크레딧</span> 차감
+        {/* 크레딧 결제 */}
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">크레딧 결제</h2>
+            <p className="text-xs text-gray-500">
+              AI 마케터는 크레딧으로 이용합니다. 충전한 금액만큼 크레딧이
+              지급되고, 이용한 만큼 차감됩니다. (1원 = 1크레딧)
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {PLANS.map((p) => (
+              <div
+                key={p.won}
+                className={`rounded-2xl border p-5 bg-white shadow-sm flex flex-col gap-2 ${
+                  p.highlight
+                    ? "border-violet-300 ring-1 ring-violet-200"
+                    : "border-gray-200"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-500">
+                    {p.man}만원 플랜
+                  </span>
+                  {p.highlight && (
+                    <span className="text-[11px] font-bold text-violet-600 bg-violet-50 rounded-full px-2 py-0.5">
+                      인기
+                    </span>
+                  )}
+                </div>
+                <p className="text-2xl font-extrabold tracking-tight text-gray-900">
+                  {comma(p.won)}원
+                </p>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="text-lg font-bold text-violet-600">
+                    {comma(p.won)} 크레딧
+                  </span>
+                  <span className="text-xs text-gray-400">지급</span>
+                </div>
+                <p className="text-xs text-gray-500">{p.desc}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400">
+            *채널이란? 인스타그램/유튜브 등 SNS 채널
           </p>
-          <p className="text-xs text-gray-500 leading-relaxed">
-            충전한 크레딧에서 이용한 만큼 차감됩니다. 필요한 만큼 충전해 사용하실
-            수 있습니다.
-          </p>
+
+          {/* 크레딧 사용 안내 */}
+          <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-5 space-y-2">
+            <p className="text-xs font-semibold text-violet-500">크레딧 사용 안내</p>
+            <p className="text-base font-bold text-gray-900">
+              AI 마케터 1명 30일 운영 기준{" "}
+              <span className="text-violet-600">33만 크레딧</span> 차감
+            </p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              충전한 크레딧에서 이용한 만큼 차감됩니다. 필요한 만큼 충전해
+              사용하실 수 있습니다.
+            </p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              크레딧 유효기간: 결제일로부터 한 달
+            </p>
+          </div>
         </div>
       </div>
     </div>
