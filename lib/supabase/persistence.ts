@@ -121,13 +121,29 @@ export type UserNotice = {
   month: string | null;
 };
 
+// 결제 한 건으로 만든 마케팅 결과 (플랫폼별 1건).
+export type PaymentResult = {
+  platform: "instagram" | "youtube";
+  channelUrl: string | null;
+  postUrl: string | null;
+  followers: number | null;
+  likes: number | null;
+  views: number | null;
+  comments: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  note: string | null;
+};
+
 // 선결제 크레딧 충전·차감 1건.
 export type PrepaidEntry = {
+  id: string;
   amount: number;
   kind: "charge" | "deduct" | "adjust";
   method: string | null;
   memo: string | null;
   occurredOn: string;
+  results: PaymentResult[]; // 이 결제로 만든 결과
 };
 
 export type MyPageSnapshot = {
@@ -1840,9 +1856,10 @@ async function fetchPrepaidBalance({
   const supabase = getSupabaseBrowserClient();
   const { data, error } = (await supabase
     .from("prepaid_credit_entries")
-    .select("amount, kind, method, memo, occurred_on, user_id, email")
+    .select("id, amount, kind, method, memo, occurred_on, user_id, email")
     .order("occurred_on", { ascending: false })) as unknown as {
     data: Array<{
+      id: string;
       amount: number | null;
       kind: string | null;
       method: string | null;
@@ -1864,7 +1881,38 @@ async function fetchPrepaidBalance({
   });
   if (!rows.length) return { balance: null, entries: [], error: null };
 
+  // 결제 건별 결과. 표가 없는 환경(마이그레이션 전)에서도 잔액은 보여야 하므로
+  // 실패해도 빈 배열로 넘어간다.
+  const resultsByEntry = new Map<string, PaymentResult[]>();
+  const { data: resultRows } = (await supabase
+    .from("payment_results")
+    .select(
+      "entry_id, platform, channel_url, post_url, followers_gained, likes_gained, views_gained, comments_gained, period_start, period_end, note"
+    )) as unknown as {
+    data: Array<Record<string, unknown>> | null;
+  };
+  for (const r of resultRows ?? []) {
+    const key = String(r.entry_id ?? "");
+    if (!key) continue;
+    const list = resultsByEntry.get(key) ?? [];
+    list.push({
+      platform: r.platform === "youtube" ? "youtube" : "instagram",
+      channelUrl: (r.channel_url as string | null) ?? null,
+      postUrl: (r.post_url as string | null) ?? null,
+      followers: (r.followers_gained as number | null) ?? null,
+      likes: (r.likes_gained as number | null) ?? null,
+      views: (r.views_gained as number | null) ?? null,
+      comments: (r.comments_gained as number | null) ?? null,
+      periodStart: (r.period_start as string | null) ?? null,
+      periodEnd: (r.period_end as string | null) ?? null,
+      note: (r.note as string | null) ?? null,
+    });
+    resultsByEntry.set(key, list);
+  }
+
   const entries: PrepaidEntry[] = rows.map((r) => ({
+    id: String(r.id),
+    results: resultsByEntry.get(String(r.id)) ?? [],
     amount: r.amount ?? 0,
     kind:
       r.kind === "deduct" || r.kind === "adjust"

@@ -315,6 +315,29 @@ export type Database = {
         Insert: Record<string, Json | undefined>;
         Update: Record<string, Json | undefined>;
       };
+      payment_results: {
+        Row: {
+          id: string;
+          entry_id: string;
+          email: string;
+          user_id: string | null;
+          platform: string;
+          channel_url: string | null;
+          post_url: string | null;
+          followers_gained: number | null;
+          likes_gained: number | null;
+          views_gained: number | null;
+          comments_gained: number | null;
+          period_start: string | null;
+          period_end: string | null;
+          note: string | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Record<string, Json | undefined>;
+        Update: Record<string, Json | undefined>;
+      };
       prepaid_credit_entries: {
         Row: {
           id: string;
