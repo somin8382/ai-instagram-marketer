@@ -343,6 +343,7 @@ export default function ToolsPage() {
   const [step, setStep] = useState<ToolStep>("postgen");
   const [hasHydrated, setHasHydrated] = useState(false);
   const [hasTestAccess, setHasTestAccess] = useState(false);
+  const [testAccessChecked, setTestAccessChecked] = useState(false);
   const [validationToast, setValidationToast] = useState<string | null>(null);
   const [touchedFields, setTouchedFields] = useState<
     Partial<Record<ToolValidationField, boolean>>
@@ -895,6 +896,7 @@ export default function ToolsPage() {
     void fetchTestAccountAccess().then((enabled) => {
       if (!active) return;
       setHasTestAccess(enabled);
+      setTestAccessChecked(true);
     });
 
     return () => {
@@ -932,7 +934,13 @@ export default function ToolsPage() {
   ]);
 
   useEffect(() => {
-    if (!hasHydrated) return;
+    // Wait for the server-verified test-account check to resolve before ever
+    // touching real Supabase auth. Gating on the locally-hydrated
+    // `hasTestAccess` snapshot alone raced this effect against that check —
+    // if localStorage briefly disagreed with the real test-session cookie,
+    // this ran supabase.auth.getUser() (no real session for the mock login)
+    // and logged the test account out until the check caught up.
+    if (!hasHydrated || !testAccessChecked) return;
     if (hasTestAccess) return;
 
     const supabase = getSupabaseBrowserClientOrNull();
@@ -1013,7 +1021,7 @@ export default function ToolsPage() {
       active = false;
       subscription.unsubscribe();
     };
-  }, [hasHydrated, postSubEmail, authEmail, hasTestAccess]);
+  }, [hasHydrated, testAccessChecked, postSubEmail, authEmail, hasTestAccess]);
 
   // Restore the user's saved tone/style presets once we know who they are
   useEffect(() => {
@@ -1556,19 +1564,25 @@ export default function ToolsPage() {
 
     setSavingOnboarding(true);
     try {
-      const result = await persistAccountProfile({
-        userId,
-        companyName: onboardingCompanyName,
-        brandName: onboardingBrandName,
-        instagramUrl: instagramCheck?.normalized ?? onboardingInstagramUrl,
-        youtubeUrl: youtubeCheck?.normalized ?? onboardingYoutubeUrl,
-        industry: onboardingIndustry,
-        productService: onboardingProductService,
-      });
+      // The test account's user id is a mock string, not a real Supabase
+      // auth uid, so persisting to `profiles` (id references auth.users)
+      // always fails. Keep this account fully local-only, same as its
+      // subscription/post-save handling elsewhere on this page.
+      if (!isTestAccountAuthenticated) {
+        const result = await persistAccountProfile({
+          userId,
+          companyName: onboardingCompanyName,
+          brandName: onboardingBrandName,
+          instagramUrl: instagramCheck?.normalized ?? onboardingInstagramUrl,
+          youtubeUrl: youtubeCheck?.normalized ?? onboardingYoutubeUrl,
+          industry: onboardingIndustry,
+          productService: onboardingProductService,
+        });
 
-      if (result.error) {
-        showValidationToast("저장에 실패했습니다. 다시 시도해주세요.");
-        return;
+        if (result.error) {
+          showValidationToast("저장에 실패했습니다. 다시 시도해주세요.");
+          return;
+        }
       }
 
       const derivedChannel = onboardingInstagramUrl.trim()

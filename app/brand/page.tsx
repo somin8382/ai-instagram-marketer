@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { ArrowClockwise } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { getSupabaseBrowserClientOrNull } from "@/lib/supabase/client";
+import { fetchTestAccountAccess } from "@/lib/mock-account";
 import { Card, SectionLabel } from "@/lib/ui/surface-card";
 import { InputField, TextareaField } from "@/lib/ui/form-fields";
 import { WorkspaceHeader } from "@/lib/ui/workspace-header";
@@ -231,21 +232,29 @@ export default function BrandIdentityPage() {
 
   const callBrandApi = useCallback(
     async (payload: Record<string, unknown>) => {
-      const supabase = getSupabaseBrowserClientOrNull();
-      const session = supabase
-        ? (await supabase.auth.getSession()).data.session
-        : null;
-      if (!session) {
-        setMessage("로그인 후 이용할 수 있습니다.");
-        router.push("/auth?tab=login");
-        return null;
+      // The internal test/demo account is authenticated via a signed
+      // httpOnly cookie, not a real Supabase session — /api/brand verifies
+      // that cookie itself, so this only needs to skip the session gate.
+      const isTestAccount = await fetchTestAccountAccess();
+      let accessToken = "";
+      if (!isTestAccount) {
+        const supabase = getSupabaseBrowserClientOrNull();
+        const session = supabase
+          ? (await supabase.auth.getSession()).data.session
+          : null;
+        if (!session) {
+          setMessage("로그인 후 이용할 수 있습니다.");
+          router.push("/auth?tab=login");
+          return null;
+        }
+        accessToken = session.access_token;
       }
       const res = await fetch("/api/brand", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...payload,
-          accessToken: session.access_token,
+          accessToken,
           brandName,
           industry,
           mood,

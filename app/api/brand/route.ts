@@ -1,5 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/types";
+import {
+  INTERNAL_TEST_SESSION_COOKIE_NAME,
+  verifyInternalTestSessionToken,
+} from "@/lib/server/internal-test-session";
 
 // GPT Image 2는 한 장에 1~2분 걸린다. 이미지 단계가 잘리지 않도록
 // 함수·페치 타임아웃 모두 넉넉히 잡는다 (Vercel Pro 기준 허용 범위).
@@ -256,27 +260,40 @@ export async function POST(request: Request) {
     return Response.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
 
-  const accessToken = String(body.accessToken ?? "").trim();
-  if (!accessToken) {
-    return Response.json({ error: "로그인 후 이용할 수 있습니다." }, { status: 401 });
-  }
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return Response.json({ error: "서비스 설정을 확인해주세요." }, { status: 500 });
-  }
-  const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser(accessToken);
-  if (authError || !user) {
-    return Response.json(
-      { error: "로그인 정보가 만료되었습니다. 다시 로그인해주세요." },
-      { status: 401 }
-    );
+  // Internal test/demo account: authenticated via a signed cookie instead of
+  // a real Supabase session (see /api/ai's verifyPremiumGenerationAccess for
+  // the same pattern), so it skips the accessToken check entirely.
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const internalSessionToken = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${INTERNAL_TEST_SESSION_COOKIE_NAME}=`))
+    ?.slice(INTERNAL_TEST_SESSION_COOKIE_NAME.length + 1);
+  const internalSession = verifyInternalTestSessionToken(internalSessionToken);
+
+  if (!internalSession.valid) {
+    const accessToken = String(body.accessToken ?? "").trim();
+    if (!accessToken) {
+      return Response.json({ error: "로그인 후 이용할 수 있습니다." }, { status: 401 });
+    }
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return Response.json({ error: "서비스 설정을 확인해주세요." }, { status: 500 });
+    }
+    const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(accessToken);
+    if (authError || !user) {
+      return Response.json(
+        { error: "로그인 정보가 만료되었습니다. 다시 로그인해주세요." },
+        { status: 401 }
+      );
+    }
   }
 
   const brandName = String(body.brandName ?? "").trim().slice(0, 40);

@@ -849,6 +849,7 @@ export default function Home() {
   const [existingApplicationId, setExistingApplicationId] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
   const [hasTestAccess, setHasTestAccess] = useState(false);
+  const [testAccessChecked, setTestAccessChecked] = useState(false);
   const [validationToast, setValidationToast] = useState<string | null>(null);
   const [touchedFields, setTouchedFields] = useState<
     Partial<Record<HomeValidationField, boolean>>
@@ -1770,6 +1771,7 @@ export default function Home() {
       }
 
       setHasTestAccess(active);
+      setTestAccessChecked(true);
     });
 
     return () => {
@@ -1963,7 +1965,13 @@ export default function Home() {
   ]);
 
   useEffect(() => {
-    if (!hasHydrated) return;
+    // Wait for the server-verified test-account check to resolve before ever
+    // touching real Supabase auth. Gating on the locally-hydrated
+    // `hasTestAccess` snapshot alone raced this effect against that check —
+    // if localStorage briefly disagreed with the real test-session cookie,
+    // this ran supabase.auth.getUser() (no real session for the mock login)
+    // and logged the test account out until the check caught up.
+    if (!hasHydrated || !testAccessChecked) return;
     if (hasTestAccess) return;
 
     const supabase = getSupabaseBrowserClientOrNull();
@@ -2043,7 +2051,7 @@ export default function Home() {
       active = false;
       subscription.unsubscribe();
     };
-  }, [hasHydrated, email, hasTestAccess]);
+  }, [hasHydrated, testAccessChecked, email, hasTestAccess]);
 
   useEffect(() => {
     if (!hasHydrated || typeof window === "undefined") return;
