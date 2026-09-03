@@ -329,7 +329,23 @@ export function readPendingGeneratedPosts(): PendingGeneratedPost[] {
 function writePendingGeneratedPosts(posts: PendingGeneratedPost[]) {
   if (typeof window === "undefined") return;
 
-  window.localStorage.setItem(PENDING_POSTS_STORAGE_KEY, JSON.stringify(posts));
+  // A queued post holds its image URL, which in the Storage-upload fallback is
+  // a ~1MB data URL; ten of those exceed the localStorage quota. Retry with a
+  // shorter queue rather than throwing — this runs inside the save path, and an
+  // exception here would surface as a failed generation.
+  const attempts = [posts, posts.slice(0, 3), posts.slice(0, 1)];
+
+  for (const attempt of attempts) {
+    try {
+      window.localStorage.setItem(
+        PENDING_POSTS_STORAGE_KEY,
+        JSON.stringify(attempt)
+      );
+      return;
+    } catch {
+      // try a smaller queue
+    }
+  }
 }
 
 export function queuePendingGeneratedPost(post: PendingGeneratedPost) {
@@ -340,7 +356,11 @@ export function queuePendingGeneratedPost(post: PendingGeneratedPost) {
 function saveAuthSnapshot(snapshot: AuthSnapshot) {
   if (typeof window === "undefined") return;
 
-  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(snapshot));
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Storage full or unavailable — the in-memory session still works.
+  }
 }
 
 function clearPendingGeneratedPosts() {

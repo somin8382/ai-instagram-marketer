@@ -850,17 +850,44 @@ export default function ToolsPage() {
       ownerUserId: userId,
     };
 
-    window.localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appStatePayload));
-    window.localStorage.setItem(
-      AUTH_STORAGE_KEY,
-      JSON.stringify({
-        isAuthenticated,
-        authEmail,
-        authName,
-        userId,
-        isRequestLinked,
-      })
-    );
+    // Generated posts carry the image, and when the Storage upload falls back
+    // (uploadGeneratedImage returns the raw data URL) that is ~1MB of base64
+    // each — enough to blow the ~5MB localStorage quota. An uncaught
+    // QuotaExceededError here is thrown inside an effect and takes the whole
+    // generator page down, losing the post the user just spent a credit on.
+    // Same guard app/page.tsx already uses: keep the session, drop the images.
+    try {
+      window.localStorage.setItem(
+        APP_STORAGE_KEY,
+        JSON.stringify(appStatePayload)
+      );
+    } catch {
+      try {
+        window.localStorage.setItem(
+          APP_STORAGE_KEY,
+          JSON.stringify({ ...appStatePayload, generatedPosts: [] })
+        );
+      } catch {
+        // Storage unavailable entirely (private mode, disabled). The page keeps
+        // working from in-memory state; only cross-reload persistence is lost.
+      }
+    }
+
+    try {
+      window.localStorage.setItem(
+        AUTH_STORAGE_KEY,
+        JSON.stringify({
+          isAuthenticated,
+          authEmail,
+          authName,
+          userId,
+          isRequestLinked,
+        })
+      );
+    } catch {
+      // Tiny payload, but the quota may already be exhausted by the key above.
+      // Never let persisting the session snapshot crash the page.
+    }
   }, [
     hasHydrated,
     step,

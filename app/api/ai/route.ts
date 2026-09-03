@@ -14,7 +14,11 @@ import {
 import { evaluateAnonymousFreeTrial } from "@/lib/server/free-trial";
 import { getSupabaseServiceRoleClient } from "@/lib/server/admin";
 
-export const maxDuration = 60;
+// 기획(최대 2회 시도) + 이미지 생성이 순차로 일어난다. 60초로는 각 호출의
+// 55초 타임아웃 하나만 늦어져도 함수가 강제 종료돼, 사용자는 친절한 오류 대신
+// 504를 받고 generation_logs 에도 기록이 남지 않았다. /api/brand 와 동일하게
+// Vercel Pro 허용 범위까지 넉넉히 잡는다.
+export const maxDuration = 300;
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT_MS = 55_000;
@@ -523,6 +527,23 @@ async function handlePostImageGeneration(
     freeTrialCookieHeader = trialDecision.setCookieHeader;
   }
 
+  // Charge BEFORE the paid work, and only once every cheap validation above has
+  // passed. Verifying the balance and charging afterwards let concurrent
+  // requests all clear the check and each run a full (billed) image
+  // generation, while a single charge landed — the losers got
+  // "남은 생성 횟수가 없습니다" despite having just produced an image. Charging
+  // first makes the atomic RPC the single gate; every failure below refunds.
+  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(
+    premiumAccess
+  );
+
+  if (!premiumUsageResult.ok) {
+    return Response.json(
+      { error: premiumUsageResult.error },
+      { status: premiumUsageResult.statusCode }
+    );
+  }
+
   const postPlan = await generatePostPlan({
     apiKey,
     instagramHandle: normalizedInstagramHandle,
@@ -542,6 +563,7 @@ async function handlePostImageGeneration(
   });
 
   if (!postPlan.ok) {
+    await refundPremiumGenerationCredit(premiumAccess);
     await logOutcome("plan_failed");
     return Response.json(
       {
@@ -612,6 +634,7 @@ Requirements:
   });
 
   if (!imageResponse.ok) {
+    await refundPremiumGenerationCredit(premiumAccess);
     await logOutcome("image_failed");
     return Response.json(
       { error: "이미지 생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
@@ -630,6 +653,7 @@ Requirements:
       "[/api/ai] Available image response keys:",
       getImageResponseDebugSummary(imageResponse.data)
     );
+    await refundPremiumGenerationCredit(premiumAccess);
     await logOutcome("no_image_output");
     return Response.json(
       { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
@@ -638,16 +662,6 @@ Requirements:
   }
 
   const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
-  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(
-    premiumAccess
-  );
-
-  if (!premiumUsageResult.ok) {
-    return Response.json(
-      { error: premiumUsageResult.error },
-      { status: premiumUsageResult.statusCode }
-    );
-  }
 
   const result: PostImageResult = {
     title: postPlan.data.title,
@@ -874,6 +888,37 @@ async function consumeVerifiedPremiumGenerationCredit(
       error: "사용량 차감 처리에 실패했습니다. 다시 시도해주세요.",
       statusCode: 500,
     };
+  }
+}
+
+// Give back a credit charged up-front when the generation that it paid for
+// never produced a result. Uses the existing atomic adjust RPC. Never throws:
+// a refund failure must not replace the real error the user needs to see (it is
+// logged instead so the shortfall can be corrected by hand).
+// Note: only remaining_credits is restored. daily_usage_count is display-only
+// (no daily cap is enforced), so a failed attempt leaves it slightly high.
+async function refundPremiumGenerationCredit(
+  access: Awaited<ReturnType<typeof verifyPremiumGenerationAccess>>
+) {
+  if (!access.ok || !access.shouldConsumeCredit) {
+    return;
+  }
+
+  try {
+    const db = getSupabaseServiceRoleClient();
+    const response = (await (db.rpc("adjust_post_generator_credits" as never, {
+      p_user_id: access.userId,
+      p_delta: 1,
+    } as never) as unknown)) as { error: { message: string } | null };
+
+    if (response.error) {
+      console.error(
+        "[/api/ai][ADMIN] credit refund failed:",
+        JSON.stringify({ userId: access.userId, error: response.error.message })
+      );
+    }
+  } catch (error) {
+    console.error("[/api/ai][ADMIN] credit refund threw:", error);
   }
 }
 
@@ -1809,6 +1854,18 @@ ${visualPromptRaw}
 
 Output a polished square 1:1 Instagram feed post image.`;
 
+  // Charge before the paid image call (after the cheap validation above, so a
+  // rejected request never touches the balance). Every failure below refunds.
+  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(
+    premiumAccess
+  );
+  if (!premiumUsageResult.ok) {
+    return Response.json(
+      { error: premiumUsageResult.error },
+      { status: premiumUsageResult.statusCode }
+    );
+  }
+
   const imageResponse = await callOpenRouter({
     apiKey,
     model: IMAGE_MODEL,
@@ -1827,6 +1884,7 @@ Output a polished square 1:1 Instagram feed post image.`;
   });
 
   if (!imageResponse.ok) {
+    await refundPremiumGenerationCredit(premiumAccess);
     await logImageOnly("image_failed", suffix);
     return Response.json(
       { error: "이미지 재생성에 실패했습니다. 잠시 후 다시 시도해주세요." },
@@ -1837,6 +1895,7 @@ Output a polished square 1:1 Instagram feed post image.`;
   const imageOutputs = extractImageOutputs(imageResponse.data);
 
   if (!imageOutputs.length) {
+    await refundPremiumGenerationCredit(premiumAccess);
     await logImageOnly("no_image_output", suffix);
     return Response.json(
       { error: "이미지 결과를 불러오지 못했습니다. 다시 시도해주세요." },
@@ -1845,14 +1904,6 @@ Output a polished square 1:1 Instagram feed post image.`;
   }
 
   const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
-
-  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(premiumAccess);
-  if (!premiumUsageResult.ok) {
-    return Response.json(
-      { error: premiumUsageResult.error },
-      { status: premiumUsageResult.statusCode }
-    );
-  }
 
   await logImageOnly("success", suffix);
   return Response.json({ generatedImageUrl, source: "api" });
@@ -1916,6 +1967,18 @@ Rules:
 - Output a square 1:1 image.
 - Prefer no baked-in text unless absolutely necessary.`;
 
+  // Charge before the paid image call (after the cheap validation above, so a
+  // rejected request never touches the balance). Every failure below refunds.
+  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(
+    premiumAccess
+  );
+  if (!premiumUsageResult.ok) {
+    return Response.json(
+      { error: premiumUsageResult.error },
+      { status: premiumUsageResult.statusCode }
+    );
+  }
+
   const imageResponse = await callOpenRouter({
     apiKey,
     model: IMAGE_MODEL,
@@ -1934,6 +1997,7 @@ Rules:
   });
 
   if (!imageResponse.ok) {
+    await refundPremiumGenerationCredit(premiumAccess);
     await logImageEdit("image_failed", editPromptRaw);
     return Response.json(
       { error: "이미지 수정에 실패했습니다. 잠시 후 다시 시도해주세요." },
@@ -1944,6 +2008,7 @@ Rules:
   const imageOutputs = extractImageOutputs(imageResponse.data);
 
   if (!imageOutputs.length) {
+    await refundPremiumGenerationCredit(premiumAccess);
     await logImageEdit("no_image_output", editPromptRaw);
     return Response.json(
       { error: "수정된 이미지를 불러오지 못했습니다. 다시 시도해주세요." },
@@ -1952,14 +2017,6 @@ Rules:
   }
 
   const generatedImageUrl = await uploadGeneratedImage(imageOutputs[0]);
-
-  const premiumUsageResult = await consumeVerifiedPremiumGenerationCredit(premiumAccess);
-  if (!premiumUsageResult.ok) {
-    return Response.json(
-      { error: premiumUsageResult.error },
-      { status: premiumUsageResult.statusCode }
-    );
-  }
 
   await logImageEdit("success", editPromptRaw);
   return Response.json({ generatedImageUrl, source: "api" });
