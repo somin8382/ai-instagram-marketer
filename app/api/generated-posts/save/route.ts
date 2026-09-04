@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getSupabaseServiceRoleClient } from "@/lib/server/admin";
+import { checkAndReserveRateLimit } from "@/lib/server/rate-limit";
 import type { Database } from "@/lib/supabase/types";
 
 // Generated-post save endpoint (service role).
@@ -15,6 +16,14 @@ import type { Database } from "@/lib/supabase/types";
 // - user_id is NEVER taken from the client; it comes from the verified access
 //   token only. Anonymous saves store user_id null (free-trial flow).
 // - Column whitelist + length caps bound what can be written.
+
+const SAVE_USAGE_TABLE = "generated_post_save_usage";
+
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
 
 const MAX_LENGTHS: Record<string, number> = {
   title: 500,
@@ -105,6 +114,34 @@ export async function POST(request: NextRequest) {
       } catch {
         userId = null;
       }
+    }
+  }
+
+  // Anonymous saves take no credential at all (the free-trial flow needs
+  // that), and image_url may hold a ~500KB data URL — so without a limit
+  // anyone could insert unbounded rows. Signed-in saves are already bound by
+  // the account, and IP limits would punish shared office/CGNAT addresses, so
+  // this gate applies only when no user was resolved. Fails open on infra
+  // errors, like the other limiters.
+  if (!userId) {
+    const rate = await checkAndReserveRateLimit({
+      request,
+      table: SAVE_USAGE_TABLE,
+      perIpPerDay: envInt("GENERATED_POST_SAVE_MAX_PER_IP_PER_DAY", 30),
+      globalDaily: envInt("GENERATED_POST_SAVE_GLOBAL_DAILY", 1000),
+      logTag: "/api/generated-posts/save",
+    });
+
+    if (!rate.ok) {
+      return NextResponse.json(
+        {
+          error:
+            rate.reason === "ip"
+              ? "저장 요청이 너무 많습니다. 잠시 후 다시 시도해주세요."
+              : "지금은 요청이 많습니다. 잠시 후 다시 시도해주세요.",
+        },
+        { status: rate.statusCode }
+      );
     }
   }
 

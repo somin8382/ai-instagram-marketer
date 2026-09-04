@@ -3,7 +3,6 @@ import { POST_GENERATOR_MONTHLY_CREDITS } from "@/lib/post-generator/subscriptio
 export const TEST_ACCOUNT_NAME = "체험 계정";
 export const TEST_ACCOUNT_USER_ID = "mock-user-test";
 export const TEST_ACCOUNT_EMAIL = "user-test@gmail.com";
-export const TEST_ACCOUNT_PASSWORD = "aSDfjd1@";
 export const TEST_ACCOUNT_AUTH_ID = TEST_ACCOUNT_EMAIL;
 const TEST_ACCOUNT_LEGACY_AUTH_ID = "internal-test-account";
 const TEST_ACCOUNT_ACCESS_STORAGE_KEY = "qmeet-test-account-access";
@@ -40,9 +39,6 @@ export async function requestInternalTestLogin(input: {
 }) {
   const normalizedId = input.id.trim().toLowerCase();
   const normalizedPassword = input.password.trim();
-  const isHardcodedTestCredential =
-    normalizedId === TEST_ACCOUNT_EMAIL.toLowerCase() &&
-    normalizedPassword === TEST_ACCOUNT_PASSWORD;
 
   try {
     const response = await fetch("/api/internal-test-login", {
@@ -69,16 +65,13 @@ export async function requestInternalTestLogin(input: {
 
     return { success };
   } catch {
-    // Keep local-only fallback for fast local development.
-    // In production, require server session issuance so API routes can verify it.
-    if (
-      process.env.NODE_ENV !== "production" &&
-      isHardcodedTestCredential
-    ) {
-      setLocalTestAccountAccess(true);
-      return { success: true as const };
-    }
-
+    // The test-account password used to live in this module purely to power a
+    // local-dev fallback. This module is imported by client components, so the
+    // literal shipped to the browser bundle and was kept out of the production
+    // build only by the minifier eliminating the dev-only branch — one refactor
+    // away from leaking. The credential now lives solely in
+    // lib/server/internal-test-session.ts (server-only); login always goes
+    // through /api/internal-test-login, which works in local dev too.
     return { success: false as const };
   }
 }
